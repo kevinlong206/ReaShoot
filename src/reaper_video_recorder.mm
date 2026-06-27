@@ -1044,7 +1044,11 @@ void startTransportRecording(ReaProject *project) {
   const std::string outputPath = captureOutputPath(project);
   NSError *error = nil;
   if (![recorder() startRecordingToPath:outputPath
-                        startCompletion:nil
+                        startCompletion:^{
+                          if (g_recordProject && GetPlayPositionEx) {
+                            g_recordStartPosition = GetPlayPositionEx(g_recordProject);
+                          }
+                        }
                                    error:&error]) {
     showError(error.localizedDescription.UTF8String ?: "Unable to start video recording.");
     return;
