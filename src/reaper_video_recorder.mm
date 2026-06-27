@@ -1,6 +1,5 @@
 #import <AVFoundation/AVFoundation.h>
 #import <Cocoa/Cocoa.h>
-#import <CoreAudioTypes/CoreAudioTypes.h>
 #import <QuartzCore/QuartzCore.h>
 
 #include <algorithm>
@@ -70,7 +69,6 @@ bool g_activeTransportRecording = false;
 bool g_pendingInsert = false;
 std::string g_selectedDeviceUniqueID;
 std::string g_pendingInsertPath;
-std::string g_pendingInsertAudioPath;
 double g_pendingInsertPosition = 0.0;
 ReaProject *g_recordProject = nullptr;
 double g_recordStartPosition = 0.0;
@@ -223,13 +221,26 @@ MediaTrack *findOrCreateVideoTrack(ReaProject *project) {
   return track;
 }
 
+void disableReaperAudioRecording(MediaTrack *track) {
+  if (!track || !SetMediaTrackInfo_Value) {
+    return;
+  }
+  SetMediaTrackInfo_Value(track, "I_RECARM", 0.0);
+  SetMediaTrackInfo_Value(track, "I_RECINPUT", -1.0);
+  SetMediaTrackInfo_Value(track, "I_RECMODE", 2.0);
+  SetMediaTrackInfo_Value(track, "I_RECMON", 0.0);
+  SetMediaTrackInfo_Value(track, "I_RECMONITEMS", 0.0);
+  SetMediaTrackInfo_Value(track, "B_AUTO_RECARM", 0.0);
+}
+
 MediaTrack *ensureVideoTrackReady(ReaProject *project, bool useFreeItemPositioning) {
   MediaTrack *track = findOrCreateVideoTrack(project);
   if (!track) {
     return nullptr;
   }
-  if (useFreeItemPositioning && SetMediaTrackInfo_Value) {
-    SetMediaTrackInfo_Value(track, "I_FREEMODE", 1.0);
+  disableReaperAudioRecording(track);
+  if (SetMediaTrackInfo_Value) {
+    SetMediaTrackInfo_Value(track, "I_FREEMODE", useFreeItemPositioning ? 1.0 : 0.0);
   }
   if (UpdateTimeline) {
     UpdateTimeline();
@@ -334,7 +345,7 @@ MediaItem *insertMediaItem(MediaTrack *track,
   return item;
 }
 
-bool insertRecordedMedia(const std::string &path, const std::string &audioPath, double position, std::string &error) {
+bool insertRecordedMedia(const std::string &path, double position, std::string &error) {
   ReaProject *project = g_recordProject ? g_recordProject : currentProject();
   if (!project) {
     error = "Recording finished, but there is no active REAPER project to insert into:\n" + path;
@@ -347,29 +358,21 @@ bool insertRecordedMedia(const std::string &path, const std::string &audioPath, 
     return false;
   }
 
-  MediaTrack *track = ensureVideoTrackReady(project, !audioPath.empty());
+  MediaTrack *track = ensureVideoTrackReady(project, false);
   if (!track) {
     error = "Recording finished, but REAPER could not create or find the Video Recorder track.";
     return false;
   }
 
-  const bool hasReferenceAudio = !audioPath.empty();
   MediaItem *videoItem = insertMediaItem(track,
                                          path,
                                          position,
                                          0.0,
-                                         hasReferenceAudio ? 0.5 : 1.0,
+                                         1.0,
                                          "video",
                                          error);
   if (!videoItem) {
     return false;
-  }
-
-  if (hasReferenceAudio) {
-    MediaItem *audioItem = insertMediaItem(track, audioPath, position, 0.5, 0.5, "reference audio", error);
-    if (!audioItem) {
-      return false;
-    }
   }
 
   if (UpdateArrange) {
@@ -518,159 +521,6 @@ void setVideoEnabled(bool enabled);
   }
   [self setStatus:@"Finalizing"];
   [self.movieOutput stopRecording];
-}
-
-- (void)exportReferenceAudioForMovieAtPath:(NSString *)moviePath
-                                completion:(void (^)(NSString *audioPath, NSError *error))completion {
-  NSURL *movieURL = [NSURL fileURLWithPath:moviePath];
-  AVURLAsset *asset = [AVURLAsset URLAssetWithURL:movieURL options:nil];
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-  const NSUInteger audioTrackCount = [asset tracksWithMediaType:AVMediaTypeAudio].count;
-#pragma clang diagnostic pop
-  if (audioTrackCount == 0) {
-    NSError *error = [NSError errorWithDomain:@"KlongVideoRecorder"
-                                         code:7
-                                     userInfo:@{NSLocalizedDescriptionKey: @"The recorded movie does not contain an audio track."}];
-    completion(nil, error);
-    return;
-  }
-
-  NSError *readerError = nil;
-  AVAssetReader *reader = [[AVAssetReader alloc] initWithAsset:asset error:&readerError];
-  if (!reader) {
-    NSError *error = [NSError errorWithDomain:@"KlongVideoRecorder"
-                                         code:8
-                                     userInfo:@{NSLocalizedDescriptionKey: readerError.localizedDescription ?: @"AVFoundation could not create an audio reader."}];
-    completion(nil, error);
-    return;
-  }
-
-  AVAssetTrack *audioTrack = nil;
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-  audioTrack = [asset tracksWithMediaType:AVMediaTypeAudio].firstObject;
-#pragma clang diagnostic pop
-  double sampleRate = 48000.0;
-  int channelCount = 1;
-  if (audioTrack.formatDescriptions.count > 0) {
-    CMAudioFormatDescriptionRef formatDescription =
-        (__bridge CMAudioFormatDescriptionRef)audioTrack.formatDescriptions.firstObject;
-    const AudioStreamBasicDescription *streamDescription =
-        CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription);
-    if (streamDescription) {
-      if (streamDescription->mSampleRate > 0.0) {
-        sampleRate = streamDescription->mSampleRate;
-      }
-      if (streamDescription->mChannelsPerFrame > 0) {
-        channelCount = static_cast<int>(streamDescription->mChannelsPerFrame);
-      }
-    }
-  }
-  NSDictionary *readerSettings = @{
-    AVFormatIDKey: @(kAudioFormatLinearPCM),
-    AVSampleRateKey: @(sampleRate),
-    AVNumberOfChannelsKey: @(channelCount),
-    AVLinearPCMBitDepthKey: @16,
-    AVLinearPCMIsBigEndianKey: @NO,
-    AVLinearPCMIsFloatKey: @NO,
-    AVLinearPCMIsNonInterleaved: @NO,
-  };
-  AVAssetReaderTrackOutput *readerOutput =
-      [[AVAssetReaderTrackOutput alloc] initWithTrack:audioTrack outputSettings:readerSettings];
-  if (![reader canAddOutput:readerOutput]) {
-    NSError *error = [NSError errorWithDomain:@"KlongVideoRecorder"
-                                         code:9
-                                     userInfo:@{NSLocalizedDescriptionKey: @"AVFoundation could not add the audio reader output."}];
-    completion(nil, error);
-    return;
-  }
-  [reader addOutput:readerOutput];
-
-  NSString *basePath = [moviePath stringByDeletingPathExtension];
-  NSString *audioPath = [basePath stringByAppendingString:@"_reference_audio.wav"];
-  [[NSFileManager defaultManager] removeItemAtPath:audioPath error:nil];
-
-  NSError *writerError = nil;
-  AVAssetWriter *writer = [[AVAssetWriter alloc] initWithURL:[NSURL fileURLWithPath:audioPath]
-                                                    fileType:AVFileTypeWAVE
-                                                       error:&writerError];
-  if (!writer) {
-    NSError *error = [NSError errorWithDomain:@"KlongVideoRecorder"
-                                         code:10
-                                     userInfo:@{NSLocalizedDescriptionKey: writerError.localizedDescription ?: @"AVFoundation could not create a WAV writer."}];
-    completion(nil, error);
-    return;
-  }
-
-  NSDictionary *writerSettings = @{
-    AVFormatIDKey: @(kAudioFormatLinearPCM),
-    AVSampleRateKey: @(sampleRate),
-    AVNumberOfChannelsKey: @(channelCount),
-    AVLinearPCMBitDepthKey: @16,
-    AVLinearPCMIsBigEndianKey: @NO,
-    AVLinearPCMIsFloatKey: @NO,
-    AVLinearPCMIsNonInterleaved: @NO,
-  };
-  AVAssetWriterInput *writerInput =
-      [[AVAssetWriterInput alloc] initWithMediaType:AVMediaTypeAudio outputSettings:writerSettings];
-  writerInput.expectsMediaDataInRealTime = NO;
-  if (![writer canAddInput:writerInput]) {
-    NSError *error = [NSError errorWithDomain:@"KlongVideoRecorder"
-                                         code:11
-                                     userInfo:@{NSLocalizedDescriptionKey: @"AVFoundation could not add the WAV writer input."}];
-    completion(nil, error);
-    return;
-  }
-  [writer addInput:writerInput];
-  [self setStatus:@"Extracting reference audio"];
-
-  if (![reader startReading] || ![writer startWriting]) {
-    NSError *error = reader.error ?: writer.error ?: [NSError errorWithDomain:@"KlongVideoRecorder"
-                                                                        code:12
-                                                                    userInfo:@{NSLocalizedDescriptionKey: @"Reference audio export could not start."}];
-    completion(nil, error);
-    return;
-  }
-
-  [writer startSessionAtSourceTime:kCMTimeZero];
-  dispatch_queue_t exportQueue = dispatch_queue_create("com.klong.reaper-video-recorder.reference-audio", DISPATCH_QUEUE_SERIAL);
-  [writerInput requestMediaDataWhenReadyOnQueue:exportQueue usingBlock:^{
-    while (writerInput.readyForMoreMediaData) {
-      CMSampleBufferRef sampleBuffer = [readerOutput copyNextSampleBuffer];
-      if (sampleBuffer) {
-        if (![writerInput appendSampleBuffer:sampleBuffer]) {
-          CFRelease(sampleBuffer);
-          [reader cancelReading];
-          [writerInput markAsFinished];
-          [writer cancelWriting];
-          NSError *error = writer.error ?: [NSError errorWithDomain:@"KlongVideoRecorder"
-                                                               code:13
-                                                           userInfo:@{NSLocalizedDescriptionKey: @"Reference audio export failed while writing samples."}];
-          dispatch_async(dispatch_get_main_queue(), ^{
-            completion(nil, error);
-          });
-          return;
-        }
-        CFRelease(sampleBuffer);
-      } else {
-        [writerInput markAsFinished];
-        [writer finishWritingWithCompletionHandler:^{
-          dispatch_async(dispatch_get_main_queue(), ^{
-            if (reader.status == AVAssetReaderStatusCompleted && writer.status == AVAssetWriterStatusCompleted) {
-              completion(audioPath, nil);
-            } else {
-              NSError *error = reader.error ?: writer.error ?: [NSError errorWithDomain:@"KlongVideoRecorder"
-                                                                                  code:14
-                                                                              userInfo:@{NSLocalizedDescriptionKey: @"Reference audio WAV export failed."}];
-              completion(nil, error);
-            }
-          });
-        }];
-        return;
-      }
-    }
-  }];
 }
 
 - (void)ensureCaptureAccessThenRun:(dispatch_block_t)block {
@@ -1160,7 +1010,7 @@ void setVideoEnabled(bool enabled) {
   g_videoEnabled = enabled;
   if (enabled) {
     g_followEnabled = true;
-    ensureVideoTrackReady(currentProject(), true);
+    ensureVideoTrackReady(currentProject(), false);
     [recorder() showPreview];
   } else {
     g_followEnabled = false;
@@ -1185,7 +1035,7 @@ void startTransportRecording(ReaProject *project) {
   }
 
   g_recordProject = project;
-  ensureVideoTrackReady(project, true);
+  ensureVideoTrackReady(project, false);
   g_recordStartPosition = GetCursorPositionEx ? GetCursorPositionEx(project) : 0.0;
   if (g_recordStartPosition < 0.0 && GetPlayPositionEx) {
     g_recordStartPosition = GetPlayPositionEx(project);
@@ -1217,19 +1067,10 @@ void stopTransportRecording() {
       g_activeTransportRecording = false;
       return;
     }
-    NSString *moviePath = path ?: @"";
-    [recorder() exportReferenceAudioForMovieAtPath:moviePath
-                                        completion:^(NSString *audioPath, NSError *audioError) {
-                                          if (audioError) {
-                                            showError(std::string("Reference audio extraction failed:\n") +
-                                                      (audioError.localizedDescription.UTF8String ?: "Unknown AVFoundation error."));
-                                          }
-                                          g_pendingInsertPath = moviePath.UTF8String ?: "";
-                                          g_pendingInsertAudioPath = audioPath.UTF8String ?: "";
-                                          g_pendingInsertPosition = insertPosition;
-                                          g_pendingInsert = !g_pendingInsertPath.empty();
-                                          g_activeTransportRecording = false;
-                                        }];
+    g_pendingInsertPath = path.UTF8String ?: "";
+    g_pendingInsertPosition = insertPosition;
+    g_pendingInsert = !g_pendingInsertPath.empty();
+    g_activeTransportRecording = false;
   }];
 }
 
@@ -1238,14 +1079,12 @@ void processPendingInsert() {
     return;
   }
   const std::string path = g_pendingInsertPath;
-  const std::string audioPath = g_pendingInsertAudioPath;
   const double position = g_pendingInsertPosition;
   g_pendingInsert = false;
   g_pendingInsertPath.clear();
-  g_pendingInsertAudioPath.clear();
 
   std::string error;
-  if (insertRecordedMedia(path, audioPath, position, error)) {
+  if (insertRecordedMedia(path, position, error)) {
     [recorder() setStatus:@"Recorded to Video Recorder track"];
   } else {
     [recorder() setStatus:@"Import error"];
