@@ -1,8 +1,10 @@
 #import <AVFoundation/AVFoundation.h>
 #import <Cocoa/Cocoa.h>
+#import <CoreAudioTypes/CoreAudioTypes.h>
 #import <QuartzCore/QuartzCore.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <ctime>
 #include <string>
@@ -35,13 +37,17 @@
 #define REAPERAPI_WANT_GetTrackMediaItem
 #define REAPERAPI_WANT_GetTrackName
 #define REAPERAPI_WANT_InsertTrackAtIndex
+#define REAPERAPI_WANT_PCM_Source_BuildPeaks
 #define REAPERAPI_WANT_PCM_Source_CreateFromFile
+#define REAPERAPI_WANT_RefreshToolbar2
 #define REAPERAPI_WANT_SetExtState
 #define REAPERAPI_WANT_SetMediaItemInfo_Value
 #define REAPERAPI_WANT_SetMediaItemSelected
 #define REAPERAPI_WANT_SetMediaItemTake_Source
+#define REAPERAPI_WANT_SetMediaTrackInfo_Value
 #define REAPERAPI_WANT_ShowMessageBox
 #define REAPERAPI_WANT_UpdateArrange
+#define REAPERAPI_WANT_UpdateTimeline
 #include "reaper_plugin_functions.h"
 
 namespace {
@@ -54,14 +60,17 @@ constexpr const char *kVideoTrackName = "Video Recorder";
 constexpr int kRecordBit = 4;
 
 reaper_plugin_info_t *g_reaper = nullptr;
+int g_videoEnabledCommand = 0;
 int g_showPreviewCommand = 0;
 int g_toggleFollowCommand = 0;
 int g_previousPlayState = 0;
+bool g_videoEnabled = false;
 bool g_followEnabled = true;
 bool g_activeTransportRecording = false;
 bool g_pendingInsert = false;
 std::string g_selectedDeviceUniqueID;
 std::string g_pendingInsertPath;
+std::string g_pendingInsertAudioPath;
 double g_pendingInsertPosition = 0.0;
 ReaProject *g_recordProject = nullptr;
 double g_recordStartPosition = 0.0;
@@ -73,6 +82,17 @@ struct PlaybackVideo {
   double itemEnd = 0.0;
   double sourceOffset = 0.0;
 };
+
+bool hasPathExtension(const std::string &path, const std::string &extension) {
+  return path.size() >= extension.size() &&
+         std::equal(extension.rbegin(), extension.rend(), path.rbegin(), [](char a, char b) {
+           return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b));
+         });
+}
+
+bool isVideoPath(const std::string &path) {
+  return hasPathExtension(path, ".mov") || hasPathExtension(path, ".mp4") || hasPathExtension(path, ".m4v");
+}
 
 void showError(const std::string &message) {
   if (ShowMessageBox) {
@@ -203,6 +223,23 @@ MediaTrack *findOrCreateVideoTrack(ReaProject *project) {
   return track;
 }
 
+MediaTrack *ensureVideoTrackReady(ReaProject *project, bool useFreeItemPositioning) {
+  MediaTrack *track = findOrCreateVideoTrack(project);
+  if (!track) {
+    return nullptr;
+  }
+  if (useFreeItemPositioning && SetMediaTrackInfo_Value) {
+    SetMediaTrackInfo_Value(track, "I_FREEMODE", 1.0);
+  }
+  if (UpdateTimeline) {
+    UpdateTimeline();
+  }
+  if (UpdateArrange) {
+    UpdateArrange();
+  }
+  return track;
+}
+
 PlaybackVideo findPlaybackVideoAtPosition(ReaProject *project, double position) {
   PlaybackVideo result;
   if (!project || !CountTrackMediaItems || !GetTrackMediaItem || !GetMediaItemInfo_Value ||
@@ -240,6 +277,9 @@ PlaybackVideo findPlaybackVideoAtPosition(ReaProject *project, double position) 
     if (filePath[0] == '\0') {
       continue;
     }
+    if (!isVideoPath(filePath)) {
+      continue;
+    }
 
     result.found = true;
     result.path = filePath;
@@ -252,7 +292,49 @@ PlaybackVideo findPlaybackVideoAtPosition(ReaProject *project, double position) 
   return result;
 }
 
-bool insertRecordedMedia(const std::string &path, double position, std::string &error) {
+MediaItem *insertMediaItem(MediaTrack *track,
+                           const std::string &path,
+                           double position,
+                           double laneY,
+                           double laneHeight,
+                           const char *description,
+                           std::string &error) {
+  PCM_source *source = PCM_Source_CreateFromFile(path.c_str());
+  if (!source) {
+    error = std::string("Recording finished, but REAPER could not open the ") + description + " file:\n" + path;
+    return nullptr;
+  }
+
+  MediaItem *item = AddMediaItemToTrack(track);
+  MediaItem_Take *take = item ? AddTakeToMediaItem(item) : nullptr;
+  if (!item || !take || !SetMediaItemTake_Source(take, source)) {
+    error = std::string("Recording finished, but REAPER could not create a ") + description + " media item.";
+    return nullptr;
+  }
+
+  bool lengthIsQN = false;
+  const double length = GetMediaSourceLength(source, &lengthIsQN);
+  SetMediaItemInfo_Value(item, "D_POSITION", position);
+  if (!lengthIsQN && length > 0.0) {
+    SetMediaItemInfo_Value(item, "D_LENGTH", length);
+  }
+  SetMediaItemInfo_Value(item, "B_LOOPSRC", 0.0);
+  SetMediaItemInfo_Value(item, "F_FREEMODE_Y", laneY);
+  SetMediaItemInfo_Value(item, "F_FREEMODE_H", laneHeight);
+  if (SetMediaItemSelected) {
+    SetMediaItemSelected(item, true);
+  }
+  if (PCM_Source_BuildPeaks) {
+    int remaining = PCM_Source_BuildPeaks(source, 0);
+    while (remaining > 0) {
+      remaining = PCM_Source_BuildPeaks(source, 1);
+    }
+    PCM_Source_BuildPeaks(source, 2);
+  }
+  return item;
+}
+
+bool insertRecordedMedia(const std::string &path, const std::string &audioPath, double position, std::string &error) {
   ReaProject *project = g_recordProject ? g_recordProject : currentProject();
   if (!project) {
     error = "Recording finished, but there is no active REAPER project to insert into:\n" + path;
@@ -265,46 +347,50 @@ bool insertRecordedMedia(const std::string &path, double position, std::string &
     return false;
   }
 
-  MediaTrack *track = findOrCreateVideoTrack(project);
+  MediaTrack *track = ensureVideoTrackReady(project, !audioPath.empty());
   if (!track) {
     error = "Recording finished, but REAPER could not create or find the Video Recorder track.";
     return false;
   }
 
-  PCM_source *source = PCM_Source_CreateFromFile(path.c_str());
-  if (!source) {
-    error = "Recording finished, but REAPER could not open the recorded video file:\n" + path;
+  const bool hasReferenceAudio = !audioPath.empty();
+  MediaItem *videoItem = insertMediaItem(track,
+                                         path,
+                                         position,
+                                         0.0,
+                                         hasReferenceAudio ? 0.5 : 1.0,
+                                         "video",
+                                         error);
+  if (!videoItem) {
     return false;
   }
 
-  MediaItem *item = AddMediaItemToTrack(track);
-  MediaItem_Take *take = item ? AddTakeToMediaItem(item) : nullptr;
-  if (!item || !take || !SetMediaItemTake_Source(take, source)) {
-    error = "Recording finished, but REAPER could not create a video media item.";
-    return false;
+  if (hasReferenceAudio) {
+    MediaItem *audioItem = insertMediaItem(track, audioPath, position, 0.5, 0.5, "reference audio", error);
+    if (!audioItem) {
+      return false;
+    }
   }
 
-  bool lengthIsQN = false;
-  const double length = GetMediaSourceLength(source, &lengthIsQN);
-  SetMediaItemInfo_Value(item, "D_POSITION", position);
-  if (!lengthIsQN && length > 0.0) {
-    SetMediaItemInfo_Value(item, "D_LENGTH", length);
-  }
-  SetMediaItemInfo_Value(item, "B_LOOPSRC", 0.0);
-  if (SetMediaItemSelected) {
-    SetMediaItemSelected(item, true);
-  }
   if (UpdateArrange) {
     UpdateArrange();
+  }
+  if (UpdateTimeline) {
+    UpdateTimeline();
   }
 
   return true;
 }
 
 void updateFollowStatusText();
+void refreshToolbarState();
+void stopTransportRecording();
 
 std::string followStatusText() {
-  return std::string("Transport follow ") + (g_followEnabled ? "enabled" : "disabled");
+  if (!g_videoEnabled) {
+    return "Video disabled";
+  }
+  return std::string("Video enabled; transport follow ") + (g_followEnabled ? "on" : "off");
 }
 
 void setFollowEnabled(bool enabled) {
@@ -313,7 +399,10 @@ void setFollowEnabled(bool enabled) {
     SetExtState(kExtStateSection, kFollowEnabledKey, enabled ? "1" : "0", true);
   }
   updateFollowStatusText();
+  refreshToolbarState();
 }
+
+void setVideoEnabled(bool enabled);
 
 } // namespace
 
@@ -331,7 +420,9 @@ void setFollowEnabled(bool enabled) {
 @property(nonatomic, copy) void (^startCompletion)(void);
 @property(nonatomic, copy) void (^stopCompletion)(NSString *path, NSError *error);
 @property(nonatomic, copy) NSString *activeOutputPath;
+@property(nonatomic, copy) NSString *audioDeviceName;
 @property(nonatomic, assign) BOOL docked;
+@property(nonatomic, assign) BOOL hasAudioInput;
 @property(nonatomic, assign) BOOL showingPlayback;
 @end
 
@@ -368,6 +459,15 @@ void setFollowEnabled(bool enabled) {
              startCompletion:(void (^)(void))startCompletion
                         error:(NSError **)error {
   if (![self ensureSession:error]) {
+    return NO;
+  }
+  if (!self.hasAudioInput) {
+    if (error) {
+      NSString *message = @"No microphone/camera audio input is available for the selected camera. Grant microphone permission to REAPER and make sure the camera microphone is available in macOS.";
+      *error = [NSError errorWithDomain:@"KlongVideoRecorder"
+                                   code:6
+                               userInfo:@{NSLocalizedDescriptionKey: message}];
+    }
     return NO;
   }
   if (self.movieOutput.isRecording) {
@@ -418,6 +518,159 @@ void setFollowEnabled(bool enabled) {
   }
   [self setStatus:@"Finalizing"];
   [self.movieOutput stopRecording];
+}
+
+- (void)exportReferenceAudioForMovieAtPath:(NSString *)moviePath
+                                completion:(void (^)(NSString *audioPath, NSError *error))completion {
+  NSURL *movieURL = [NSURL fileURLWithPath:moviePath];
+  AVURLAsset *asset = [AVURLAsset URLAssetWithURL:movieURL options:nil];
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+  const NSUInteger audioTrackCount = [asset tracksWithMediaType:AVMediaTypeAudio].count;
+#pragma clang diagnostic pop
+  if (audioTrackCount == 0) {
+    NSError *error = [NSError errorWithDomain:@"KlongVideoRecorder"
+                                         code:7
+                                     userInfo:@{NSLocalizedDescriptionKey: @"The recorded movie does not contain an audio track."}];
+    completion(nil, error);
+    return;
+  }
+
+  NSError *readerError = nil;
+  AVAssetReader *reader = [[AVAssetReader alloc] initWithAsset:asset error:&readerError];
+  if (!reader) {
+    NSError *error = [NSError errorWithDomain:@"KlongVideoRecorder"
+                                         code:8
+                                     userInfo:@{NSLocalizedDescriptionKey: readerError.localizedDescription ?: @"AVFoundation could not create an audio reader."}];
+    completion(nil, error);
+    return;
+  }
+
+  AVAssetTrack *audioTrack = nil;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+  audioTrack = [asset tracksWithMediaType:AVMediaTypeAudio].firstObject;
+#pragma clang diagnostic pop
+  double sampleRate = 48000.0;
+  int channelCount = 1;
+  if (audioTrack.formatDescriptions.count > 0) {
+    CMAudioFormatDescriptionRef formatDescription =
+        (__bridge CMAudioFormatDescriptionRef)audioTrack.formatDescriptions.firstObject;
+    const AudioStreamBasicDescription *streamDescription =
+        CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription);
+    if (streamDescription) {
+      if (streamDescription->mSampleRate > 0.0) {
+        sampleRate = streamDescription->mSampleRate;
+      }
+      if (streamDescription->mChannelsPerFrame > 0) {
+        channelCount = static_cast<int>(streamDescription->mChannelsPerFrame);
+      }
+    }
+  }
+  NSDictionary *readerSettings = @{
+    AVFormatIDKey: @(kAudioFormatLinearPCM),
+    AVSampleRateKey: @(sampleRate),
+    AVNumberOfChannelsKey: @(channelCount),
+    AVLinearPCMBitDepthKey: @16,
+    AVLinearPCMIsBigEndianKey: @NO,
+    AVLinearPCMIsFloatKey: @NO,
+    AVLinearPCMIsNonInterleaved: @NO,
+  };
+  AVAssetReaderTrackOutput *readerOutput =
+      [[AVAssetReaderTrackOutput alloc] initWithTrack:audioTrack outputSettings:readerSettings];
+  if (![reader canAddOutput:readerOutput]) {
+    NSError *error = [NSError errorWithDomain:@"KlongVideoRecorder"
+                                         code:9
+                                     userInfo:@{NSLocalizedDescriptionKey: @"AVFoundation could not add the audio reader output."}];
+    completion(nil, error);
+    return;
+  }
+  [reader addOutput:readerOutput];
+
+  NSString *basePath = [moviePath stringByDeletingPathExtension];
+  NSString *audioPath = [basePath stringByAppendingString:@"_reference_audio.wav"];
+  [[NSFileManager defaultManager] removeItemAtPath:audioPath error:nil];
+
+  NSError *writerError = nil;
+  AVAssetWriter *writer = [[AVAssetWriter alloc] initWithURL:[NSURL fileURLWithPath:audioPath]
+                                                    fileType:AVFileTypeWAVE
+                                                       error:&writerError];
+  if (!writer) {
+    NSError *error = [NSError errorWithDomain:@"KlongVideoRecorder"
+                                         code:10
+                                     userInfo:@{NSLocalizedDescriptionKey: writerError.localizedDescription ?: @"AVFoundation could not create a WAV writer."}];
+    completion(nil, error);
+    return;
+  }
+
+  NSDictionary *writerSettings = @{
+    AVFormatIDKey: @(kAudioFormatLinearPCM),
+    AVSampleRateKey: @(sampleRate),
+    AVNumberOfChannelsKey: @(channelCount),
+    AVLinearPCMBitDepthKey: @16,
+    AVLinearPCMIsBigEndianKey: @NO,
+    AVLinearPCMIsFloatKey: @NO,
+    AVLinearPCMIsNonInterleaved: @NO,
+  };
+  AVAssetWriterInput *writerInput =
+      [[AVAssetWriterInput alloc] initWithMediaType:AVMediaTypeAudio outputSettings:writerSettings];
+  writerInput.expectsMediaDataInRealTime = NO;
+  if (![writer canAddInput:writerInput]) {
+    NSError *error = [NSError errorWithDomain:@"KlongVideoRecorder"
+                                         code:11
+                                     userInfo:@{NSLocalizedDescriptionKey: @"AVFoundation could not add the WAV writer input."}];
+    completion(nil, error);
+    return;
+  }
+  [writer addInput:writerInput];
+  [self setStatus:@"Extracting reference audio"];
+
+  if (![reader startReading] || ![writer startWriting]) {
+    NSError *error = reader.error ?: writer.error ?: [NSError errorWithDomain:@"KlongVideoRecorder"
+                                                                        code:12
+                                                                    userInfo:@{NSLocalizedDescriptionKey: @"Reference audio export could not start."}];
+    completion(nil, error);
+    return;
+  }
+
+  [writer startSessionAtSourceTime:kCMTimeZero];
+  dispatch_queue_t exportQueue = dispatch_queue_create("com.klong.reaper-video-recorder.reference-audio", DISPATCH_QUEUE_SERIAL);
+  [writerInput requestMediaDataWhenReadyOnQueue:exportQueue usingBlock:^{
+    while (writerInput.readyForMoreMediaData) {
+      CMSampleBufferRef sampleBuffer = [readerOutput copyNextSampleBuffer];
+      if (sampleBuffer) {
+        if (![writerInput appendSampleBuffer:sampleBuffer]) {
+          CFRelease(sampleBuffer);
+          [reader cancelReading];
+          [writerInput markAsFinished];
+          [writer cancelWriting];
+          NSError *error = writer.error ?: [NSError errorWithDomain:@"KlongVideoRecorder"
+                                                               code:13
+                                                           userInfo:@{NSLocalizedDescriptionKey: @"Reference audio export failed while writing samples."}];
+          dispatch_async(dispatch_get_main_queue(), ^{
+            completion(nil, error);
+          });
+          return;
+        }
+        CFRelease(sampleBuffer);
+      } else {
+        [writerInput markAsFinished];
+        [writer finishWritingWithCompletionHandler:^{
+          dispatch_async(dispatch_get_main_queue(), ^{
+            if (reader.status == AVAssetReaderStatusCompleted && writer.status == AVAssetWriterStatusCompleted) {
+              completion(audioPath, nil);
+            } else {
+              NSError *error = reader.error ?: writer.error ?: [NSError errorWithDomain:@"KlongVideoRecorder"
+                                                                                  code:14
+                                                                              userInfo:@{NSLocalizedDescriptionKey: @"Reference audio WAV export failed."}];
+              completion(nil, error);
+            }
+          });
+        }];
+        return;
+      }
+    }
+  }];
 }
 
 - (void)ensureCaptureAccessThenRun:(dispatch_block_t)block {
@@ -509,12 +762,16 @@ void setFollowEnabled(bool enabled) {
   }
   [session addInput:input];
 
+  self.hasAudioInput = NO;
+  self.audioDeviceName = nil;
   AVCaptureDevice *audioDevice = [self audioDeviceForVideoDevice:device];
+  AVCaptureDeviceInput *audioInput = nil;
   if (audioDevice) {
     NSError *audioInputError = nil;
-    AVCaptureDeviceInput *audioInput = [AVCaptureDeviceInput deviceInputWithDevice:audioDevice error:&audioInputError];
+    audioInput = [AVCaptureDeviceInput deviceInputWithDevice:audioDevice error:&audioInputError];
     if (audioInput && [session canAddInput:audioInput]) {
       [session addInput:audioInput];
+      self.audioDeviceName = audioDevice.localizedName ?: @"Camera audio";
     } else {
       [self setStatus:@"Camera audio unavailable; recording video only"];
     }
@@ -532,6 +789,15 @@ void setFollowEnabled(bool enabled) {
     return NO;
   }
   [session addOutput:movieOutput];
+  if (audioInput) {
+    AVCaptureConnection *audioConnection = [movieOutput connectionWithMediaType:AVMediaTypeAudio];
+    self.hasAudioInput = audioConnection != nil;
+    audioConnection.enabled = self.hasAudioInput;
+    if (!self.hasAudioInput) {
+      self.audioDeviceName = nil;
+      [self setStatus:@"Movie recorder has no audio connection"];
+    }
+  }
 
   self.session = session;
   self.movieOutput = movieOutput;
@@ -540,6 +806,16 @@ void setFollowEnabled(bool enabled) {
 }
 
 - (NSArray<AVCaptureDevice *> *)availableAudioDevices {
+  if (@available(macOS 14.0, *)) {
+    AVCaptureDeviceDiscoverySession *session =
+        [AVCaptureDeviceDiscoverySession discoverySessionWithDeviceTypes:@[ AVCaptureDeviceTypeMicrophone ]
+                                                               mediaType:AVMediaTypeAudio
+                                                                position:AVCaptureDevicePositionUnspecified];
+    if (session.devices.count > 0) {
+      return session.devices;
+    }
+  }
+
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
   NSArray<AVCaptureDevice *> *devices = [AVCaptureDevice devicesWithMediaType:AVMediaTypeAudio];
@@ -551,6 +827,24 @@ void setFollowEnabled(bool enabled) {
   return fallback ? @[ fallback ] : @[];
 }
 
+- (NSString *)normalizedDeviceMatchName:(NSString *)name {
+  NSMutableString *normalized = [[name ?: @"" lowercaseString] mutableCopy];
+  NSArray<NSString *> *noiseWords = @[ @"camera", @"microphone", @"mic", @"continuity" ];
+  for (NSString *word in noiseWords) {
+    [normalized replaceOccurrencesOfString:word
+                                withString:@""
+                                   options:NSCaseInsensitiveSearch
+                                     range:NSMakeRange(0, normalized.length)];
+  }
+  while ([normalized containsString:@"  "]) {
+    [normalized replaceOccurrencesOfString:@"  "
+                                withString:@" "
+                                   options:0
+                                     range:NSMakeRange(0, normalized.length)];
+  }
+  return [normalized stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+}
+
 - (AVCaptureDevice *)audioDeviceForVideoDevice:(AVCaptureDevice *)videoDevice {
   NSArray<AVCaptureDevice *> *audioDevices = [self availableAudioDevices];
   if (audioDevices.count == 0) {
@@ -558,11 +852,16 @@ void setFollowEnabled(bool enabled) {
   }
 
   NSString *videoName = videoDevice.localizedName ?: @"";
+  NSString *normalizedVideoName = [self normalizedDeviceMatchName:videoName];
   for (AVCaptureDevice *audioDevice in audioDevices) {
     NSString *audioName = audioDevice.localizedName ?: @"";
+    NSString *normalizedAudioName = [self normalizedDeviceMatchName:audioName];
     if ([audioName isEqualToString:videoName] ||
         (videoName.length > 0 && [audioName localizedCaseInsensitiveContainsString:videoName]) ||
-        (audioName.length > 0 && [videoName localizedCaseInsensitiveContainsString:audioName])) {
+        (audioName.length > 0 && [videoName localizedCaseInsensitiveContainsString:audioName]) ||
+        (normalizedVideoName.length > 0 && [normalizedAudioName isEqualToString:normalizedVideoName]) ||
+        (normalizedVideoName.length > 0 && [normalizedAudioName localizedCaseInsensitiveContainsString:normalizedVideoName]) ||
+        (normalizedAudioName.length > 0 && [normalizedVideoName localizedCaseInsensitiveContainsString:normalizedAudioName])) {
       return audioDevice;
     }
   }
@@ -697,7 +996,6 @@ void setFollowEnabled(bool enabled) {
     self.statusLabel.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
     [self.dockView addSubview:self.statusLabel];
     [self refreshDeviceMenu];
-    [self refreshDeviceMenu];
   }
 
   if (!self.previewLayer && self.session) {
@@ -734,6 +1032,8 @@ void setFollowEnabled(bool enabled) {
     } else {
       self.playerLayer.player = self.player;
     }
+    self.player.muted = YES;
+    self.player.volume = 0.0f;
   }
 
   self.showingPlayback = YES;
@@ -795,7 +1095,12 @@ didStartRecordingToOutputFileAtURL:(NSURL *)fileURL
   (void)fileURL;
   (void)connections;
   dispatch_async(dispatch_get_main_queue(), ^{
-    [self setStatus:@"Recording video + camera audio"];
+    if (self.hasAudioInput) {
+      NSString *audioName = self.audioDeviceName.length > 0 ? self.audioDeviceName : @"camera audio";
+      [self setStatus:[NSString stringWithFormat:@"Recording video + %@", audioName]];
+    } else {
+      [self setStatus:@"Recording video only"];
+    }
     if (self.startCompletion) {
       self.startCompletion();
       self.startCompletion = nil;
@@ -835,6 +1140,41 @@ void updateFollowStatusText() {
   [recorder() setStatus:[NSString stringWithUTF8String:followStatusText().c_str()]];
 }
 
+void refreshToolbarState() {
+  if (!RefreshToolbar2) {
+    return;
+  }
+  if (g_videoEnabledCommand != 0) {
+    RefreshToolbar2(0, g_videoEnabledCommand);
+  }
+  if (g_toggleFollowCommand != 0) {
+    RefreshToolbar2(0, g_toggleFollowCommand);
+  }
+}
+
+void setVideoEnabled(bool enabled) {
+  if (g_videoEnabled == enabled) {
+    return;
+  }
+
+  g_videoEnabled = enabled;
+  if (enabled) {
+    g_followEnabled = true;
+    ensureVideoTrackReady(currentProject(), true);
+    [recorder() showPreview];
+  } else {
+    g_followEnabled = false;
+    if (recorder().isRecording) {
+      stopTransportRecording();
+    }
+    [recorder() stopPlaybackAndShowLive];
+    [recorder() hideDockedPreview];
+  }
+
+  updateFollowStatusText();
+  refreshToolbarState();
+}
+
 bool isRecordingState(int playState) {
   return (playState & kRecordBit) != 0;
 }
@@ -845,21 +1185,16 @@ void startTransportRecording(ReaProject *project) {
   }
 
   g_recordProject = project;
-  g_recordStartPosition = GetPlayPositionEx ? GetPlayPositionEx(project) : 0.0;
-  if (g_recordStartPosition < 0.0 && GetCursorPositionEx) {
-    g_recordStartPosition = GetCursorPositionEx(project);
+  ensureVideoTrackReady(project, true);
+  g_recordStartPosition = GetCursorPositionEx ? GetCursorPositionEx(project) : 0.0;
+  if (g_recordStartPosition < 0.0 && GetPlayPositionEx) {
+    g_recordStartPosition = GetPlayPositionEx(project);
   }
 
   const std::string outputPath = captureOutputPath(project);
   NSError *error = nil;
   if (![recorder() startRecordingToPath:outputPath
-                        startCompletion:^{
-                          if (g_recordProject && GetPlayPositionEx) {
-                            g_recordStartPosition = GetPlayPositionEx(g_recordProject);
-                          } else if (g_recordProject && GetCursorPositionEx) {
-                            g_recordStartPosition = GetCursorPositionEx(g_recordProject);
-                          }
-                        }
+                        startCompletion:nil
                                    error:&error]) {
     showError(error.localizedDescription.UTF8String ?: "Unable to start video recording.");
     return;
@@ -882,10 +1217,19 @@ void stopTransportRecording() {
       g_activeTransportRecording = false;
       return;
     }
-    g_pendingInsertPath = path.UTF8String ?: "";
-    g_pendingInsertPosition = insertPosition;
-    g_pendingInsert = !g_pendingInsertPath.empty();
-    g_activeTransportRecording = false;
+    NSString *moviePath = path ?: @"";
+    [recorder() exportReferenceAudioForMovieAtPath:moviePath
+                                        completion:^(NSString *audioPath, NSError *audioError) {
+                                          if (audioError) {
+                                            showError(std::string("Reference audio extraction failed:\n") +
+                                                      (audioError.localizedDescription.UTF8String ?: "Unknown AVFoundation error."));
+                                          }
+                                          g_pendingInsertPath = moviePath.UTF8String ?: "";
+                                          g_pendingInsertAudioPath = audioPath.UTF8String ?: "";
+                                          g_pendingInsertPosition = insertPosition;
+                                          g_pendingInsert = !g_pendingInsertPath.empty();
+                                          g_activeTransportRecording = false;
+                                        }];
   }];
 }
 
@@ -894,12 +1238,14 @@ void processPendingInsert() {
     return;
   }
   const std::string path = g_pendingInsertPath;
+  const std::string audioPath = g_pendingInsertAudioPath;
   const double position = g_pendingInsertPosition;
   g_pendingInsert = false;
   g_pendingInsertPath.clear();
+  g_pendingInsertAudioPath.clear();
 
   std::string error;
-  if (insertRecordedMedia(path, position, error)) {
+  if (insertRecordedMedia(path, audioPath, position, error)) {
     [recorder() setStatus:@"Recorded to Video Recorder track"];
   } else {
     [recorder() setStatus:@"Import error"];
@@ -910,6 +1256,11 @@ void processPendingInsert() {
 void timerPoll() {
   @autoreleasepool {
     processPendingInsert();
+
+    if (!g_videoEnabled) {
+      g_previousPlayState = 0;
+      return;
+    }
 
     ReaProject *project = currentProject();
     if (!project || !GetPlayStateEx) {
@@ -955,6 +1306,11 @@ bool hookCommand2(KbdSectionInfo *section, int command, int val, int val2, int r
   (void)relmode;
   (void)hwnd;
 
+  if (command == g_videoEnabledCommand) {
+    setVideoEnabled(!g_videoEnabled);
+    return true;
+  }
+
   if (command == g_showPreviewCommand) {
     [recorder() togglePreview];
     return true;
@@ -971,6 +1327,16 @@ bool hookCommand2(KbdSectionInfo *section, int command, int val, int val2, int r
   return false;
 }
 
+int toggleActionHook(int command) {
+  if (command == g_videoEnabledCommand) {
+    return g_videoEnabled ? 1 : 0;
+  }
+  if (command == g_toggleFollowCommand) {
+    return g_followEnabled ? 1 : 0;
+  }
+  return -1;
+}
+
 void cleanup() {
   if (recorder().isRecording) {
     stopTransportRecording();
@@ -978,6 +1344,12 @@ void cleanup() {
 }
 
 bool registerActions(reaper_plugin_info_t *rec) {
+  custom_action_register_t videoEnabledAction = {
+      0,
+      "KLONG_VIDEO_RECORDER_ENABLE",
+      "Video Recorder: Enable/Disable video features",
+      nullptr,
+  };
   custom_action_register_t showPreviewAction = {
       0,
       "KLONG_VIDEO_RECORDER_SHOW_PREVIEW",
@@ -991,11 +1363,13 @@ bool registerActions(reaper_plugin_info_t *rec) {
       nullptr,
   };
 
+  g_videoEnabledCommand = rec->Register("custom_action", &videoEnabledAction);
   g_showPreviewCommand = rec->Register("custom_action", &showPreviewAction);
   g_toggleFollowCommand = rec->Register("custom_action", &toggleFollowAction);
 
-  return g_showPreviewCommand != 0 && g_toggleFollowCommand != 0 &&
+  return g_videoEnabledCommand != 0 && g_showPreviewCommand != 0 && g_toggleFollowCommand != 0 &&
          rec->Register("hookcommand2", reinterpret_cast<void *>(hookCommand2)) &&
+         rec->Register("toggleaction", reinterpret_cast<void *>(toggleActionHook)) &&
          rec->Register("timer", reinterpret_cast<void *>(timerPoll)) &&
          rec->Register("atexit", reinterpret_cast<void *>(cleanup));
 }
@@ -1003,6 +1377,7 @@ bool registerActions(reaper_plugin_info_t *rec) {
 void unregisterCallbacks(reaper_plugin_info_t *rec) {
   rec->Register("-timer", reinterpret_cast<void *>(timerPoll));
   rec->Register("-hookcommand2", reinterpret_cast<void *>(hookCommand2));
+  rec->Register("-toggleaction", reinterpret_cast<void *>(toggleActionHook));
   rec->Register("-atexit", reinterpret_cast<void *>(cleanup));
 }
 
