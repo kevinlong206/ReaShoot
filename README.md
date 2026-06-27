@@ -8,11 +8,14 @@ macOS-only REAPER extension MVP for recording one webcam/video source in sync wi
   - `Video Recorder: Show/Hide Preview`
   - `Video Recorder: Enable/Disable Transport Follow`
 - Shows a native macOS live preview window using AVFoundation.
+- Provides a camera selector for available macOS video inputs, including Continuity Camera when macOS exposes it.
 - Starts video recording when REAPER enters record.
 - Stops video recording when REAPER leaves record.
 - Shows the preview in REAPER's docker.
+- Shows recorded video playback in the same preview panel when REAPER plays over an item on the `Video Recorder` track.
 - Inserts the finalized `.mov` onto a `Video Recorder` track at the record-start timeline position.
 - Shows load/record/finalize/import state in the preview status label instead of console chatter.
+- Places recorded video using AVFoundation's actual recording-start callback to compensate for capture startup latency.
 
 ## Build
 
@@ -45,4 +48,5 @@ codesign --force --sign - "$HOME/Library/Application Support/REAPER/UserPlugins/
 
 - The extension records video only; REAPER remains responsible for audio recording and mixing.
 - Camera permission is requested the first time the preview/session is opened.
+- Selected camera input is persisted in REAPER ext state.
 - Captures are written under `Video Recordings` in the saved project directory, or under REAPER's resource path for unsaved projects.
