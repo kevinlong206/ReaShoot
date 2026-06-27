@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <ctime>
 #include <string>
 
@@ -49,6 +51,7 @@ namespace {
 constexpr const char *kExtStateSection = "klong_reaper_video_recorder";
 constexpr const char *kFollowEnabledKey = "follow_enabled";
 constexpr const char *kSelectedDeviceKey = "selected_device_unique_id";
+constexpr const char *kSyncOffsetPrefix = "sync_offset_ms_";
 constexpr const char *kDockIdent = "klong_reaper_video_recorder_preview";
 constexpr const char *kVideoTrackName = "Video Recorder";
 constexpr int kRecordBit = 4;
@@ -63,6 +66,8 @@ bool g_pendingInsert = false;
 std::string g_selectedDeviceUniqueID;
 std::string g_pendingInsertPath;
 double g_pendingInsertPosition = 0.0;
+double g_syncOffsetMs = 0.0;
+double g_recordSyncOffsetMs = 0.0;
 ReaProject *g_recordProject = nullptr;
 double g_recordStartPosition = 0.0;
 
@@ -119,6 +124,43 @@ std::string baseNameWithoutExtension(const std::string &path) {
     }
   }
   return name;
+}
+
+std::string safeKeyComponent(const std::string &value) {
+  std::string key = value.empty() ? "default" : value;
+  for (char &ch : key) {
+    const bool safe = (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') ||
+                      (ch >= '0' && ch <= '9') || ch == '-' || ch == '_';
+    if (!safe) {
+      ch = '_';
+    }
+  }
+  return key;
+}
+
+std::string selectedDeviceSyncOffsetKey() {
+  return std::string(kSyncOffsetPrefix) + safeKeyComponent(g_selectedDeviceUniqueID);
+}
+
+double loadSelectedDeviceSyncOffsetMs() {
+  if (!GetExtState) {
+    return 0.0;
+  }
+
+  const std::string key = selectedDeviceSyncOffsetKey();
+  const char *value = GetExtState(kExtStateSection, key.c_str());
+  return value && value[0] != '\0' ? std::strtod(value, nullptr) : 0.0;
+}
+
+void saveSelectedDeviceSyncOffsetMs() {
+  if (!SetExtState) {
+    return;
+  }
+
+  char value[64] = {};
+  std::snprintf(value, sizeof(value), "%.3f", g_syncOffsetMs);
+  const std::string key = selectedDeviceSyncOffsetKey();
+  SetExtState(kExtStateSection, key.c_str(), value, true);
 }
 
 std::string timestampString() {
@@ -327,6 +369,8 @@ void setFollowEnabled(bool enabled) {
 @property(nonatomic, strong) NSView *dockView;
 @property(nonatomic, strong) NSView *previewView;
 @property(nonatomic, strong) NSPopUpButton *devicePopup;
+@property(nonatomic, strong) NSTextField *syncOffsetField;
+@property(nonatomic, strong) NSStepper *syncOffsetStepper;
 @property(nonatomic, strong) NSTextField *statusLabel;
 @property(nonatomic, copy) void (^startCompletion)(void);
 @property(nonatomic, copy) void (^stopCompletion)(NSString *path, NSError *error);
@@ -572,6 +616,8 @@ void setFollowEnabled(bool enabled) {
       g_selectedDeviceUniqueID = uniqueID.UTF8String;
     }
   }
+  g_syncOffsetMs = loadSelectedDeviceSyncOffsetMs();
+  [self updateSyncOffsetControls];
 }
 
 - (void)deviceSelectionChanged:(id)sender {
@@ -588,9 +634,11 @@ void setFollowEnabled(bool enabled) {
   }
 
   g_selectedDeviceUniqueID = uniqueID.UTF8String;
+  g_syncOffsetMs = loadSelectedDeviceSyncOffsetMs();
   if (SetExtState) {
     SetExtState(kExtStateSection, kSelectedDeviceKey, g_selectedDeviceUniqueID.c_str(), true);
   }
+  [self updateSyncOffsetControls];
 
   [self.session stopRunning];
   self.session = nil;
@@ -608,6 +656,32 @@ void setFollowEnabled(bool enabled) {
   [self setStatus:[NSString stringWithFormat:@"Camera: %@", self.devicePopup.selectedItem.title]];
 }
 
+- (void)syncOffsetChanged:(id)sender {
+  if (sender == self.syncOffsetStepper) {
+    g_syncOffsetMs = self.syncOffsetStepper.doubleValue;
+  } else {
+    g_syncOffsetMs = self.syncOffsetField.doubleValue;
+  }
+
+  if (g_syncOffsetMs < -5000.0) {
+    g_syncOffsetMs = -5000.0;
+  } else if (g_syncOffsetMs > 5000.0) {
+    g_syncOffsetMs = 5000.0;
+  }
+
+  saveSelectedDeviceSyncOffsetMs();
+  [self updateSyncOffsetControls];
+  [self setStatus:[NSString stringWithFormat:@"Sync offset: %.0f ms", g_syncOffsetMs]];
+}
+
+- (void)updateSyncOffsetControls {
+  if (!self.syncOffsetField || !self.syncOffsetStepper) {
+    return;
+  }
+  self.syncOffsetField.doubleValue = g_syncOffsetMs;
+  self.syncOffsetStepper.doubleValue = g_syncOffsetMs;
+}
+
 - (void)ensureDockView {
   if (!self.dockView) {
     NSRect frame = NSMakeRect(0, 0, 640, 420);
@@ -615,7 +689,7 @@ void setFollowEnabled(bool enabled) {
     self.dockView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     self.dockView.wantsLayer = YES;
 
-    self.previewView = [[NSView alloc] initWithFrame:NSMakeRect(0, 60, frame.size.width, frame.size.height - 60)];
+    self.previewView = [[NSView alloc] initWithFrame:NSMakeRect(0, 88, frame.size.width, frame.size.height - 88)];
     self.previewView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     self.previewView.wantsLayer = YES;
     [self.dockView addSubview:self.previewView];
@@ -626,12 +700,34 @@ void setFollowEnabled(bool enabled) {
     self.devicePopup.action = @selector(deviceSelectionChanged:);
     [self.dockView addSubview:self.devicePopup];
 
+    NSTextField *syncLabel = [NSTextField labelWithString:@"Sync ms"];
+    syncLabel.frame = NSMakeRect(12, 35, 56, 18);
+    syncLabel.autoresizingMask = NSViewMaxXMargin | NSViewMaxYMargin;
+    [self.dockView addSubview:syncLabel];
+
+    self.syncOffsetField = [[NSTextField alloc] initWithFrame:NSMakeRect(74, 31, 84, 24)];
+    self.syncOffsetField.target = self;
+    self.syncOffsetField.action = @selector(syncOffsetChanged:);
+    self.syncOffsetField.placeholderString = @"0";
+    self.syncOffsetField.autoresizingMask = NSViewMaxXMargin | NSViewMaxYMargin;
+    [self.dockView addSubview:self.syncOffsetField];
+
+    self.syncOffsetStepper = [[NSStepper alloc] initWithFrame:NSMakeRect(164, 31, 19, 24)];
+    self.syncOffsetStepper.minValue = -5000.0;
+    self.syncOffsetStepper.maxValue = 5000.0;
+    self.syncOffsetStepper.increment = 10.0;
+    self.syncOffsetStepper.target = self;
+    self.syncOffsetStepper.action = @selector(syncOffsetChanged:);
+    self.syncOffsetStepper.autoresizingMask = NSViewMaxXMargin | NSViewMaxYMargin;
+    [self.dockView addSubview:self.syncOffsetStepper];
+
     self.statusLabel = [NSTextField labelWithString:[NSString stringWithUTF8String:followStatusText().c_str()]];
     self.statusLabel.frame = NSMakeRect(12, 7, frame.size.width - 24, 18);
     self.statusLabel.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
     [self.dockView addSubview:self.statusLabel];
 
     [self refreshDeviceMenu];
+    [self updateSyncOffsetControls];
   }
 
   if (!self.previewLayer && self.session) {
@@ -779,6 +875,7 @@ void startTransportRecording(ReaProject *project) {
   }
 
   g_recordProject = project;
+  g_recordSyncOffsetMs = g_syncOffsetMs;
   g_recordStartPosition = GetPlayPositionEx ? GetPlayPositionEx(project) : 0.0;
   if (g_recordStartPosition < 0.0 && GetCursorPositionEx) {
     g_recordStartPosition = GetCursorPositionEx(project);
@@ -806,7 +903,10 @@ void stopTransportRecording() {
     return;
   }
 
-  const double insertPosition = g_recordStartPosition;
+  double insertPosition = g_recordStartPosition + (g_recordSyncOffsetMs / 1000.0);
+  if (insertPosition < 0.0) {
+    insertPosition = 0.0;
+  }
   [recorder() stopRecordingWithCompletion:^(NSString *path, NSError *error) {
     if (error) {
       showError(std::string("Video recording failed:\n") + (error.localizedDescription.UTF8String ?: "Unknown AVFoundation error."));
@@ -949,6 +1049,7 @@ void loadSettings() {
   if (selectedDevice && selectedDevice[0] != '\0') {
     g_selectedDeviceUniqueID = selectedDevice;
   }
+  g_syncOffsetMs = loadSelectedDeviceSyncOffsetMs();
 }
 
 } // namespace

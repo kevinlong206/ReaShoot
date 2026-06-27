@@ -9,6 +9,7 @@ macOS-only REAPER extension MVP for recording one webcam/video source in sync wi
   - `Video Recorder: Enable/Disable Transport Follow`
 - Shows a native macOS live preview window using AVFoundation.
 - Provides a camera selector for available macOS video inputs, including Continuity Camera when macOS exposes it.
+- Provides a per-camera post-recording sync offset in milliseconds. Negative values place recorded video earlier; positive values place it later.
 - Starts video recording when REAPER enters record.
 - Stops video recording when REAPER leaves record.
 - Shows the preview in REAPER's docker.
@@ -49,4 +50,5 @@ codesign --force --sign - "$HOME/Library/Application Support/REAPER/UserPlugins/
 - The extension records video only; REAPER remains responsible for audio recording and mixing.
 - Camera permission is requested the first time the preview/session is opened.
 - Selected camera input is persisted in REAPER ext state.
+- Sync offsets are persisted per selected camera device.
 - Captures are written under `Video Recordings` in the saved project directory, or under REAPER's resource path for unsaved projects.
