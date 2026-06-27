@@ -4,8 +4,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdio>
-#include <cstdlib>
 #include <ctime>
 #include <string>
 
@@ -51,7 +49,6 @@ namespace {
 constexpr const char *kExtStateSection = "klong_reaper_video_recorder";
 constexpr const char *kFollowEnabledKey = "follow_enabled";
 constexpr const char *kSelectedDeviceKey = "selected_device_unique_id";
-constexpr const char *kSyncOffsetPrefix = "sync_offset_ms_";
 constexpr const char *kDockIdent = "klong_reaper_video_recorder_preview";
 constexpr const char *kVideoTrackName = "Video Recorder";
 constexpr int kRecordBit = 4;
@@ -66,8 +63,6 @@ bool g_pendingInsert = false;
 std::string g_selectedDeviceUniqueID;
 std::string g_pendingInsertPath;
 double g_pendingInsertPosition = 0.0;
-double g_syncOffsetMs = 0.0;
-double g_recordSyncOffsetMs = 0.0;
 ReaProject *g_recordProject = nullptr;
 double g_recordStartPosition = 0.0;
 
@@ -124,43 +119,6 @@ std::string baseNameWithoutExtension(const std::string &path) {
     }
   }
   return name;
-}
-
-std::string safeKeyComponent(const std::string &value) {
-  std::string key = value.empty() ? "default" : value;
-  for (char &ch : key) {
-    const bool safe = (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') ||
-                      (ch >= '0' && ch <= '9') || ch == '-' || ch == '_';
-    if (!safe) {
-      ch = '_';
-    }
-  }
-  return key;
-}
-
-std::string selectedDeviceSyncOffsetKey() {
-  return std::string(kSyncOffsetPrefix) + safeKeyComponent(g_selectedDeviceUniqueID);
-}
-
-double loadSelectedDeviceSyncOffsetMs() {
-  if (!GetExtState) {
-    return 0.0;
-  }
-
-  const std::string key = selectedDeviceSyncOffsetKey();
-  const char *value = GetExtState(kExtStateSection, key.c_str());
-  return value && value[0] != '\0' ? std::strtod(value, nullptr) : 0.0;
-}
-
-void saveSelectedDeviceSyncOffsetMs() {
-  if (!SetExtState) {
-    return;
-  }
-
-  char value[64] = {};
-  std::snprintf(value, sizeof(value), "%.3f", g_syncOffsetMs);
-  const std::string key = selectedDeviceSyncOffsetKey();
-  SetExtState(kExtStateSection, key.c_str(), value, true);
 }
 
 std::string timestampString() {
@@ -369,8 +327,6 @@ void setFollowEnabled(bool enabled) {
 @property(nonatomic, strong) NSView *dockView;
 @property(nonatomic, strong) NSView *previewView;
 @property(nonatomic, strong) NSPopUpButton *devicePopup;
-@property(nonatomic, strong) NSTextField *syncOffsetField;
-@property(nonatomic, strong) NSStepper *syncOffsetStepper;
 @property(nonatomic, strong) NSTextField *statusLabel;
 @property(nonatomic, copy) void (^startCompletion)(void);
 @property(nonatomic, copy) void (^stopCompletion)(NSString *path, NSError *error);
@@ -383,7 +339,7 @@ void setFollowEnabled(bool enabled) {
 
 - (void)showPreview {
   dispatch_async(dispatch_get_main_queue(), ^{
-    [self ensureCameraAccessThenRun:^{
+    [self ensureCaptureAccessThenRun:^{
       NSError *error = nil;
       if (![self ensureSession:&error]) {
         showError(error.localizedDescription.UTF8String ?: "Unable to initialize camera session.");
@@ -464,17 +420,17 @@ void setFollowEnabled(bool enabled) {
   [self.movieOutput stopRecording];
 }
 
-- (void)ensureCameraAccessThenRun:(dispatch_block_t)block {
+- (void)ensureCaptureAccessThenRun:(dispatch_block_t)block {
   AVAuthorizationStatus status = [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeVideo];
   if (status == AVAuthorizationStatusAuthorized) {
-    block();
+    [self ensureAudioAccessThenRun:block];
     return;
   }
   if (status == AVAuthorizationStatusNotDetermined) {
     [AVCaptureDevice requestAccessForMediaType:AVMediaTypeVideo completionHandler:^(BOOL granted) {
       dispatch_async(dispatch_get_main_queue(), ^{
         if (granted) {
-          block();
+          [self ensureAudioAccessThenRun:block];
         } else {
           showError("Camera permission was denied. Enable camera access for REAPER in macOS System Settings.");
         }
@@ -483,6 +439,28 @@ void setFollowEnabled(bool enabled) {
     return;
   }
   showError("Camera permission is not available. Enable camera access for REAPER in macOS System Settings.");
+}
+
+- (void)ensureAudioAccessThenRun:(dispatch_block_t)block {
+  AVAuthorizationStatus status = [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeAudio];
+  if (status == AVAuthorizationStatusAuthorized) {
+    block();
+    return;
+  }
+  if (status == AVAuthorizationStatusNotDetermined) {
+    [AVCaptureDevice requestAccessForMediaType:AVMediaTypeAudio completionHandler:^(BOOL granted) {
+      dispatch_async(dispatch_get_main_queue(), ^{
+        if (!granted) {
+          [self setStatus:@"Microphone denied; recording video only"];
+        }
+        block();
+      });
+    }];
+    return;
+  }
+
+  [self setStatus:@"Microphone unavailable; recording video only"];
+  block();
 }
 
 - (BOOL)ensureSession:(NSError **)error {
@@ -531,6 +509,19 @@ void setFollowEnabled(bool enabled) {
   }
   [session addInput:input];
 
+  AVCaptureDevice *audioDevice = [self audioDeviceForVideoDevice:device];
+  if (audioDevice) {
+    NSError *audioInputError = nil;
+    AVCaptureDeviceInput *audioInput = [AVCaptureDeviceInput deviceInputWithDevice:audioDevice error:&audioInputError];
+    if (audioInput && [session canAddInput:audioInput]) {
+      [session addInput:audioInput];
+    } else {
+      [self setStatus:@"Camera audio unavailable; recording video only"];
+    }
+  } else {
+    [self setStatus:@"No camera audio input found"];
+  }
+
   AVCaptureMovieFileOutput *movieOutput = [[AVCaptureMovieFileOutput alloc] init];
   if (![session canAddOutput:movieOutput]) {
     if (error) {
@@ -546,6 +537,37 @@ void setFollowEnabled(bool enabled) {
   self.movieOutput = movieOutput;
   [session startRunning];
   return YES;
+}
+
+- (NSArray<AVCaptureDevice *> *)availableAudioDevices {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+  NSArray<AVCaptureDevice *> *devices = [AVCaptureDevice devicesWithMediaType:AVMediaTypeAudio];
+#pragma clang diagnostic pop
+  AVCaptureDevice *fallback = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeAudio];
+  if (devices.count > 0) {
+    return devices;
+  }
+  return fallback ? @[ fallback ] : @[];
+}
+
+- (AVCaptureDevice *)audioDeviceForVideoDevice:(AVCaptureDevice *)videoDevice {
+  NSArray<AVCaptureDevice *> *audioDevices = [self availableAudioDevices];
+  if (audioDevices.count == 0) {
+    return nil;
+  }
+
+  NSString *videoName = videoDevice.localizedName ?: @"";
+  for (AVCaptureDevice *audioDevice in audioDevices) {
+    NSString *audioName = audioDevice.localizedName ?: @"";
+    if ([audioName isEqualToString:videoName] ||
+        (videoName.length > 0 && [audioName localizedCaseInsensitiveContainsString:videoName]) ||
+        (audioName.length > 0 && [videoName localizedCaseInsensitiveContainsString:audioName])) {
+      return audioDevice;
+    }
+  }
+
+  return [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeAudio] ?: audioDevices.firstObject;
 }
 
 - (NSArray<AVCaptureDevice *> *)availableVideoDevices {
@@ -616,8 +638,6 @@ void setFollowEnabled(bool enabled) {
       g_selectedDeviceUniqueID = uniqueID.UTF8String;
     }
   }
-  g_syncOffsetMs = loadSelectedDeviceSyncOffsetMs();
-  [self updateSyncOffsetControls];
 }
 
 - (void)deviceSelectionChanged:(id)sender {
@@ -634,11 +654,9 @@ void setFollowEnabled(bool enabled) {
   }
 
   g_selectedDeviceUniqueID = uniqueID.UTF8String;
-  g_syncOffsetMs = loadSelectedDeviceSyncOffsetMs();
   if (SetExtState) {
     SetExtState(kExtStateSection, kSelectedDeviceKey, g_selectedDeviceUniqueID.c_str(), true);
   }
-  [self updateSyncOffsetControls];
 
   [self.session stopRunning];
   self.session = nil;
@@ -656,32 +674,6 @@ void setFollowEnabled(bool enabled) {
   [self setStatus:[NSString stringWithFormat:@"Camera: %@", self.devicePopup.selectedItem.title]];
 }
 
-- (void)syncOffsetChanged:(id)sender {
-  if (sender == self.syncOffsetStepper) {
-    g_syncOffsetMs = self.syncOffsetStepper.doubleValue;
-  } else {
-    g_syncOffsetMs = self.syncOffsetField.doubleValue;
-  }
-
-  if (g_syncOffsetMs < -5000.0) {
-    g_syncOffsetMs = -5000.0;
-  } else if (g_syncOffsetMs > 5000.0) {
-    g_syncOffsetMs = 5000.0;
-  }
-
-  saveSelectedDeviceSyncOffsetMs();
-  [self updateSyncOffsetControls];
-  [self setStatus:[NSString stringWithFormat:@"Sync offset: %.0f ms", g_syncOffsetMs]];
-}
-
-- (void)updateSyncOffsetControls {
-  if (!self.syncOffsetField || !self.syncOffsetStepper) {
-    return;
-  }
-  self.syncOffsetField.doubleValue = g_syncOffsetMs;
-  self.syncOffsetStepper.doubleValue = g_syncOffsetMs;
-}
-
 - (void)ensureDockView {
   if (!self.dockView) {
     NSRect frame = NSMakeRect(0, 0, 640, 420);
@@ -689,7 +681,7 @@ void setFollowEnabled(bool enabled) {
     self.dockView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     self.dockView.wantsLayer = YES;
 
-    self.previewView = [[NSView alloc] initWithFrame:NSMakeRect(0, 88, frame.size.width, frame.size.height - 88)];
+    self.previewView = [[NSView alloc] initWithFrame:NSMakeRect(0, 60, frame.size.width, frame.size.height - 60)];
     self.previewView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     self.previewView.wantsLayer = YES;
     [self.dockView addSubview:self.previewView];
@@ -700,34 +692,12 @@ void setFollowEnabled(bool enabled) {
     self.devicePopup.action = @selector(deviceSelectionChanged:);
     [self.dockView addSubview:self.devicePopup];
 
-    NSTextField *syncLabel = [NSTextField labelWithString:@"Sync ms"];
-    syncLabel.frame = NSMakeRect(12, 35, 56, 18);
-    syncLabel.autoresizingMask = NSViewMaxXMargin | NSViewMaxYMargin;
-    [self.dockView addSubview:syncLabel];
-
-    self.syncOffsetField = [[NSTextField alloc] initWithFrame:NSMakeRect(74, 31, 84, 24)];
-    self.syncOffsetField.target = self;
-    self.syncOffsetField.action = @selector(syncOffsetChanged:);
-    self.syncOffsetField.placeholderString = @"0";
-    self.syncOffsetField.autoresizingMask = NSViewMaxXMargin | NSViewMaxYMargin;
-    [self.dockView addSubview:self.syncOffsetField];
-
-    self.syncOffsetStepper = [[NSStepper alloc] initWithFrame:NSMakeRect(164, 31, 19, 24)];
-    self.syncOffsetStepper.minValue = -5000.0;
-    self.syncOffsetStepper.maxValue = 5000.0;
-    self.syncOffsetStepper.increment = 10.0;
-    self.syncOffsetStepper.target = self;
-    self.syncOffsetStepper.action = @selector(syncOffsetChanged:);
-    self.syncOffsetStepper.autoresizingMask = NSViewMaxXMargin | NSViewMaxYMargin;
-    [self.dockView addSubview:self.syncOffsetStepper];
-
     self.statusLabel = [NSTextField labelWithString:[NSString stringWithUTF8String:followStatusText().c_str()]];
     self.statusLabel.frame = NSMakeRect(12, 7, frame.size.width - 24, 18);
     self.statusLabel.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
     [self.dockView addSubview:self.statusLabel];
-
     [self refreshDeviceMenu];
-    [self updateSyncOffsetControls];
+    [self refreshDeviceMenu];
   }
 
   if (!self.previewLayer && self.session) {
@@ -825,7 +795,7 @@ didStartRecordingToOutputFileAtURL:(NSURL *)fileURL
   (void)fileURL;
   (void)connections;
   dispatch_async(dispatch_get_main_queue(), ^{
-    [self setStatus:@"Recording"];
+    [self setStatus:@"Recording video + camera audio"];
     if (self.startCompletion) {
       self.startCompletion();
       self.startCompletion = nil;
@@ -875,7 +845,6 @@ void startTransportRecording(ReaProject *project) {
   }
 
   g_recordProject = project;
-  g_recordSyncOffsetMs = g_syncOffsetMs;
   g_recordStartPosition = GetPlayPositionEx ? GetPlayPositionEx(project) : 0.0;
   if (g_recordStartPosition < 0.0 && GetCursorPositionEx) {
     g_recordStartPosition = GetCursorPositionEx(project);
@@ -903,7 +872,7 @@ void stopTransportRecording() {
     return;
   }
 
-  double insertPosition = g_recordStartPosition + (g_recordSyncOffsetMs / 1000.0);
+  double insertPosition = g_recordStartPosition;
   if (insertPosition < 0.0) {
     insertPosition = 0.0;
   }
@@ -1049,7 +1018,6 @@ void loadSettings() {
   if (selectedDevice && selectedDevice[0] != '\0') {
     g_selectedDeviceUniqueID = selectedDevice;
   }
-  g_syncOffsetMs = loadSelectedDeviceSyncOffsetMs();
 }
 
 } // namespace
