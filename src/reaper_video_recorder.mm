@@ -6,12 +6,15 @@
 #include <cctype>
 #include <cmath>
 #include <ctime>
+#include <limits>
 #include <string>
+#include <vector>
 
 #define REAPERAPI_IMPLEMENT
 #define REAPERAPI_MINIMAL
 #define REAPERAPI_WANT_AddMediaItemToTrack
 #define REAPERAPI_WANT_AddTakeToMediaItem
+#define REAPERAPI_WANT_CountMediaItems
 #define REAPERAPI_WANT_CountTracks
 #define REAPERAPI_WANT_CountTrackMediaItems
 #define REAPERAPI_WANT_DockWindowActivate
@@ -23,8 +26,11 @@
 #define REAPERAPI_WANT_GetCursorPositionEx
 #define REAPERAPI_WANT_GetExtState
 #define REAPERAPI_WANT_GetMediaItemInfo_Value
+#define REAPERAPI_WANT_GetMediaItem
 #define REAPERAPI_WANT_GetMediaItemTake_Source
+#define REAPERAPI_WANT_GetMediaItemTake_Peaks
 #define REAPERAPI_WANT_GetMediaItemTakeInfo_Value
+#define REAPERAPI_WANT_GetMediaItemTrack
 #define REAPERAPI_WANT_GetMediaSourceLength
 #define REAPERAPI_WANT_GetMediaSourceFileName
 #define REAPERAPI_WANT_GetPlayPositionEx
@@ -57,6 +63,10 @@ constexpr const char *kSelectedDeviceKey = "selected_device_unique_id";
 constexpr const char *kDockIdent = "klong_reaper_video_recorder_preview";
 constexpr const char *kVideoTrackName = "Video Recorder";
 constexpr int kRecordBit = 4;
+constexpr double kAlignmentPeakRate = 100.0;
+constexpr double kAlignmentMaxDuration = 120.0;
+constexpr double kAlignmentSearchSeconds = 5.0;
+constexpr double kAlignmentMinimumScore = 0.15;
 
 reaper_plugin_info_t *g_reaper = nullptr;
 int g_videoEnabledCommand = 0;
@@ -79,6 +89,12 @@ struct PlaybackVideo {
   double itemStart = 0.0;
   double itemEnd = 0.0;
   double sourceOffset = 0.0;
+};
+
+struct AlignmentResult {
+  bool aligned = false;
+  double correction = 0.0;
+  double score = 0.0;
 };
 
 bool hasPathExtension(const std::string &path, const std::string &extension) {
@@ -345,6 +361,166 @@ MediaItem *insertMediaItem(MediaTrack *track,
   return item;
 }
 
+std::vector<double> takeEnvelope(MediaItem_Take *take, double itemPosition, double duration, int &sampleCountOut) {
+  sampleCountOut = 0;
+  if (!take || !GetMediaItemTake_Peaks || duration <= 0.0) {
+    return {};
+  }
+
+  const int sampleCount = (std::max)(1, static_cast<int>(std::floor(duration * kAlignmentPeakRate)));
+  std::vector<double> peaks(static_cast<size_t>(sampleCount) * 2);
+  const int result = GetMediaItemTake_Peaks(take,
+                                            kAlignmentPeakRate,
+                                            itemPosition,
+                                            1,
+                                            sampleCount,
+                                            0,
+                                            peaks.data());
+  const int returnedSamples = result & 0xfffff;
+  if (returnedSamples <= 0) {
+    return {};
+  }
+
+  std::vector<double> envelope(static_cast<size_t>(returnedSamples));
+  double mean = 0.0;
+  for (int i = 0; i < returnedSamples; ++i) {
+    const double value = (std::max)(std::fabs(peaks[static_cast<size_t>(i)]),
+                                    std::fabs(peaks[static_cast<size_t>(returnedSamples + i)]));
+    envelope[static_cast<size_t>(i)] = value;
+    mean += value;
+  }
+  mean /= returnedSamples;
+
+  double energy = 0.0;
+  for (double &value : envelope) {
+    value -= mean;
+    energy += value * value;
+  }
+  if (energy <= 1e-9) {
+    return {};
+  }
+
+  sampleCountOut = returnedSamples;
+  return envelope;
+}
+
+double normalizedCorrelationAtLag(const std::vector<double> &video,
+                                  const std::vector<double> &reference,
+                                  int lagSamples) {
+  int videoStart = 0;
+  int referenceStart = lagSamples;
+  int count = static_cast<int>(video.size());
+  if (referenceStart < 0) {
+    videoStart = -referenceStart;
+    referenceStart = 0;
+    count -= videoStart;
+  }
+  count = (std::min)(count, static_cast<int>(reference.size()) - referenceStart);
+  if (count < static_cast<int>(kAlignmentPeakRate)) {
+    return -std::numeric_limits<double>::infinity();
+  }
+
+  double dot = 0.0;
+  double videoEnergy = 0.0;
+  double referenceEnergy = 0.0;
+  for (int i = 0; i < count; ++i) {
+    const double videoValue = video[static_cast<size_t>(videoStart + i)];
+    const double referenceValue = reference[static_cast<size_t>(referenceStart + i)];
+    dot += videoValue * referenceValue;
+    videoEnergy += videoValue * videoValue;
+    referenceEnergy += referenceValue * referenceValue;
+  }
+  if (videoEnergy <= 1e-9 || referenceEnergy <= 1e-9) {
+    return -std::numeric_limits<double>::infinity();
+  }
+  return dot / std::sqrt(videoEnergy * referenceEnergy);
+}
+
+AlignmentResult alignVideoItemToReference(ReaProject *project, MediaTrack *videoTrack, MediaItem *videoItem) {
+  AlignmentResult result;
+  if (!project || !videoTrack || !videoItem || !CountMediaItems || !GetMediaItem ||
+      !GetMediaItemTrack || !GetActiveTake || !GetMediaItemInfo_Value || !SetMediaItemInfo_Value) {
+    return result;
+  }
+
+  MediaItem_Take *videoTake = GetActiveTake(videoItem);
+  const double videoPosition = GetMediaItemInfo_Value(videoItem, "D_POSITION");
+  const double videoLength = GetMediaItemInfo_Value(videoItem, "D_LENGTH");
+  if (!videoTake || videoLength <= 0.0) {
+    return result;
+  }
+
+  int videoSampleCount = 0;
+  std::vector<double> videoEnvelope =
+      takeEnvelope(videoTake, videoPosition, (std::min)(videoLength, kAlignmentMaxDuration), videoSampleCount);
+  if (videoEnvelope.empty()) {
+    return result;
+  }
+
+  const int itemCount = CountMediaItems(project);
+  double bestScore = -std::numeric_limits<double>::infinity();
+  double bestPosition = videoPosition;
+
+  for (int i = 0; i < itemCount; ++i) {
+    MediaItem *referenceItem = GetMediaItem(project, i);
+    if (!referenceItem || referenceItem == videoItem || GetMediaItemTrack(referenceItem) == videoTrack) {
+      continue;
+    }
+
+    MediaItem_Take *referenceTake = GetActiveTake(referenceItem);
+    if (!referenceTake) {
+      continue;
+    }
+
+    const double referencePosition = GetMediaItemInfo_Value(referenceItem, "D_POSITION");
+    const double referenceLength = GetMediaItemInfo_Value(referenceItem, "D_LENGTH");
+    const double expectedLag = videoPosition - referencePosition;
+    if (referenceLength <= 0.0 ||
+        expectedLag < -kAlignmentSearchSeconds ||
+        expectedLag > referenceLength + kAlignmentSearchSeconds) {
+      continue;
+    }
+
+    int referenceSampleCount = 0;
+    std::vector<double> referenceEnvelope =
+        takeEnvelope(referenceTake,
+                     referencePosition,
+                     (std::min)(referenceLength, kAlignmentMaxDuration),
+                     referenceSampleCount);
+    if (referenceEnvelope.empty()) {
+      continue;
+    }
+
+    const int expectedLagSamples = static_cast<int>(std::llround(expectedLag * kAlignmentPeakRate));
+    const int searchSamples = static_cast<int>(std::llround(kAlignmentSearchSeconds * kAlignmentPeakRate));
+    const int minLag = (std::max)(-videoSampleCount + 1, expectedLagSamples - searchSamples);
+    const int maxLag = (std::min)(referenceSampleCount - 1, expectedLagSamples + searchSamples);
+
+    for (int lag = minLag; lag <= maxLag; ++lag) {
+      const double score = normalizedCorrelationAtLag(videoEnvelope, referenceEnvelope, lag);
+      if (score > bestScore) {
+        bestScore = score;
+        bestPosition = referencePosition + (static_cast<double>(lag) / kAlignmentPeakRate);
+      }
+    }
+  }
+
+  if (std::isfinite(bestScore) && bestScore >= kAlignmentMinimumScore) {
+    result.aligned = true;
+    result.correction = bestPosition - videoPosition;
+    result.score = bestScore;
+    SetMediaItemInfo_Value(videoItem, "D_POSITION", bestPosition);
+    if (UpdateArrange) {
+      UpdateArrange();
+    }
+    if (UpdateTimeline) {
+      UpdateTimeline();
+    }
+  }
+
+  return result;
+}
+
 bool insertRecordedMedia(const std::string &path, double position, std::string &error) {
   ReaProject *project = g_recordProject ? g_recordProject : currentProject();
   if (!project) {
@@ -374,6 +550,8 @@ bool insertRecordedMedia(const std::string &path, double position, std::string &
   if (!videoItem) {
     return false;
   }
+
+  alignVideoItemToReference(project, track, videoItem);
 
   if (UpdateArrange) {
     UpdateArrange();

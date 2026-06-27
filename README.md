@@ -21,6 +21,7 @@ macOS-only REAPER extension MVP for recording one webcam/video source in sync wi
 - Shows recorded video playback in the same preview panel when REAPER plays over an item on the `Video Recorder` track.
 - Mutes the docked preview's internal player so playback audio comes only from REAPER.
 - Inserts the finalized `.mov` onto a `Video Recorder` track at the record-start timeline position.
+- After insertion, compares the movie's embedded camera audio against overlapping non-video REAPER items and shifts the video item to the strongest correlation match.
 - Shows load/record/finalize/import state in the preview status label instead of console chatter.
 - Places recorded video using AVFoundation's actual recording-start callback to compensate for capture startup latency.
 
