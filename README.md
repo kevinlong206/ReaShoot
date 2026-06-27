@@ -10,6 +10,7 @@ macOS-only REAPER extension MVP for recording one webcam/video source in sync wi
   - `Video Recorder: Enable/Disable Transport Follow`
 - Adds a main-toolbar toggle button for enabling/disabling all video behavior.
 - Shows a native macOS live preview window using AVFoundation.
+- Shows the active capture format below the preview, including resolution, frame rate, and codec/source format, and turns the status text red while recording.
 - Provides a camera selector for available macOS video inputs, including Continuity Camera when macOS exposes it.
 - Records camera audio into the `.mov` alongside video so the inserted item contains an alignment reference.
 - Starts video recording when REAPER enters record.

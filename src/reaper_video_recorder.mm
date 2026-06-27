@@ -597,6 +597,7 @@ void setVideoEnabled(bool enabled);
 @property(nonatomic, strong) NSView *dockView;
 @property(nonatomic, strong) NSView *previewView;
 @property(nonatomic, strong) NSPopUpButton *devicePopup;
+@property(nonatomic, strong) NSTextField *formatLabel;
 @property(nonatomic, strong) NSTextField *statusLabel;
 @property(nonatomic, copy) void (^startCompletion)(void);
 @property(nonatomic, copy) void (^stopCompletion)(NSString *path, NSError *error);
@@ -604,6 +605,7 @@ void setVideoEnabled(bool enabled);
 @property(nonatomic, copy) NSString *audioDeviceName;
 @property(nonatomic, assign) BOOL docked;
 @property(nonatomic, assign) BOOL hasAudioInput;
+@property(nonatomic, assign) BOOL recordingVisualState;
 @property(nonatomic, assign) BOOL showingPlayback;
 @end
 
@@ -830,6 +832,7 @@ void setVideoEnabled(bool enabled);
   self.session = session;
   self.movieOutput = movieOutput;
   [session startRunning];
+  [self updateCaptureFormatLabel];
   return YES;
 }
 
@@ -937,6 +940,71 @@ void setVideoEnabled(bool enabled);
   return devices.firstObject;
 }
 
+- (NSString *)fourCharacterCodeString:(FourCharCode)code {
+  char chars[5] = {
+      static_cast<char>((code >> 24) & 0xff),
+      static_cast<char>((code >> 16) & 0xff),
+      static_cast<char>((code >> 8) & 0xff),
+      static_cast<char>(code & 0xff),
+      '\0',
+  };
+  for (int i = 0; i < 4; ++i) {
+    if (chars[i] < 32 || chars[i] > 126) {
+      return [NSString stringWithFormat:@"0x%08x", code];
+    }
+  }
+  return [NSString stringWithUTF8String:chars];
+}
+
+- (NSString *)captureFormatDescription {
+  AVCaptureDevice *device = [self selectedVideoDevice];
+  AVCaptureDeviceFormat *format = device.activeFormat;
+  if (!device || !format) {
+    return @"Format: unavailable";
+  }
+
+  CMVideoDimensions dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription);
+  double fps = 0.0;
+  if (CMTIME_IS_NUMERIC(device.activeVideoMinFrameDuration) &&
+      device.activeVideoMinFrameDuration.value != 0) {
+    fps = static_cast<double>(device.activeVideoMinFrameDuration.timescale) /
+          static_cast<double>(device.activeVideoMinFrameDuration.value);
+  }
+  if (fps <= 0.0 && format.videoSupportedFrameRateRanges.count > 0) {
+    fps = format.videoSupportedFrameRateRanges.firstObject.maxFrameRate;
+  }
+
+  NSString *codec = nil;
+  if (self.movieOutput) {
+    AVCaptureConnection *videoConnection = [self.movieOutput connectionWithMediaType:AVMediaTypeVideo];
+    if (videoConnection) {
+      NSDictionary<NSString *, id> *settings = [self.movieOutput outputSettingsForConnection:videoConnection];
+      id codecValue = settings[AVVideoCodecKey];
+      if ([codecValue isKindOfClass:NSString.class]) {
+        codec = codecValue;
+      }
+    }
+  }
+  if (codec.length == 0) {
+    codec = [self fourCharacterCodeString:CMFormatDescriptionGetMediaSubType(format.formatDescription)];
+  }
+
+  NSString *fpsText = fps > 0.0 ? [NSString stringWithFormat:@"%.2f fps", fps] : @"fps unknown";
+  return [NSString stringWithFormat:@"Format: %dx%d, %@, codec/source: %@",
+                                    dimensions.width,
+                                    dimensions.height,
+                                    fpsText,
+                                    codec];
+}
+
+- (void)updateCaptureFormatLabel {
+  if (!self.formatLabel) {
+    return;
+  }
+  self.formatLabel.stringValue = [self captureFormatDescription];
+  [self updateRecordingTextColor];
+}
+
 - (void)refreshDeviceMenu {
   if (!self.devicePopup) {
     return;
@@ -998,32 +1066,39 @@ void setVideoEnabled(bool enabled);
   }
   [self ensureDockView];
   [self showLivePreview];
+  [self updateCaptureFormatLabel];
   [self setStatus:[NSString stringWithFormat:@"Camera: %@", self.devicePopup.selectedItem.title]];
 }
 
 - (void)ensureDockView {
   if (!self.dockView) {
-    NSRect frame = NSMakeRect(0, 0, 640, 420);
+    NSRect frame = NSMakeRect(0, 0, 640, 450);
     self.dockView = [[NSView alloc] initWithFrame:frame];
     self.dockView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     self.dockView.wantsLayer = YES;
 
-    self.previewView = [[NSView alloc] initWithFrame:NSMakeRect(0, 60, frame.size.width, frame.size.height - 60)];
+    self.previewView = [[NSView alloc] initWithFrame:NSMakeRect(0, 82, frame.size.width, frame.size.height - 82)];
     self.previewView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     self.previewView.wantsLayer = YES;
     [self.dockView addSubview:self.previewView];
 
-    self.devicePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(12, 31, frame.size.width - 24, 24) pullsDown:NO];
+    self.devicePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(12, 53, frame.size.width - 24, 24) pullsDown:NO];
     self.devicePopup.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
     self.devicePopup.target = self;
     self.devicePopup.action = @selector(deviceSelectionChanged:);
     [self.dockView addSubview:self.devicePopup];
 
+    self.formatLabel = [NSTextField labelWithString:@"Format: unavailable"];
+    self.formatLabel.frame = NSMakeRect(12, 31, frame.size.width - 24, 18);
+    self.formatLabel.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
+    [self.dockView addSubview:self.formatLabel];
+
     self.statusLabel = [NSTextField labelWithString:[NSString stringWithUTF8String:followStatusText().c_str()]];
-    self.statusLabel.frame = NSMakeRect(12, 7, frame.size.width - 24, 18);
+    self.statusLabel.frame = NSMakeRect(12, 9, frame.size.width - 24, 18);
     self.statusLabel.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
     [self.dockView addSubview:self.statusLabel];
     [self refreshDeviceMenu];
+    [self updateCaptureFormatLabel];
   }
 
   if (!self.previewLayer && self.session) {
@@ -1114,6 +1189,18 @@ void setVideoEnabled(bool enabled);
 
 - (void)setStatus:(NSString *)status {
   self.statusLabel.stringValue = status ?: @"Idle";
+  [self updateRecordingTextColor];
+}
+
+- (void)setRecordingVisualState:(BOOL)recording {
+  _recordingVisualState = recording;
+  [self updateRecordingTextColor];
+}
+
+- (void)updateRecordingTextColor {
+  NSColor *color = _recordingVisualState ? NSColor.systemRedColor : NSColor.labelColor;
+  self.statusLabel.textColor = color;
+  self.formatLabel.textColor = color;
 }
 
 - (void)captureOutput:(AVCaptureFileOutput *)captureOutput
@@ -1123,6 +1210,8 @@ didStartRecordingToOutputFileAtURL:(NSURL *)fileURL
   (void)fileURL;
   (void)connections;
   dispatch_async(dispatch_get_main_queue(), ^{
+    [self setRecordingVisualState:YES];
+    [self updateCaptureFormatLabel];
     if (self.hasAudioInput) {
       NSString *audioName = self.audioDeviceName.length > 0 ? self.audioDeviceName : @"camera audio";
       [self setStatus:[NSString stringWithFormat:@"Recording video + %@", audioName]];
@@ -1143,6 +1232,8 @@ didFinishRecordingToOutputFileAtURL:(NSURL *)outputFileURL
   (void)captureOutput;
   (void)connections;
   dispatch_async(dispatch_get_main_queue(), ^{
+    [self setRecordingVisualState:NO];
+    [self updateCaptureFormatLabel];
     [self setStatus:error ? @"Error" : @"Finalizing"];
     NSString *path = outputFileURL.path ?: self.activeOutputPath;
     if (self.stopCompletion) {
