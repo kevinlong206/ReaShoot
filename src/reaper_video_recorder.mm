@@ -1,5 +1,6 @@
 #import <AVFoundation/AVFoundation.h>
 #import <Cocoa/Cocoa.h>
+#import <ImageIO/ImageIO.h>
 #import <QuartzCore/QuartzCore.h>
 
 #include <algorithm>
@@ -607,7 +608,7 @@ void setVideoEnabled(bool enabled);
 
 } // namespace
 
-@interface KlongVideoRecorder : NSObject <AVCaptureFileOutputRecordingDelegate>
+@interface KlongVideoRecorder : NSObject <AVCaptureFileOutputRecordingDelegate, NSURLSessionDataDelegate>
 @property(nonatomic, strong) AVCaptureSession *session;
 @property(nonatomic, strong) AVCaptureMovieFileOutput *movieOutput;
 @property(nonatomic, strong) AVCaptureVideoPreviewLayer *previewLayer;
@@ -635,8 +636,19 @@ void setVideoEnabled(bool enabled);
 @property(nonatomic, strong) NSTextField *formatLabel;
 @property(nonatomic, strong) NSTextField *statusLabel;
 @property(nonatomic, strong) NSImageView *remotePreviewView;
-@property(nonatomic, strong) NSTimer *remotePreviewTimer;
+@property(nonatomic, strong) NSURLSession *remotePreviewSession;
 @property(nonatomic, strong) NSURLSessionDataTask *remotePreviewTask;
+@property(nonatomic, strong) NSMutableData *remotePreviewBuffer;
+@property(nonatomic, strong) NSOperationQueue *remotePreviewQueue;
+@property(nonatomic, assign) BOOL remotePreviewDecoding;
+@property(nonatomic, assign) BOOL remotePreviewStreaming;
+@property(nonatomic, assign) NSUInteger remotePreviewFramesReceived;
+@property(nonatomic, assign) NSUInteger remotePreviewFramesDisplayed;
+@property(nonatomic, assign) NSUInteger remotePreviewFramesDropped;
+@property(nonatomic, assign) NSUInteger remotePreviewFramesDisplayedAtLastUpdate;
+@property(nonatomic, assign) CFTimeInterval remotePreviewLastDisplayTime;
+@property(nonatomic, assign) CFTimeInterval remotePreviewLastStatusTime;
+@property(nonatomic, assign) BOOL remotePreviewUsingSnapshotFallback;
 @property(nonatomic, copy) void (^startCompletion)(void);
 @property(nonatomic, copy) void (^stopCompletion)(NSString *path, NSError *error);
 @property(nonatomic, copy) NSString *activeOutputPath;
@@ -2014,26 +2026,81 @@ void setVideoEnabled(bool enabled);
   return [NSURL URLWithString:urlString];
 }
 
-- (void)refreshRemotePreviewFrame {
-  NSURL *url = [self remotePreviewSnapshotURL];
-  if (!url || self.remotePreviewTask) {
+- (NSURL *)remotePreviewStreamURL {
+  [self persistIPhoneSettings];
+  if (g_iPhoneHost.empty() || g_iPhoneToken.empty()) {
+    return nil;
+  }
+  NSString *urlString = [NSString stringWithFormat:@"http://%s:%s/preview.mjpg?token=%@",
+                                                   g_iPhoneHost.c_str(),
+                                                   g_iPhoneHttpPort.c_str(),
+                                                   [NSString stringWithUTF8String:g_iPhoneToken.c_str()]];
+  return [NSURL URLWithString:urlString];
+}
+
+- (void)startRemotePreviewStream {
+  if (self.remotePreviewTask || !g_useIPhoneSource) {
     return;
   }
-  self.remotePreviewTask = [NSURLSession.sharedSession dataTaskWithURL:url
-                                                     completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+  NSURL *url = [self remotePreviewStreamURL];
+  if (!url) {
+    return;
+  }
+  if (!self.remotePreviewQueue) {
+    self.remotePreviewQueue = [[NSOperationQueue alloc] init];
+    self.remotePreviewQueue.maxConcurrentOperationCount = 1;
+    self.remotePreviewQueue.name = @"KlongVideoRecorderRemotePreview";
+  }
+  self.remotePreviewBuffer = [NSMutableData data];
+  self.remotePreviewFramesReceived = 0;
+  self.remotePreviewFramesDisplayed = 0;
+  self.remotePreviewFramesDropped = 0;
+  self.remotePreviewFramesDisplayedAtLastUpdate = 0;
+  self.remotePreviewLastDisplayTime = 0.0;
+  self.remotePreviewLastStatusTime = CACurrentMediaTime();
+  self.remotePreviewUsingSnapshotFallback = NO;
+  self.remotePreviewStreaming = YES;
+  NSURLSessionConfiguration *configuration = NSURLSessionConfiguration.ephemeralSessionConfiguration;
+  configuration.timeoutIntervalForRequest = 10.0;
+  configuration.timeoutIntervalForResource = 0.0;
+  self.remotePreviewSession = [NSURLSession sessionWithConfiguration:configuration delegate:self delegateQueue:self.remotePreviewQueue];
+  self.remotePreviewTask = [self.remotePreviewSession dataTaskWithURL:url];
+  [self.remotePreviewTask resume];
+  [self setStatus:@"Preview: MJPEG connecting"];
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, static_cast<int64_t>(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+    if (self.remotePreviewStreaming && self.remotePreviewFramesDisplayed == 0 && g_useIPhoneSource && !self.showingPlayback) {
+      self.remotePreviewUsingSnapshotFallback = YES;
+      [self setStatus:@"Preview: snapshot fallback"];
+      [self refreshRemotePreviewSnapshotFallback];
+    }
+  });
+}
+
+- (void)refreshRemotePreviewSnapshotFallback {
+  if (!self.remotePreviewUsingSnapshotFallback || !g_useIPhoneSource || self.showingPlayback) {
+    return;
+  }
+  NSURL *url = [self remotePreviewSnapshotURL];
+  if (!url) {
+    return;
+  }
+  NSURLSessionDataTask *task = [NSURLSession.sharedSession dataTaskWithURL:url
+                                                         completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
     (void)response;
     NSImage *image = nil;
     if (!error && data.length > 0) {
       image = [[NSImage alloc] initWithData:data];
     }
     dispatch_async(dispatch_get_main_queue(), ^{
-      self.remotePreviewTask = nil;
-      if (image && g_useIPhoneSource && !self.showingPlayback) {
+      if (image && self.remotePreviewUsingSnapshotFallback && g_useIPhoneSource && !self.showingPlayback) {
         self.remotePreviewView.image = image;
       }
+      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, static_cast<int64_t>(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [self refreshRemotePreviewSnapshotFallback];
+      });
     });
   }];
-  [self.remotePreviewTask resume];
+  [task resume];
 }
 
 - (void)startRemotePreview {
@@ -2042,22 +2109,139 @@ void setVideoEnabled(bool enabled);
   }
   self.remotePreviewView.hidden = NO;
   self.previewLayer.hidden = YES;
-  if (!self.remotePreviewTimer) {
-    self.remotePreviewTimer = [NSTimer scheduledTimerWithTimeInterval:0.25
-                                                               target:self
-                                                             selector:@selector(refreshRemotePreviewFrame)
-                                                             userInfo:nil
-                                                              repeats:YES];
-  }
-  [self refreshRemotePreviewFrame];
+  [self startRemotePreviewStream];
 }
 
 - (void)stopRemotePreview {
-  [self.remotePreviewTimer invalidate];
-  self.remotePreviewTimer = nil;
+  self.remotePreviewStreaming = NO;
   [self.remotePreviewTask cancel];
   self.remotePreviewTask = nil;
+  [self.remotePreviewSession invalidateAndCancel];
+  self.remotePreviewSession = nil;
+  self.remotePreviewBuffer = nil;
+  self.remotePreviewDecoding = NO;
+  self.remotePreviewUsingSnapshotFallback = NO;
   self.remotePreviewView.hidden = YES;
+}
+
+- (void)URLSession:(NSURLSession *)session dataTask:(NSURLSessionDataTask *)dataTask didReceiveData:(NSData *)data {
+  (void)session;
+  (void)dataTask;
+  if (!self.remotePreviewBuffer) {
+    self.remotePreviewBuffer = [NSMutableData data];
+  }
+  [self.remotePreviewBuffer appendData:data];
+  [self processRemotePreviewBuffer];
+}
+
+- (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task didCompleteWithError:(NSError *)error {
+  (void)session;
+  (void)task;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    self.remotePreviewTask = nil;
+    self.remotePreviewSession = nil;
+    if (self.remotePreviewStreaming && g_useIPhoneSource && !self.showingPlayback) {
+      [self setStatus:error ? @"Preview: reconnecting" : @"Preview: reconnecting"];
+      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, static_cast<int64_t>(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (self.remotePreviewStreaming && !self.remotePreviewTask && g_useIPhoneSource && !self.showingPlayback) {
+          [self startRemotePreviewStream];
+        }
+      });
+    }
+  });
+}
+
+- (void)processRemotePreviewBuffer {
+  while (self.remotePreviewBuffer.length > 0) {
+    NSRange headerRange = [self.remotePreviewBuffer rangeOfData:[NSData dataWithBytes:"\r\n\r\n" length:4]
+                                                        options:0
+                                                          range:NSMakeRange(0, self.remotePreviewBuffer.length)];
+    if (headerRange.location == NSNotFound) {
+      return;
+    }
+    NSData *headerData = [self.remotePreviewBuffer subdataWithRange:NSMakeRange(0, headerRange.location)];
+    NSString *header = [[NSString alloc] initWithData:headerData encoding:NSUTF8StringEncoding] ?: @"";
+    NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:@"Content-Length:\\s*(\\d+)"
+                                                                           options:NSRegularExpressionCaseInsensitive
+                                                                             error:nil];
+    NSTextCheckingResult *match = [regex firstMatchInString:header options:0 range:NSMakeRange(0, header.length)];
+    if (!match || match.numberOfRanges < 2) {
+      [self.remotePreviewBuffer replaceBytesInRange:NSMakeRange(0, NSMaxRange(headerRange) + 4) withBytes:nullptr length:0];
+      continue;
+    }
+    NSString *lengthText = [header substringWithRange:[match rangeAtIndex:1]];
+    const NSUInteger frameLength = static_cast<NSUInteger>(lengthText.integerValue);
+    const NSUInteger frameStart = NSMaxRange(headerRange);
+    if (self.remotePreviewBuffer.length < frameStart + frameLength) {
+      return;
+    }
+    NSData *frameData = [self.remotePreviewBuffer subdataWithRange:NSMakeRange(frameStart, frameLength)];
+    NSUInteger removeLength = frameStart + frameLength;
+    if (self.remotePreviewBuffer.length >= removeLength + 2) {
+      removeLength += 2;
+    }
+    [self.remotePreviewBuffer replaceBytesInRange:NSMakeRange(0, removeLength) withBytes:nullptr length:0];
+    [self handleRemotePreviewFrame:frameData];
+  }
+}
+
+- (void)handleRemotePreviewFrame:(NSData *)frameData {
+  self.remotePreviewFramesReceived += 1;
+  const CFTimeInterval now = CACurrentMediaTime();
+  const double minimumInterval = g_activeTransportRecording ? (1.0 / 6.0) : (1.0 / 12.0);
+  if (now - self.remotePreviewLastDisplayTime < minimumInterval || self.remotePreviewDecoding) {
+    self.remotePreviewFramesDropped += 1;
+    return;
+  }
+  self.remotePreviewDecoding = YES;
+  self.remotePreviewLastDisplayTime = now;
+  NSData *dataCopy = [frameData copy];
+  __weak KlongVideoRecorder *weakSelf = self;
+  dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+    CGImageRef cgImage = nullptr;
+    CGImageSourceRef source = CGImageSourceCreateWithData((__bridge CFDataRef)dataCopy, nullptr);
+    if (source) {
+      cgImage = CGImageSourceCreateImageAtIndex(source, 0, nullptr);
+      CFRelease(source);
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+      KlongVideoRecorder *strongSelf = weakSelf;
+      if (!strongSelf) {
+        if (cgImage) {
+          CGImageRelease(cgImage);
+        }
+        return;
+      }
+      strongSelf.remotePreviewDecoding = NO;
+      if (cgImage && g_useIPhoneSource && !strongSelf.showingPlayback) {
+        NSImage *image = [[NSImage alloc] initWithCGImage:cgImage size:NSZeroSize];
+        strongSelf.remotePreviewView.image = image;
+        strongSelf.remotePreviewFramesDisplayed += 1;
+        strongSelf.remotePreviewUsingSnapshotFallback = NO;
+        [strongSelf updateRemotePreviewStatusIfNeeded];
+      } else {
+        strongSelf.remotePreviewFramesDropped += 1;
+      }
+      if (cgImage) {
+        CGImageRelease(cgImage);
+      }
+    });
+  });
+}
+
+- (void)updateRemotePreviewStatusIfNeeded {
+  const CFTimeInterval now = CACurrentMediaTime();
+  if (now - self.remotePreviewLastStatusTime < 1.0 || self.recordingVisualState) {
+    return;
+  }
+  const NSUInteger displayedDelta = self.remotePreviewFramesDisplayed - self.remotePreviewFramesDisplayedAtLastUpdate;
+  self.remotePreviewFramesDisplayedAtLastUpdate = self.remotePreviewFramesDisplayed;
+  self.remotePreviewLastStatusTime = now;
+  NSString *safe = g_activeTransportRecording ? @" safe" : @"";
+  [self setStatus:[NSString stringWithFormat:@"Preview: MJPEG%@, %lu fps, dropped %lu",
+                                             safe,
+                                             static_cast<unsigned long>(displayedDelta),
+                                             static_cast<unsigned long>(self.remotePreviewFramesDropped)]];
 }
 
 - (void)showLivePreview {
