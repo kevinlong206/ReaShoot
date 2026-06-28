@@ -60,8 +60,19 @@ namespace {
 constexpr const char *kExtStateSection = "klong_reaper_video_recorder";
 constexpr const char *kFollowEnabledKey = "follow_enabled";
 constexpr const char *kSelectedDeviceKey = "selected_device_unique_id";
+constexpr const char *kSourceKindKey = "source_kind";
+constexpr const char *kIPhoneHostKey = "iphone_host";
+constexpr const char *kIPhoneControlPortKey = "iphone_control_port";
+constexpr const char *kIPhoneHttpPortKey = "iphone_http_port";
+constexpr const char *kIPhoneTokenKey = "iphone_token";
+constexpr const char *kIPhoneResolutionKey = "iphone_resolution";
+constexpr const char *kIPhoneFPSKey = "iphone_fps";
+constexpr const char *kIPhoneOrientationKey = "iphone_orientation";
+constexpr const char *kIPhoneAspectKey = "iphone_aspect";
 constexpr const char *kDockIdent = "klong_reaper_video_recorder_preview";
 constexpr const char *kVideoTrackName = "Video Recorder";
+constexpr const char *kRepoHelperPath = "/Users/klong/reaper_video_recorder/build/video-sync-mac";
+constexpr const char *kDefaultIPhoneHost = "kevin-long-iphone.local";
 constexpr int kRecordBit = 4;
 constexpr double kAlignmentPeakRate = 100.0;
 constexpr double kAlignmentMaxDuration = 120.0;
@@ -77,7 +88,16 @@ bool g_videoEnabled = false;
 bool g_followEnabled = true;
 bool g_activeTransportRecording = false;
 bool g_pendingInsert = false;
+bool g_useIPhoneSource = false;
 std::string g_selectedDeviceUniqueID;
+std::string g_iPhoneHost;
+std::string g_iPhoneControlPort = "8787";
+std::string g_iPhoneHttpPort = "8788";
+std::string g_iPhoneToken;
+std::string g_iPhoneResolution = "4K";
+std::string g_iPhoneFPS = "30";
+std::string g_iPhoneOrientation = "portrait";
+std::string g_iPhoneAspect = "9:16";
 std::string g_pendingInsertPath;
 double g_pendingInsertPosition = 0.0;
 ReaProject *g_recordProject = nullptr;
@@ -597,25 +617,50 @@ void setVideoEnabled(bool enabled);
 @property(nonatomic, assign) CFTimeInterval lastPlaybackSeekHostTime;
 @property(nonatomic, strong) NSView *dockView;
 @property(nonatomic, strong) NSView *previewView;
+@property(nonatomic, strong) NSPopUpButton *sourcePopup;
 @property(nonatomic, strong) NSPopUpButton *devicePopup;
 @property(nonatomic, strong) NSPopUpButton *formatDiagnosticPopup;
+@property(nonatomic, strong) NSButton *iPhoneSetupButton;
+@property(nonatomic, strong) NSWindow *iPhoneSetupWindow;
+@property(nonatomic, strong) NSTextField *iPhoneHostField;
+@property(nonatomic, strong) NSTextField *iPhoneTokenField;
+@property(nonatomic, strong) NSTextField *iPhonePairingCodeField;
+@property(nonatomic, strong) NSButton *iPhoneDiscoverButton;
+@property(nonatomic, strong) NSButton *iPhonePairButton;
+@property(nonatomic, strong) NSButton *iPhoneTestButton;
+@property(nonatomic, strong) NSPopUpButton *iPhoneResolutionPopup;
+@property(nonatomic, strong) NSPopUpButton *iPhoneFPSPopup;
+@property(nonatomic, strong) NSPopUpButton *iPhoneOrientationPopup;
+@property(nonatomic, strong) NSPopUpButton *iPhoneAspectPopup;
 @property(nonatomic, strong) NSTextField *formatLabel;
 @property(nonatomic, strong) NSTextField *statusLabel;
+@property(nonatomic, strong) NSImageView *remotePreviewView;
+@property(nonatomic, strong) NSTimer *remotePreviewTimer;
+@property(nonatomic, strong) NSURLSessionDataTask *remotePreviewTask;
 @property(nonatomic, copy) void (^startCompletion)(void);
 @property(nonatomic, copy) void (^stopCompletion)(NSString *path, NSError *error);
 @property(nonatomic, copy) NSString *activeOutputPath;
+@property(nonatomic, copy) NSString *activeRemoteDownloadDirectory;
 @property(nonatomic, copy) NSString *audioDeviceName;
 @property(nonatomic, copy) NSString *captureQualityLabel;
 @property(nonatomic, assign) BOOL docked;
 @property(nonatomic, assign) BOOL hasAudioInput;
 @property(nonatomic, assign) BOOL recordingVisualState;
 @property(nonatomic, assign) BOOL showingPlayback;
+@property(nonatomic, assign) BOOL remoteRecording;
 @end
 
 @implementation KlongVideoRecorder
 
 - (void)showPreview {
   dispatch_async(dispatch_get_main_queue(), ^{
+    if (g_useIPhoneSource) {
+      [self ensureDockView];
+      [self showLivePreview];
+      [self showDockedPreview];
+      [self setStatus:[NSString stringWithUTF8String:followStatusText().c_str()]];
+      return;
+    }
     [self ensureCaptureAccessThenRun:^{
       NSError *error = nil;
       if (![self ensureSession:&error]) {
@@ -638,12 +683,200 @@ void setVideoEnabled(bool enabled);
 }
 
 - (BOOL)isRecording {
+  if (g_useIPhoneSource) {
+    return self.remoteRecording;
+  }
   return self.movieOutput.isRecording;
+}
+
+- (NSString *)videoSyncHelperPath {
+  NSString *installedPath = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/REAPER/UserPlugins/video-sync-mac"];
+  if ([[NSFileManager defaultManager] isExecutableFileAtPath:installedPath]) {
+    return installedPath;
+  }
+  NSString *repoPath = [NSString stringWithUTF8String:kRepoHelperPath];
+  if ([[NSFileManager defaultManager] isExecutableFileAtPath:repoPath]) {
+    return repoPath;
+  }
+  return installedPath;
+}
+
+- (NSArray<NSString *> *)videoSyncArgumentsForCommand:(NSString *)command extraArguments:(NSArray<NSString *> *)extraArguments {
+  NSMutableArray<NSString *> *arguments = [NSMutableArray arrayWithObject:command];
+  if (![command isEqualToString:@"discover"]) {
+    [arguments addObjectsFromArray:@[
+      @"--host",
+      [NSString stringWithUTF8String:g_iPhoneHost.c_str()],
+      @"--port",
+      [NSString stringWithUTF8String:g_iPhoneControlPort.c_str()]
+    ]];
+  }
+  [arguments addObjectsFromArray:extraArguments ?: @[]];
+  return arguments;
+}
+
+- (NSString *)runVideoSyncCommand:(NSString *)command
+                   extraArguments:(NSArray<NSString *> *)extraArguments
+                           error:(NSError **)error {
+  NSTask *task = [[NSTask alloc] init];
+  NSString *helperPath = [self videoSyncHelperPath];
+  if (![[NSFileManager defaultManager] isExecutableFileAtPath:helperPath]) {
+    if (error) {
+      *error = [NSError errorWithDomain:@"KlongVideoRecorder"
+                                  code:19
+                              userInfo:@{NSLocalizedDescriptionKey: @"The bundled video-sync-mac helper is missing. Run make install again."}];
+    }
+    return nil;
+  }
+  task.executableURL = [NSURL fileURLWithPath:helperPath];
+  task.arguments = [self videoSyncArgumentsForCommand:command extraArguments:extraArguments];
+  NSPipe *pipe = [NSPipe pipe];
+  task.standardOutput = pipe;
+  task.standardError = pipe;
+
+  NSError *launchError = nil;
+  if (![task launchAndReturnError:&launchError]) {
+    if (error) {
+      *error = launchError;
+    }
+    return nil;
+  }
+  [task waitUntilExit];
+  NSData *data = [pipe.fileHandleForReading readDataToEndOfFile];
+  NSString *output = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
+  if (task.terminationStatus != 0) {
+    if (error) {
+      NSString *message = output.length > 0 ? output : @"video-sync-mac failed.";
+      *error = [NSError errorWithDomain:@"KlongVideoRecorder"
+                                  code:20
+                              userInfo:@{NSLocalizedDescriptionKey: message}];
+    }
+    return nil;
+  }
+  return output;
+}
+
+- (void)runVideoSyncCommandAsync:(NSString *)command
+                  extraArguments:(NSArray<NSString *> *)extraArguments
+                      completion:(void (^)(NSString *output, NSError *error))completion {
+  NSString *helperPath = [self videoSyncHelperPath];
+  if (![[NSFileManager defaultManager] isExecutableFileAtPath:helperPath]) {
+    NSError *missingError = [NSError errorWithDomain:@"KlongVideoRecorder"
+                                                code:19
+                                            userInfo:@{NSLocalizedDescriptionKey: @"The bundled video-sync-mac helper is missing. Run make install again."}];
+    dispatch_async(dispatch_get_main_queue(), ^{
+      completion(nil, missingError);
+    });
+    return;
+  }
+
+  NSTask *task = [[NSTask alloc] init];
+  task.executableURL = [NSURL fileURLWithPath:helperPath];
+  task.arguments = [self videoSyncArgumentsForCommand:command extraArguments:extraArguments];
+  NSPipe *pipe = [NSPipe pipe];
+  task.standardOutput = pipe;
+  task.standardError = pipe;
+  task.terminationHandler = ^(NSTask *finishedTask) {
+    NSData *data = [pipe.fileHandleForReading readDataToEndOfFile];
+    NSString *output = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
+    NSError *commandError = nil;
+    if (finishedTask.terminationStatus != 0) {
+      NSString *message = output.length > 0 ? output : @"video-sync-mac failed.";
+      commandError = [NSError errorWithDomain:@"KlongVideoRecorder"
+                                        code:21
+                                    userInfo:@{NSLocalizedDescriptionKey: message}];
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+      completion(output, commandError);
+    });
+  };
+
+  NSError *launchError = nil;
+  if (![task launchAndReturnError:&launchError]) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+      completion(nil, launchError);
+    });
+  }
+}
+
+- (BOOL)startIPhoneRecordingWithSuggestedPath:(const std::string &)path
+                             startCompletion:(void (^)(void))startCompletion
+                                        error:(NSError **)error {
+  [self persistIPhoneSettings];
+  if (g_iPhoneHost.empty() || g_iPhoneToken.empty()) {
+    if (error) {
+      *error = [NSError errorWithDomain:@"KlongVideoRecorder"
+                                  code:22
+                              userInfo:@{NSLocalizedDescriptionKey: @"Set the iPhone host and pairing token before recording."}];
+    }
+    return NO;
+  }
+
+  NSArray<NSString *> *configureArguments = @[
+    @"--token",
+    [NSString stringWithUTF8String:g_iPhoneToken.c_str()],
+    @"--resolution",
+    [NSString stringWithUTF8String:g_iPhoneResolution.c_str()],
+    @"--fps",
+    [NSString stringWithUTF8String:g_iPhoneFPS.c_str()],
+    @"--orientation",
+    [NSString stringWithUTF8String:g_iPhoneOrientation.c_str()],
+    @"--aspect",
+    [NSString stringWithUTF8String:g_iPhoneAspect.c_str()]
+  ];
+  if (![self runVideoSyncCommand:@"configure" extraArguments:configureArguments error:error]) {
+    return NO;
+  }
+
+  NSString *outputPath = [NSString stringWithUTF8String:path.c_str()];
+  NSString *directory = [outputPath stringByDeletingLastPathComponent];
+  NSError *directoryError = nil;
+  if (![[NSFileManager defaultManager] createDirectoryAtPath:directory
+                                withIntermediateDirectories:YES
+                                                 attributes:nil
+                                                      error:&directoryError]) {
+    if (error) {
+      *error = directoryError;
+    }
+    return NO;
+  }
+
+  NSString *sessionID = [NSString stringWithFormat:@"reaper-%s", timestampString().c_str()];
+  NSArray<NSString *> *arguments = @[
+    @"--token",
+    [NSString stringWithUTF8String:g_iPhoneToken.c_str()],
+    @"--session",
+    sessionID
+  ];
+  if (![self runVideoSyncCommand:@"start" extraArguments:arguments error:error]) {
+    return NO;
+  }
+
+  self.activeRemoteDownloadDirectory = directory;
+  self.remoteRecording = YES;
+  [self setRecordingVisualState:YES];
+  [self setStatus:@"Recording on iPhone"];
+  if (startCompletion) {
+    startCompletion();
+  }
+  return YES;
+}
+
+- (NSString *)downloadedPathFromVideoSyncOutput:(NSString *)output {
+  for (NSString *line in [output componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
+    if ([line hasPrefix:@"downloaded "]) {
+      return [line substringFromIndex:@"downloaded ".length];
+    }
+  }
+  return nil;
 }
 
 - (BOOL)startRecordingToPath:(const std::string &)path
              startCompletion:(void (^)(void))startCompletion
                         error:(NSError **)error {
+  if (g_useIPhoneSource) {
+    return [self startIPhoneRecordingWithSuggestedPath:path startCompletion:startCompletion error:error];
+  }
   if (![self ensureSession:error]) {
     return NO;
   }
@@ -694,6 +927,45 @@ void setVideoEnabled(bool enabled);
 }
 
 - (void)stopRecordingWithCompletion:(void (^)(NSString *path, NSError *error))completion {
+  if (g_useIPhoneSource) {
+    self.stopCompletion = completion;
+    if (!self.remoteRecording) {
+      if (self.stopCompletion) {
+        self.stopCompletion(nil, nil);
+        self.stopCompletion = nil;
+      }
+      return;
+    }
+    [self setStatus:@"Stopping iPhone; downloading 4K video"];
+    NSArray<NSString *> *arguments = @[
+      @"--http-port",
+      [NSString stringWithUTF8String:g_iPhoneHttpPort.c_str()],
+      @"--token",
+      [NSString stringWithUTF8String:g_iPhoneToken.c_str()],
+      @"--download-dir",
+      self.activeRemoteDownloadDirectory ?: NSHomeDirectory()
+    ];
+    [self runVideoSyncCommandAsync:@"stop" extraArguments:arguments completion:^(NSString *output, NSError *error) {
+      self.remoteRecording = NO;
+      [self setRecordingVisualState:NO];
+      if (error) {
+        [self setStatus:@"iPhone download failed"];
+        if (self.stopCompletion) {
+          self.stopCompletion(nil, error);
+          self.stopCompletion = nil;
+        }
+        return;
+      }
+      NSString *path = [self downloadedPathFromVideoSyncOutput:output ?: @""];
+      if (self.stopCompletion) {
+        self.stopCompletion(path, path.length > 0 ? nil : [NSError errorWithDomain:@"KlongVideoRecorder"
+                                                                               code:23
+                                                                           userInfo:@{NSLocalizedDescriptionKey: @"The iPhone recording downloaded, but video-sync-mac did not report a file path."}]);
+        self.stopCompletion = nil;
+      }
+    }];
+    return;
+  }
   self.stopCompletion = completion;
   if (!self.movieOutput.isRecording) {
     if (self.stopCompletion) {
@@ -1120,6 +1392,15 @@ void setVideoEnabled(bool enabled);
   if (!self.formatLabel) {
     return;
   }
+  if (g_useIPhoneSource) {
+    self.formatLabel.stringValue = [NSString stringWithFormat:@"iPhone: %s %@ fps, %s, %s + 640px preview",
+                                                              g_iPhoneResolution.c_str(),
+                                                              [NSString stringWithUTF8String:g_iPhoneFPS.c_str()],
+                                                              g_iPhoneOrientation.c_str(),
+                                                              g_iPhoneAspect.c_str()];
+    [self updateRecordingTextColor];
+    return;
+  }
   self.formatLabel.stringValue = [self captureFormatDescription];
   [self updateRecordingTextColor];
 }
@@ -1149,6 +1430,12 @@ void setVideoEnabled(bool enabled);
   }
 
   [self.formatDiagnosticPopup removeAllItems];
+  if (g_useIPhoneSource) {
+    [self.formatDiagnosticPopup addItemWithTitle:@"Preview: /preview.mjpg or /preview.jpg"];
+    [self.formatDiagnosticPopup addItemWithTitle:@"Recording: full-resolution iPhone .mov"];
+    [self.formatDiagnosticPopup selectItemAtIndex:0];
+    return;
+  }
   AVCaptureDevice *device = [self selectedVideoDevice];
   if (!device) {
     [self.formatDiagnosticPopup addItemWithTitle:@"Formats: no camera selected"];
@@ -1212,6 +1499,314 @@ void setVideoEnabled(bool enabled);
   [self refreshFormatDiagnosticMenu];
 }
 
+- (void)refreshSourceMenu {
+  if (!self.sourcePopup) {
+    return;
+  }
+  [self.sourcePopup removeAllItems];
+  [self.sourcePopup addItemWithTitle:@"Mac camera"];
+  self.sourcePopup.lastItem.representedObject = @"mac";
+  [self.sourcePopup addItemWithTitle:@"iPhone Video Sync"];
+  self.sourcePopup.lastItem.representedObject = @"iphone";
+  [self.sourcePopup selectItemWithTitle:g_useIPhoneSource ? @"iPhone Video Sync" : @"Mac camera"];
+}
+
+- (void)persistIPhoneSettings {
+  if (self.iPhoneHostField) {
+    g_iPhoneHost = self.iPhoneHostField.stringValue.UTF8String ?: "";
+  }
+  if (self.iPhoneTokenField) {
+    g_iPhoneToken = self.iPhoneTokenField.stringValue.UTF8String ?: "";
+  }
+  if (self.iPhoneResolutionPopup.selectedItem.title.length > 0) {
+    g_iPhoneResolution = self.iPhoneResolutionPopup.selectedItem.title.UTF8String ?: "4K";
+  }
+  if (self.iPhoneFPSPopup.selectedItem.title.length > 0) {
+    g_iPhoneFPS = self.iPhoneFPSPopup.selectedItem.title.UTF8String ?: "30";
+  }
+  if (self.iPhoneOrientationPopup.selectedItem.representedObject) {
+    NSString *orientation = self.iPhoneOrientationPopup.selectedItem.representedObject;
+    g_iPhoneOrientation = orientation.UTF8String ?: "portrait";
+  }
+  if (self.iPhoneAspectPopup.selectedItem.title.length > 0) {
+    g_iPhoneAspect = self.iPhoneAspectPopup.selectedItem.title.UTF8String ?: "9:16";
+  }
+  if (SetExtState) {
+    SetExtState(kExtStateSection, kIPhoneHostKey, g_iPhoneHost.c_str(), true);
+    SetExtState(kExtStateSection, kIPhoneTokenKey, g_iPhoneToken.c_str(), true);
+    SetExtState(kExtStateSection, kIPhoneControlPortKey, g_iPhoneControlPort.c_str(), true);
+    SetExtState(kExtStateSection, kIPhoneHttpPortKey, g_iPhoneHttpPort.c_str(), true);
+    SetExtState(kExtStateSection, kIPhoneResolutionKey, g_iPhoneResolution.c_str(), true);
+    SetExtState(kExtStateSection, kIPhoneFPSKey, g_iPhoneFPS.c_str(), true);
+    SetExtState(kExtStateSection, kIPhoneOrientationKey, g_iPhoneOrientation.c_str(), true);
+    SetExtState(kExtStateSection, kIPhoneAspectKey, g_iPhoneAspect.c_str(), true);
+  }
+}
+
+- (void)profileSelectionChanged:(id)sender {
+  (void)sender;
+  [self persistIPhoneSettings];
+  [self updateCaptureFormatLabel];
+  if (!g_useIPhoneSource || g_iPhoneHost.empty() || g_iPhoneToken.empty()) {
+    return;
+  }
+  NSArray<NSString *> *arguments = @[
+    @"--token",
+    [NSString stringWithUTF8String:g_iPhoneToken.c_str()],
+    @"--resolution",
+    [NSString stringWithUTF8String:g_iPhoneResolution.c_str()],
+    @"--fps",
+    [NSString stringWithUTF8String:g_iPhoneFPS.c_str()],
+    @"--orientation",
+    [NSString stringWithUTF8String:g_iPhoneOrientation.c_str()],
+    @"--aspect",
+    [NSString stringWithUTF8String:g_iPhoneAspect.c_str()]
+  ];
+  [self setStatus:@"Configuring iPhone profile"];
+  [self runVideoSyncCommandAsync:@"configure" extraArguments:arguments completion:^(NSString *output, NSError *error) {
+    if (error) {
+      [self setStatus:@"iPhone profile configure failed"];
+      showError(error.localizedDescription.UTF8String ?: "iPhone profile configure failed.");
+      return;
+    }
+    NSString *message = [output stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    [self setStatus:message.length > 0 ? message : @"iPhone profile configured"];
+    [self stopRemotePreview];
+    [self startRemotePreview];
+  }];
+}
+
+- (NSDictionary<NSString *, NSString *> *)fieldsFromHelperLine:(NSString *)line {
+  NSMutableDictionary<NSString *, NSString *> *fields = [NSMutableDictionary dictionary];
+  for (NSString *part in [line componentsSeparatedByString:@"\t"]) {
+    NSRange equals = [part rangeOfString:@"="];
+    if (equals.location == NSNotFound || equals.location == 0) {
+      continue;
+    }
+    NSString *key = [part substringToIndex:equals.location];
+    NSString *value = [part substringFromIndex:equals.location + 1];
+    fields[key] = value;
+  }
+  return fields;
+}
+
+- (BOOL)applyFirstDiscoveredIPhoneFromOutput:(NSString *)output {
+  for (NSString *line in [output componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
+    if (![line hasPrefix:@"device\t"]) {
+      continue;
+    }
+    NSDictionary<NSString *, NSString *> *fields = [self fieldsFromHelperLine:line];
+    NSString *host = fields[@"host"];
+    NSString *controlPort = fields[@"controlPort"];
+    NSString *httpPort = fields[@"httpPort"];
+    if (host.length == 0) {
+      continue;
+    }
+    g_iPhoneHost = host.UTF8String;
+    if (controlPort.length > 0) {
+      g_iPhoneControlPort = controlPort.UTF8String;
+    }
+    if (httpPort.length > 0) {
+      g_iPhoneHttpPort = httpPort.UTF8String;
+    }
+    self.iPhoneHostField.stringValue = host;
+    [self persistIPhoneSettings];
+    [self setStatus:[NSString stringWithFormat:@"Found iPhone: %@", fields[@"name"] ?: host]];
+    return YES;
+  }
+  return NO;
+}
+
+- (void)discoverIPhone:(id)sender {
+  (void)sender;
+  [self setStatus:@"Searching for iPhone Video Sync"];
+  [self runVideoSyncCommandAsync:@"discover" extraArguments:@[ @"--timeout", @"3" ] completion:^(NSString *output, NSError *error) {
+    if (error) {
+      [self setStatus:@"iPhone discovery failed"];
+      showError(error.localizedDescription.UTF8String ?: "iPhone discovery failed.");
+      return;
+    }
+    if (![self applyFirstDiscoveredIPhoneFromOutput:output ?: @""]) {
+      if (g_iPhoneHost.empty()) {
+        g_iPhoneHost = kDefaultIPhoneHost;
+        self.iPhoneHostField.stringValue = [NSString stringWithUTF8String:kDefaultIPhoneHost];
+        [self persistIPhoneSettings];
+        [self setStatus:@"Bonjour not found; using known iPhone host"];
+      } else {
+        [self setStatus:@"Bonjour not found; using entered host"];
+      }
+    }
+  }];
+}
+
+- (void)pairIPhone:(id)sender {
+  (void)sender;
+  [self persistIPhoneSettings];
+  NSString *code = self.iPhonePairingCodeField.stringValue;
+  if (g_iPhoneHost.empty() || code.length == 0) {
+    [self setStatus:@"Enter iPhone host and pairing code"];
+    return;
+  }
+  [self setStatus:@"Pairing with iPhone"];
+  [self runVideoSyncCommandAsync:@"pair" extraArguments:@[ @"--code", code ] completion:^(NSString *output, NSError *error) {
+    if (error) {
+      [self setStatus:@"iPhone pairing failed"];
+      showError(error.localizedDescription.UTF8String ?: "iPhone pairing failed.");
+      return;
+    }
+    NSString *prefix = @"paired token=";
+    for (NSString *line in [output componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
+      if ([line hasPrefix:prefix]) {
+        NSString *token = [line substringFromIndex:prefix.length];
+        self.iPhoneTokenField.stringValue = token;
+        g_iPhoneToken = token.UTF8String ?: "";
+        [self persistIPhoneSettings];
+        [self setStatus:@"iPhone paired"];
+        return;
+      }
+    }
+    [self setStatus:@"Pairing did not return a token"];
+  }];
+}
+
+- (void)testIPhoneConnection:(id)sender {
+  (void)sender;
+  [self persistIPhoneSettings];
+  if (g_iPhoneHost.empty()) {
+    [self setStatus:@"Enter iPhone host first"];
+    return;
+  }
+  NSMutableArray<NSString *> *arguments = [NSMutableArray array];
+  if (!g_iPhoneToken.empty()) {
+    [arguments addObjectsFromArray:@[ @"--token", [NSString stringWithUTF8String:g_iPhoneToken.c_str()] ]];
+  }
+  [self setStatus:@"Testing iPhone connection"];
+  [self runVideoSyncCommandAsync:@"ping" extraArguments:arguments completion:^(NSString *output, NSError *error) {
+    if (error) {
+      [self setStatus:@"iPhone connection failed"];
+      showError(error.localizedDescription.UTF8String ?: "iPhone connection failed.");
+      return;
+    }
+    NSString *message = [output stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    [self setStatus:message.length > 0 ? [@"iPhone: " stringByAppendingString:message] : @"iPhone connection OK"];
+    [self startRemotePreview];
+  }];
+}
+
+- (void)updateSourceControls {
+  self.devicePopup.enabled = !g_useIPhoneSource;
+  self.devicePopup.hidden = g_useIPhoneSource;
+  self.formatDiagnosticPopup.enabled = !g_useIPhoneSource;
+  self.iPhoneSetupButton.hidden = !g_useIPhoneSource;
+  self.iPhoneHostField.hidden = YES;
+  self.iPhoneTokenField.hidden = YES;
+  self.iPhonePairingCodeField.hidden = YES;
+  self.iPhoneDiscoverButton.hidden = YES;
+  self.iPhonePairButton.hidden = YES;
+  self.iPhoneTestButton.hidden = YES;
+  self.iPhoneResolutionPopup.hidden = !g_useIPhoneSource;
+  self.iPhoneFPSPopup.hidden = !g_useIPhoneSource;
+  self.iPhoneOrientationPopup.hidden = !g_useIPhoneSource;
+  self.iPhoneAspectPopup.hidden = !g_useIPhoneSource;
+  [self refreshFormatDiagnosticMenu];
+  [self updateCaptureFormatLabel];
+}
+
+- (void)sourceSelectionChanged:(id)sender {
+  (void)sender;
+  const BOOL nextUseIPhoneSource = [self.sourcePopup.selectedItem.representedObject isEqual:@"iphone"];
+  if (nextUseIPhoneSource == g_useIPhoneSource) {
+    return;
+  }
+  if (self.isRecording) {
+    [self refreshSourceMenu];
+    [self setStatus:@"Cannot switch source while recording"];
+    return;
+  }
+
+  g_useIPhoneSource = nextUseIPhoneSource;
+  if (SetExtState) {
+    SetExtState(kExtStateSection, kSourceKindKey, g_useIPhoneSource ? "iphone" : "mac", true);
+  }
+  [self stopRemotePreview];
+  if (g_useIPhoneSource) {
+    [self.session stopRunning];
+    self.session = nil;
+    self.movieOutput = nil;
+    [self.previewLayer removeFromSuperlayer];
+    self.previewLayer = nil;
+  } else {
+    NSError *error = nil;
+    if (![self ensureSession:&error]) {
+      showError(error.localizedDescription.UTF8String ?: "Unable to initialize camera session.");
+      [self refreshSourceMenu];
+      return;
+    }
+    [self ensureDockView];
+  }
+  [self updateSourceControls];
+  [self showLivePreview];
+  [self setStatus:g_useIPhoneSource ? @"iPhone source selected" : @"Mac camera source selected"];
+}
+
+- (void)iPhoneSettingsChanged:(id)sender {
+  (void)sender;
+  [self persistIPhoneSettings];
+  [self stopRemotePreview];
+  if (g_useIPhoneSource) {
+    [self startRemotePreview];
+  }
+}
+
+- (void)showIPhoneSetup:(id)sender {
+  (void)sender;
+  if (!self.iPhoneSetupWindow) {
+    NSRect frame = NSMakeRect(0, 0, 520, 150);
+    self.iPhoneSetupWindow = [[NSWindow alloc] initWithContentRect:frame
+                                                         styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
+                                                           backing:NSBackingStoreBuffered
+                                                             defer:NO];
+    self.iPhoneSetupWindow.title = @"iPhone Video Sync Setup";
+    NSView *content = self.iPhoneSetupWindow.contentView;
+
+    self.iPhoneHostField.frame = NSMakeRect(12, 112, 240, 22);
+    self.iPhoneHostField.hidden = NO;
+    [content addSubview:self.iPhoneHostField];
+
+    self.iPhoneTokenField.frame = NSMakeRect(268, 112, 240, 22);
+    self.iPhoneTokenField.hidden = NO;
+    [content addSubview:self.iPhoneTokenField];
+
+    self.iPhonePairingCodeField.frame = NSMakeRect(12, 78, 220, 22);
+    self.iPhonePairingCodeField.hidden = NO;
+    [content addSubview:self.iPhonePairingCodeField];
+
+    self.iPhoneDiscoverButton.frame = NSMakeRect(244, 77, 82, 24);
+    self.iPhoneDiscoverButton.hidden = NO;
+    [content addSubview:self.iPhoneDiscoverButton];
+
+    self.iPhonePairButton.frame = NSMakeRect(338, 77, 76, 24);
+    self.iPhonePairButton.hidden = NO;
+    [content addSubview:self.iPhonePairButton];
+
+    self.iPhoneTestButton.frame = NSMakeRect(426, 77, 76, 24);
+    self.iPhoneTestButton.hidden = NO;
+    [content addSubview:self.iPhoneTestButton];
+
+    NSTextField *hint = [NSTextField labelWithString:@"Launch the iPhone app, Discover, enter pairing code, Pair, then Test."];
+    hint.frame = NSMakeRect(12, 24, 496, 36);
+    hint.lineBreakMode = NSLineBreakByWordWrapping;
+    [content addSubview:hint];
+  }
+  self.iPhoneHostField.hidden = NO;
+  self.iPhoneTokenField.hidden = NO;
+  self.iPhonePairingCodeField.hidden = NO;
+  self.iPhoneDiscoverButton.hidden = NO;
+  self.iPhonePairButton.hidden = NO;
+  self.iPhoneTestButton.hidden = NO;
+  [self.iPhoneSetupWindow makeKeyAndOrderFront:nil];
+}
+
 - (void)deviceSelectionChanged:(id)sender {
   (void)sender;
   if (self.movieOutput.isRecording) {
@@ -1255,16 +1850,128 @@ void setVideoEnabled(bool enabled);
     self.dockView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     self.dockView.wantsLayer = YES;
 
-    self.previewView = [[NSView alloc] initWithFrame:NSMakeRect(0, 104, frame.size.width, frame.size.height - 104)];
+    self.previewView = [[NSView alloc] initWithFrame:NSMakeRect(0, 130, frame.size.width, frame.size.height - 130)];
     self.previewView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     self.previewView.wantsLayer = YES;
     [self.dockView addSubview:self.previewView];
+
+    self.remotePreviewView = [[NSImageView alloc] initWithFrame:self.previewView.bounds];
+    self.remotePreviewView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    self.remotePreviewView.imageScaling = NSImageScaleProportionallyUpOrDown;
+    self.remotePreviewView.hidden = YES;
+    [self.previewView addSubview:self.remotePreviewView];
+
+    self.sourcePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(12, 101, frame.size.width - 132, 24) pullsDown:NO];
+    self.sourcePopup.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
+    self.sourcePopup.target = self;
+    self.sourcePopup.action = @selector(sourceSelectionChanged:);
+    [self.dockView addSubview:self.sourcePopup];
+
+    self.iPhoneSetupButton = [[NSButton alloc] initWithFrame:NSMakeRect(frame.size.width - 112, 101, 100, 24)];
+    self.iPhoneSetupButton.title = @"iPhone Setup";
+    self.iPhoneSetupButton.bezelStyle = NSBezelStyleRounded;
+    self.iPhoneSetupButton.autoresizingMask = NSViewMinXMargin | NSViewMaxYMargin;
+    self.iPhoneSetupButton.target = self;
+    self.iPhoneSetupButton.action = @selector(showIPhoneSetup:);
+    [self.dockView addSubview:self.iPhoneSetupButton];
 
     self.devicePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(12, 75, frame.size.width - 24, 24) pullsDown:NO];
     self.devicePopup.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
     self.devicePopup.target = self;
     self.devicePopup.action = @selector(deviceSelectionChanged:);
     [self.dockView addSubview:self.devicePopup];
+
+    self.iPhoneHostField = [[NSTextField alloc] initWithFrame:NSMakeRect(12, 127, (frame.size.width - 36) / 2.0, 22)];
+    self.iPhoneHostField.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
+    self.iPhoneHostField.placeholderString = @"iPhone host, e.g. kevin-long-iphone.local";
+    self.iPhoneHostField.stringValue = [NSString stringWithUTF8String:g_iPhoneHost.c_str()];
+    self.iPhoneHostField.target = self;
+    self.iPhoneHostField.action = @selector(iPhoneSettingsChanged:);
+    [self.dockView addSubview:self.iPhoneHostField];
+
+    self.iPhoneTokenField = [[NSTextField alloc] initWithFrame:NSMakeRect(NSMaxX(self.iPhoneHostField.frame) + 12, 127, (frame.size.width - 36) / 2.0, 22)];
+    self.iPhoneTokenField.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
+    self.iPhoneTokenField.placeholderString = @"Pairing token";
+    self.iPhoneTokenField.stringValue = [NSString stringWithUTF8String:g_iPhoneToken.c_str()];
+    self.iPhoneTokenField.target = self;
+    self.iPhoneTokenField.action = @selector(iPhoneSettingsChanged:);
+    [self.dockView addSubview:self.iPhoneTokenField];
+
+    const CGFloat buttonWidth = 88.0;
+    self.iPhonePairingCodeField = [[NSTextField alloc] initWithFrame:NSMakeRect(12, 101, frame.size.width - 24 - (buttonWidth * 3.0) - 18.0, 22)];
+    self.iPhonePairingCodeField.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
+    self.iPhonePairingCodeField.placeholderString = @"Pairing code from iPhone";
+    [self.dockView addSubview:self.iPhonePairingCodeField];
+
+    CGFloat buttonX = NSMaxX(self.iPhonePairingCodeField.frame) + 6.0;
+    self.iPhoneDiscoverButton = [[NSButton alloc] initWithFrame:NSMakeRect(buttonX, 101, buttonWidth, 22)];
+    self.iPhoneDiscoverButton.title = @"Discover";
+    self.iPhoneDiscoverButton.bezelStyle = NSBezelStyleRounded;
+    self.iPhoneDiscoverButton.target = self;
+    self.iPhoneDiscoverButton.action = @selector(discoverIPhone:);
+    [self.dockView addSubview:self.iPhoneDiscoverButton];
+
+    buttonX += buttonWidth + 6.0;
+    self.iPhonePairButton = [[NSButton alloc] initWithFrame:NSMakeRect(buttonX, 101, buttonWidth, 22)];
+    self.iPhonePairButton.title = @"Pair";
+    self.iPhonePairButton.bezelStyle = NSBezelStyleRounded;
+    self.iPhonePairButton.target = self;
+    self.iPhonePairButton.action = @selector(pairIPhone:);
+    [self.dockView addSubview:self.iPhonePairButton];
+
+    buttonX += buttonWidth + 6.0;
+    self.iPhoneTestButton = [[NSButton alloc] initWithFrame:NSMakeRect(buttonX, 101, buttonWidth, 22)];
+    self.iPhoneTestButton.title = @"Test";
+    self.iPhoneTestButton.bezelStyle = NSBezelStyleRounded;
+    self.iPhoneTestButton.target = self;
+    self.iPhoneTestButton.action = @selector(testIPhoneConnection:);
+    [self.dockView addSubview:self.iPhoneTestButton];
+
+    self.iPhoneDiscoverButton.autoresizingMask = NSViewMinXMargin | NSViewMaxYMargin;
+    self.iPhonePairButton.autoresizingMask = NSViewMinXMargin | NSViewMaxYMargin;
+    self.iPhoneTestButton.autoresizingMask = NSViewMinXMargin | NSViewMaxYMargin;
+
+    const CGFloat popupWidth = (frame.size.width - 48.0) / 4.0;
+    self.iPhoneResolutionPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(12, 75, popupWidth, 24) pullsDown:NO];
+    [self.iPhoneResolutionPopup addItemsWithTitles:@[ @"4K", @"1080p", @"720p" ]];
+    [self.iPhoneResolutionPopup selectItemWithTitle:[NSString stringWithUTF8String:g_iPhoneResolution.c_str()]];
+    self.iPhoneResolutionPopup.target = self;
+    self.iPhoneResolutionPopup.action = @selector(profileSelectionChanged:);
+    [self.dockView addSubview:self.iPhoneResolutionPopup];
+
+    self.iPhoneFPSPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(NSMaxX(self.iPhoneResolutionPopup.frame) + 8, 75, popupWidth, 24) pullsDown:NO];
+    [self.iPhoneFPSPopup addItemsWithTitles:@[ @"24", @"30", @"60" ]];
+    [self.iPhoneFPSPopup selectItemWithTitle:[NSString stringWithUTF8String:g_iPhoneFPS.c_str()]];
+    self.iPhoneFPSPopup.target = self;
+    self.iPhoneFPSPopup.action = @selector(profileSelectionChanged:);
+    [self.dockView addSubview:self.iPhoneFPSPopup];
+
+    self.iPhoneOrientationPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(NSMaxX(self.iPhoneFPSPopup.frame) + 8, 75, popupWidth, 24) pullsDown:NO];
+    [self.iPhoneOrientationPopup addItemWithTitle:@"Portrait"];
+    self.iPhoneOrientationPopup.lastItem.representedObject = @"portrait";
+    [self.iPhoneOrientationPopup addItemWithTitle:@"Landscape R"];
+    self.iPhoneOrientationPopup.lastItem.representedObject = @"landscapeRight";
+    [self.iPhoneOrientationPopup addItemWithTitle:@"Landscape L"];
+    self.iPhoneOrientationPopup.lastItem.representedObject = @"landscapeLeft";
+    NSInteger orientationIndex = [self.iPhoneOrientationPopup indexOfItemWithRepresentedObject:[NSString stringWithUTF8String:g_iPhoneOrientation.c_str()]];
+    if (orientationIndex >= 0) {
+      [self.iPhoneOrientationPopup selectItemAtIndex:orientationIndex];
+    }
+    self.iPhoneOrientationPopup.target = self;
+    self.iPhoneOrientationPopup.action = @selector(profileSelectionChanged:);
+    [self.dockView addSubview:self.iPhoneOrientationPopup];
+
+    self.iPhoneAspectPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(NSMaxX(self.iPhoneOrientationPopup.frame) + 8, 75, popupWidth, 24) pullsDown:NO];
+    [self.iPhoneAspectPopup addItemsWithTitles:@[ @"9:16", @"16:9", @"1:1", @"4:5" ]];
+    [self.iPhoneAspectPopup selectItemWithTitle:[NSString stringWithUTF8String:g_iPhoneAspect.c_str()]];
+    self.iPhoneAspectPopup.target = self;
+    self.iPhoneAspectPopup.action = @selector(profileSelectionChanged:);
+    [self.dockView addSubview:self.iPhoneAspectPopup];
+
+    self.iPhoneResolutionPopup.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
+    self.iPhoneFPSPopup.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
+    self.iPhoneOrientationPopup.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
+    self.iPhoneAspectPopup.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
 
     self.formatDiagnosticPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(12, 49, frame.size.width - 24, 24) pullsDown:NO];
     self.formatDiagnosticPopup.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
@@ -1279,12 +1986,14 @@ void setVideoEnabled(bool enabled);
     self.statusLabel.frame = NSMakeRect(12, 9, frame.size.width - 24, 18);
     self.statusLabel.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
     [self.dockView addSubview:self.statusLabel];
+    [self refreshSourceMenu];
     [self refreshDeviceMenu];
     [self refreshFormatDiagnosticMenu];
     [self updateCaptureFormatLabel];
+    [self updateSourceControls];
   }
 
-  if (!self.previewLayer && self.session) {
+  if (!g_useIPhoneSource && !self.previewLayer && self.session) {
     self.previewLayer = [AVCaptureVideoPreviewLayer layerWithSession:self.session];
     self.previewLayer.videoGravity = AVLayerVideoGravityResizeAspect;
     self.previewLayer.frame = self.previewView.bounds;
@@ -1293,11 +2002,75 @@ void setVideoEnabled(bool enabled);
   }
 }
 
+- (NSURL *)remotePreviewSnapshotURL {
+  [self persistIPhoneSettings];
+  if (g_iPhoneHost.empty() || g_iPhoneToken.empty()) {
+    return nil;
+  }
+  NSString *urlString = [NSString stringWithFormat:@"http://%s:%s/preview.jpg?token=%@",
+                                                   g_iPhoneHost.c_str(),
+                                                   g_iPhoneHttpPort.c_str(),
+                                                   [NSString stringWithUTF8String:g_iPhoneToken.c_str()]];
+  return [NSURL URLWithString:urlString];
+}
+
+- (void)refreshRemotePreviewFrame {
+  NSURL *url = [self remotePreviewSnapshotURL];
+  if (!url || self.remotePreviewTask) {
+    return;
+  }
+  self.remotePreviewTask = [NSURLSession.sharedSession dataTaskWithURL:url
+                                                     completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+    (void)response;
+    NSImage *image = nil;
+    if (!error && data.length > 0) {
+      image = [[NSImage alloc] initWithData:data];
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+      self.remotePreviewTask = nil;
+      if (image && g_useIPhoneSource && !self.showingPlayback) {
+        self.remotePreviewView.image = image;
+      }
+    });
+  }];
+  [self.remotePreviewTask resume];
+}
+
+- (void)startRemotePreview {
+  if (!g_useIPhoneSource) {
+    return;
+  }
+  self.remotePreviewView.hidden = NO;
+  self.previewLayer.hidden = YES;
+  if (!self.remotePreviewTimer) {
+    self.remotePreviewTimer = [NSTimer scheduledTimerWithTimeInterval:0.25
+                                                               target:self
+                                                             selector:@selector(refreshRemotePreviewFrame)
+                                                             userInfo:nil
+                                                              repeats:YES];
+  }
+  [self refreshRemotePreviewFrame];
+}
+
+- (void)stopRemotePreview {
+  [self.remotePreviewTimer invalidate];
+  self.remotePreviewTimer = nil;
+  [self.remotePreviewTask cancel];
+  self.remotePreviewTask = nil;
+  self.remotePreviewView.hidden = YES;
+}
+
 - (void)showLivePreview {
   self.showingPlayback = NO;
   [self.player pause];
   self.playerLayer.hidden = YES;
-  self.previewLayer.hidden = NO;
+  if (g_useIPhoneSource) {
+    self.previewLayer.hidden = YES;
+    [self startRemotePreview];
+  } else {
+    [self stopRemotePreview];
+    self.previewLayer.hidden = NO;
+  }
 }
 
 - (void)updatePlaybackWithPath:(const std::string &)path
@@ -1326,6 +2099,7 @@ void setVideoEnabled(bool enabled);
   }
 
   self.showingPlayback = YES;
+  [self stopRemotePreview];
   self.previewLayer.hidden = YES;
   self.playerLayer.hidden = NO;
 
@@ -1695,6 +2469,42 @@ void loadSettings() {
   const char *selectedDevice = GetExtState(kExtStateSection, kSelectedDeviceKey);
   if (selectedDevice && selectedDevice[0] != '\0') {
     g_selectedDeviceUniqueID = selectedDevice;
+  }
+  const char *sourceKind = GetExtState(kExtStateSection, kSourceKindKey);
+  if (sourceKind && sourceKind[0] != '\0') {
+    g_useIPhoneSource = std::string(sourceKind) == "iphone";
+  }
+  const char *iPhoneHost = GetExtState(kExtStateSection, kIPhoneHostKey);
+  if (iPhoneHost && iPhoneHost[0] != '\0') {
+    g_iPhoneHost = iPhoneHost;
+  }
+  const char *iPhoneControlPort = GetExtState(kExtStateSection, kIPhoneControlPortKey);
+  if (iPhoneControlPort && iPhoneControlPort[0] != '\0') {
+    g_iPhoneControlPort = iPhoneControlPort;
+  }
+  const char *iPhoneHttpPort = GetExtState(kExtStateSection, kIPhoneHttpPortKey);
+  if (iPhoneHttpPort && iPhoneHttpPort[0] != '\0') {
+    g_iPhoneHttpPort = iPhoneHttpPort;
+  }
+  const char *iPhoneToken = GetExtState(kExtStateSection, kIPhoneTokenKey);
+  if (iPhoneToken && iPhoneToken[0] != '\0') {
+    g_iPhoneToken = iPhoneToken;
+  }
+  const char *iPhoneResolution = GetExtState(kExtStateSection, kIPhoneResolutionKey);
+  if (iPhoneResolution && iPhoneResolution[0] != '\0') {
+    g_iPhoneResolution = iPhoneResolution;
+  }
+  const char *iPhoneFPS = GetExtState(kExtStateSection, kIPhoneFPSKey);
+  if (iPhoneFPS && iPhoneFPS[0] != '\0') {
+    g_iPhoneFPS = iPhoneFPS;
+  }
+  const char *iPhoneOrientation = GetExtState(kExtStateSection, kIPhoneOrientationKey);
+  if (iPhoneOrientation && iPhoneOrientation[0] != '\0') {
+    g_iPhoneOrientation = iPhoneOrientation;
+  }
+  const char *iPhoneAspect = GetExtState(kExtStateSection, kIPhoneAspectKey);
+  if (iPhoneAspect && iPhoneAspect[0] != '\0') {
+    g_iPhoneAspect = iPhoneAspect;
   }
 }
 

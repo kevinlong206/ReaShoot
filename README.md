@@ -28,6 +28,8 @@ macOS-only REAPER extension MVP for recording one webcam/video source in sync wi
 - After insertion, compares the movie's embedded camera audio against overlapping non-video REAPER items and shifts the video item to the strongest correlation match.
 - Shows load/record/finalize/import state in the preview status label instead of console chatter.
 - Places recorded video using AVFoundation's actual recording-start callback to compensate for capture startup latency.
+- Can select an `iPhone Video Sync` source that controls the companion iPhone app for 4K recording, low-resolution Wi-Fi preview, download, and timeline insertion.
+- For the iPhone source, the dock includes capture profile controls for resolution, FPS, orientation, and social aspect ratio. Changing a profile control sends the new profile to the iPhone immediately when paired.
 
 ## Build
 
@@ -61,6 +63,9 @@ codesign --force --sign - "$HOME/Library/Application Support/REAPER/UserPlugins/
 - REAPER remains responsible for production audio recording and mixing; camera audio is captured as a sync/alignment reference.
 - Camera and microphone permission are requested the first time the preview/session is opened.
 - Selected camera input is persisted in REAPER ext state.
+- The iPhone source builds and installs a bundled `video-sync-mac` helper next to the REAPER extension dylib.
+- To use the iPhone source, launch the iPhone app, select `iPhone Video Sync` in the REAPER dock, click `iPhone Setup`, click `Discover`, enter the pairing code shown on the iPhone, click `Pair`, then click `Test` to verify preview/control before recording.
+- The iPhone app shows the currently configured capture profile. Aspect ratio is currently metadata/framing intent; resolution, FPS, and orientation are applied on the iPhone capture session.
 - Captures are written under `Video Recordings` in the saved project directory, or under REAPER's resource path for unsaved projects.
 - The extension has been observed with an iPhone Continuity Camera exposing only up to `1920x1440` / `1920x1080`; no 4K or true vertical iPhone formats were exposed by AVFoundation in that session.
 - A tested recording inspected with `ffprobe` was `1920x1080` H.264 at a stable ~30 fps and ~24 Mbps, so laggy motion in the docked preview can be a preview playback issue rather than a bad recording.
