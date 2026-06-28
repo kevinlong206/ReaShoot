@@ -1,6 +1,20 @@
 #import <AVFoundation/AVFoundation.h>
 #import <Cocoa/Cocoa.h>
 #import <ImageIO/ImageIO.h>
+#import <LiveKitWebRTC/RTCConfiguration.h>
+#import <LiveKitWebRTC/RTCDataChannel.h>
+#import <LiveKitWebRTC/RTCDefaultVideoDecoderFactory.h>
+#import <LiveKitWebRTC/RTCIceCandidate.h>
+#import <LiveKitWebRTC/RTCMediaConstraints.h>
+#import <LiveKitWebRTC/RTCMediaStream.h>
+#import <LiveKitWebRTC/RTCMediaStreamTrack.h>
+#import <LiveKitWebRTC/RTCMTLVideoView.h>
+#import <LiveKitWebRTC/RTCPeerConnection.h>
+#import <LiveKitWebRTC/RTCPeerConnectionFactory.h>
+#import <LiveKitWebRTC/RTCRtpReceiver.h>
+#import <LiveKitWebRTC/RTCRtpTransceiver.h>
+#import <LiveKitWebRTC/RTCSessionDescription.h>
+#import <LiveKitWebRTC/RTCVideoTrack.h>
 #import <QuartzCore/QuartzCore.h>
 
 #include <algorithm>
@@ -608,7 +622,7 @@ void setVideoEnabled(bool enabled);
 
 } // namespace
 
-@interface KlongVideoRecorder : NSObject <AVCaptureFileOutputRecordingDelegate, NSURLSessionDataDelegate>
+@interface KlongVideoRecorder : NSObject <AVCaptureFileOutputRecordingDelegate, NSURLSessionDataDelegate, LKRTCPeerConnectionDelegate>
 @property(nonatomic, strong) AVCaptureSession *session;
 @property(nonatomic, strong) AVCaptureMovieFileOutput *movieOutput;
 @property(nonatomic, strong) AVCaptureVideoPreviewLayer *previewLayer;
@@ -636,6 +650,11 @@ void setVideoEnabled(bool enabled);
 @property(nonatomic, strong) NSTextField *formatLabel;
 @property(nonatomic, strong) NSTextField *statusLabel;
 @property(nonatomic, strong) NSImageView *remotePreviewView;
+@property(nonatomic, strong) LKRTCMTLVideoView *webRTCPreviewView;
+@property(nonatomic, strong) LKRTCPeerConnectionFactory *webRTCPeerConnectionFactory;
+@property(nonatomic, strong) LKRTCPeerConnection *webRTCPeerConnection;
+@property(nonatomic, strong) LKRTCVideoTrack *webRTCVideoTrack;
+@property(nonatomic, strong) NSMutableArray<LKRTCIceCandidate *> *webRTCLocalIceCandidates;
 @property(nonatomic, strong) NSURLSession *remotePreviewSession;
 @property(nonatomic, strong) NSURLSessionDataTask *remotePreviewTask;
 @property(nonatomic, strong) NSMutableData *remotePreviewBuffer;
@@ -649,6 +668,11 @@ void setVideoEnabled(bool enabled);
 @property(nonatomic, assign) CFTimeInterval remotePreviewLastDisplayTime;
 @property(nonatomic, assign) CFTimeInterval remotePreviewLastStatusTime;
 @property(nonatomic, assign) BOOL remotePreviewUsingSnapshotFallback;
+@property(nonatomic, assign) BOOL webRTCPreviewStarting;
+@property(nonatomic, assign) BOOL webRTCPreviewActive;
+@property(nonatomic, assign) BOOL webRTCPreviewFailed;
+@property(nonatomic, copy) NSString *webRTCPreviewFallbackReason;
+@property(nonatomic, strong) dispatch_semaphore_t webRTCIceGatheringSemaphore;
 @property(nonatomic, copy) void (^startCompletion)(void);
 @property(nonatomic, copy) void (^stopCompletion)(NSString *path, NSError *error);
 @property(nonatomic, copy) NSString *activeOutputPath;
@@ -1443,7 +1467,10 @@ void setVideoEnabled(bool enabled);
 
   [self.formatDiagnosticPopup removeAllItems];
   if (g_useIPhoneSource) {
-    [self.formatDiagnosticPopup addItemWithTitle:@"Preview: /preview.bin, /preview.mjpg, or /preview.jpg"];
+    [self.formatDiagnosticPopup addItemWithTitle:@"Preview: WebRTC first; /preview.bin fallback"];
+    [self.formatDiagnosticPopup addItemWithTitle:[NSString stringWithFormat:@"Transport: %@",
+                                                    self.webRTCPreviewActive ? @"WebRTC" :
+                                                    (self.remotePreviewTask ? @"binary stream fallback" : @"not connected")]];
     [self.formatDiagnosticPopup addItemWithTitle:@"Recording: full-resolution iPhone .mov"];
     [self.formatDiagnosticPopup selectItemAtIndex:0];
     return;
@@ -1701,6 +1728,9 @@ void setVideoEnabled(bool enabled);
     }
     NSString *message = [output stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
     [self setStatus:message.length > 0 ? [@"iPhone: " stringByAppendingString:message] : @"iPhone connection OK"];
+    [self stopRemotePreview];
+    self.webRTCPreviewFailed = NO;
+    self.webRTCPreviewFallbackReason = nil;
     [self startRemotePreview];
   }];
 }
@@ -1873,6 +1903,11 @@ void setVideoEnabled(bool enabled);
     self.remotePreviewView.hidden = YES;
     [self.previewView addSubview:self.remotePreviewView];
 
+    self.webRTCPreviewView = [[LKRTCMTLVideoView alloc] initWithFrame:self.previewView.bounds];
+    self.webRTCPreviewView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    self.webRTCPreviewView.hidden = YES;
+    [self.previewView addSubview:self.webRTCPreviewView positioned:NSWindowBelow relativeTo:self.remotePreviewView];
+
     self.sourcePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(12, 101, frame.size.width - 132, 24) pullsDown:NO];
     self.sourcePopup.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
     self.sourcePopup.target = self;
@@ -2026,6 +2061,254 @@ void setVideoEnabled(bool enabled);
   return [NSURL URLWithString:urlString];
 }
 
+- (NSString *)answerForWebRTCOffer:(NSString *)offer error:(NSError **)error {
+  NSString *tempPath = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"iphone-preview-offer-%@.sdp", NSUUID.UUID.UUIDString]];
+  if (![offer writeToFile:tempPath atomically:YES encoding:NSUTF8StringEncoding error:error]) {
+    return nil;
+  }
+  @try {
+    NSArray<NSString *> *arguments = @[
+      @"--token",
+      [NSString stringWithUTF8String:g_iPhoneToken.c_str()],
+      @"--offer-file",
+      tempPath
+    ];
+    NSString *output = [self runVideoSyncCommand:@"webrtc-answer" extraArguments:arguments error:error];
+    return [output stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+  } @finally {
+    [[NSFileManager defaultManager] removeItemAtPath:tempPath error:nil];
+  }
+}
+
+- (void)startBinaryRemotePreviewFallback {
+  if (!g_useIPhoneSource || self.showingPlayback || self.remotePreviewTask) {
+    return;
+  }
+  self.remotePreviewView.hidden = NO;
+  self.webRTCPreviewView.hidden = YES;
+  [self startRemotePreviewStream];
+}
+
+- (void)sendWebRTCIceCandidateToIPhone:(LKRTCIceCandidate *)candidate {
+  if (g_iPhoneHost.empty() || g_iPhoneToken.empty() || candidate.sdp.length == 0) {
+    return;
+  }
+  NSMutableArray<NSString *> *arguments = [NSMutableArray arrayWithObjects:
+    @"--token", [NSString stringWithUTF8String:g_iPhoneToken.c_str()],
+    @"--candidate", candidate.sdp,
+    @"--mline", [NSString stringWithFormat:@"%d", candidate.sdpMLineIndex],
+    nil];
+  if (candidate.sdpMid.length > 0) {
+    [arguments addObjectsFromArray:@[ @"--mid", candidate.sdpMid ]];
+  }
+  [self runVideoSyncCommandAsync:@"webrtc-candidate" extraArguments:arguments completion:^(NSString *output, NSError *error) {
+    (void)output;
+    if (error && g_useIPhoneSource && !self.showingPlayback && !self.recordingVisualState) {
+      [self setStatus:@"Preview: WebRTC ICE candidate failed"];
+    }
+  }];
+}
+
+- (NSString *)webRTCAnswerSDPByRemovingInlineCandidates:(NSString *)answerSDP
+                                             candidates:(NSArray<LKRTCIceCandidate *> **)candidates {
+  NSMutableArray<NSString *> *keptLines = [NSMutableArray array];
+  NSMutableArray<LKRTCIceCandidate *> *parsedCandidates = [NSMutableArray array];
+  NSString *currentMid = nil;
+  int currentMLineIndex = -1;
+
+  for (NSString *rawLine in [answerSDP componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
+    NSString *line = [rawLine stringByTrimmingCharactersInSet:[NSCharacterSet characterSetWithCharactersInString:@"\r"]];
+    if (line.length == 0) {
+      continue;
+    }
+    if ([line hasPrefix:@"m="]) {
+      currentMLineIndex += 1;
+    }
+    if ([line hasPrefix:@"a=mid:"]) {
+      currentMid = [line substringFromIndex:@"a=mid:".length];
+    }
+    if ([line hasPrefix:@"a=candidate:"]) {
+      NSString *candidateSDP = [line substringFromIndex:@"a=".length];
+      LKRTCIceCandidate *candidate = [[LKRTCIceCandidate alloc] initWithSdp:candidateSDP
+                                                               sdpMLineIndex:MAX(currentMLineIndex, 0)
+                                                                      sdpMid:currentMid];
+      [parsedCandidates addObject:candidate];
+      continue;
+    }
+    if ([line hasPrefix:@"a=end-of-candidates"]) {
+      continue;
+    }
+    [keptLines addObject:line];
+  }
+
+  if (candidates) {
+    *candidates = parsedCandidates;
+  }
+  return [[keptLines componentsJoinedByString:@"\r\n"] stringByAppendingString:@"\r\n"];
+}
+
+- (void)addRemoteWebRTCIceCandidates:(NSArray<LKRTCIceCandidate *> *)candidates
+                    toPeerConnection:(LKRTCPeerConnection *)peerConnection {
+  for (LKRTCIceCandidate *candidate in candidates) {
+    [peerConnection addIceCandidate:candidate completionHandler:^(NSError *error) {
+      if (error && g_useIPhoneSource && !self.showingPlayback && !self.recordingVisualState) {
+        [self setStatus:@"Preview: WebRTC remote ICE failed"];
+      }
+    }];
+  }
+}
+
+- (void)startWebRTCPreviewIfNeeded {
+  if (!g_useIPhoneSource || self.showingPlayback || self.webRTCPeerConnection || self.webRTCPreviewStarting || self.webRTCPreviewFailed) {
+    return;
+  }
+  [self persistIPhoneSettings];
+  if (g_iPhoneHost.empty() || g_iPhoneToken.empty()) {
+    [self startBinaryRemotePreviewFallback];
+    return;
+  }
+
+  self.webRTCPreviewStarting = YES;
+  self.webRTCPreviewActive = NO;
+  self.webRTCPreviewFallbackReason = nil;
+  self.webRTCLocalIceCandidates = [NSMutableArray array];
+  self.webRTCIceGatheringSemaphore = dispatch_semaphore_create(0);
+  self.webRTCPreviewView.hidden = NO;
+  self.remotePreviewView.hidden = YES;
+  [self setStatus:@"Preview: WebRTC connecting"];
+
+  if (!self.webRTCPeerConnectionFactory) {
+    self.webRTCPeerConnectionFactory = [[LKRTCPeerConnectionFactory alloc] init];
+  }
+
+  LKRTCConfiguration *configuration = [[LKRTCConfiguration alloc] init];
+  configuration.sdpSemantics = LKRTCSdpSemanticsUnifiedPlan;
+  configuration.iceServers = @[];
+  LKRTCMediaConstraints *constraints = [[LKRTCMediaConstraints alloc] initWithMandatoryConstraints:nil optionalConstraints:nil];
+  LKRTCPeerConnection *peerConnection = [self.webRTCPeerConnectionFactory peerConnectionWithConfiguration:configuration
+                                                                                              constraints:constraints
+                                                                                                 delegate:self];
+  if (!peerConnection) {
+    self.webRTCPreviewStarting = NO;
+    self.webRTCPreviewFailed = YES;
+    self.webRTCPreviewFallbackReason = @"WebRTC unavailable";
+    [self setStatus:@"Preview: WebRTC unavailable; using stream"];
+    [self startBinaryRemotePreviewFallback];
+    return;
+  }
+  self.webRTCPeerConnection = peerConnection;
+
+  LKRTCRtpTransceiverInit *transceiverInit = [[LKRTCRtpTransceiverInit alloc] init];
+  transceiverInit.direction = LKRTCRtpTransceiverDirectionRecvOnly;
+  [peerConnection addTransceiverOfType:LKRTCRtpMediaTypeVideo init:transceiverInit];
+
+  __weak KlongVideoRecorder *weakSelf = self;
+  [peerConnection offerForConstraints:constraints completionHandler:^(LKRTCSessionDescription *offer, NSError *offerError) {
+    KlongVideoRecorder *strongSelf = weakSelf;
+    if (!strongSelf || !offer || offerError) {
+      dispatch_async(dispatch_get_main_queue(), ^{
+        [strongSelf stopWebRTCPreview];
+        strongSelf.webRTCPreviewFailed = YES;
+        strongSelf.webRTCPreviewFallbackReason = @"WebRTC offer failed";
+        [strongSelf setStatus:@"Preview: WebRTC offer failed; using stream"];
+        [strongSelf startBinaryRemotePreviewFallback];
+      });
+      return;
+    }
+    __weak LKRTCPeerConnection *weakPeerConnection = peerConnection;
+    [peerConnection setLocalDescription:offer completionHandler:^(NSError *localError) {
+      LKRTCPeerConnection *strongPeerConnection = weakPeerConnection;
+      if (!strongPeerConnection) {
+        return;
+      }
+      if (localError) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+          [strongSelf stopWebRTCPreview];
+          strongSelf.webRTCPreviewFailed = YES;
+          strongSelf.webRTCPreviewFallbackReason = @"WebRTC local setup failed";
+          [strongSelf setStatus:@"Preview: WebRTC local setup failed; using stream"];
+          [strongSelf startBinaryRemotePreviewFallback];
+        });
+        return;
+      }
+
+      dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        dispatch_semaphore_wait(strongSelf.webRTCIceGatheringSemaphore, dispatch_time(DISPATCH_TIME_NOW, static_cast<int64_t>(3.0 * NSEC_PER_SEC)));
+        NSString *localSDP = strongPeerConnection.localDescription.sdp ?: offer.sdp;
+        const NSUInteger localCandidateCount = strongSelf.webRTCLocalIceCandidates.count;
+        dispatch_async(dispatch_get_main_queue(), ^{
+          if (g_useIPhoneSource && !strongSelf.showingPlayback && !strongSelf.recordingVisualState) {
+            [strongSelf setStatus:[NSString stringWithFormat:@"Preview: WebRTC signaling (%lu local ICE)",
+                                                             static_cast<unsigned long>(localCandidateCount)]];
+          }
+        });
+        NSError *answerError = nil;
+        NSString *answerSDP = [strongSelf answerForWebRTCOffer:localSDP error:&answerError];
+        if (answerError || answerSDP.length == 0) {
+          dispatch_async(dispatch_get_main_queue(), ^{
+            [strongSelf stopWebRTCPreview];
+            strongSelf.webRTCPreviewFailed = YES;
+            strongSelf.webRTCPreviewFallbackReason = @"WebRTC signaling failed";
+            [strongSelf setStatus:@"Preview: WebRTC signaling failed; using stream"];
+            [strongSelf startBinaryRemotePreviewFallback];
+          });
+          return;
+        }
+        NSArray<LKRTCIceCandidate *> *remoteCandidates = @[];
+        NSString *answerWithoutCandidates = [strongSelf webRTCAnswerSDPByRemovingInlineCandidates:answerSDP candidates:&remoteCandidates];
+        LKRTCSessionDescription *answer = [[LKRTCSessionDescription alloc] initWithType:LKRTCSdpTypeAnswer sdp:answerWithoutCandidates];
+        [strongPeerConnection setRemoteDescription:answer completionHandler:^(NSError *remoteError) {
+          dispatch_async(dispatch_get_main_queue(), ^{
+            strongSelf.webRTCPreviewStarting = NO;
+            if (remoteError) {
+              [strongSelf stopWebRTCPreview];
+              strongSelf.webRTCPreviewFailed = YES;
+              strongSelf.webRTCPreviewFallbackReason = @"WebRTC answer failed";
+              [strongSelf setStatus:@"Preview: WebRTC answer failed; using stream"];
+              [strongSelf startBinaryRemotePreviewFallback];
+              return;
+            }
+            strongSelf.webRTCPreviewActive = YES;
+            strongSelf.webRTCPreviewFailed = NO;
+            strongSelf.webRTCPreviewFallbackReason = nil;
+            strongSelf.webRTCPreviewView.hidden = NO;
+            strongSelf.remotePreviewView.hidden = YES;
+            [strongSelf stopRemotePreviewStreamOnly];
+            [strongSelf setStatus:@"Preview: WebRTC"];
+            [strongSelf addRemoteWebRTCIceCandidates:remoteCandidates toPeerConnection:strongPeerConnection];
+            NSArray<LKRTCIceCandidate *> *candidates = [strongSelf.webRTCLocalIceCandidates copy];
+            for (LKRTCIceCandidate *candidate in candidates) {
+              [strongSelf sendWebRTCIceCandidateToIPhone:candidate];
+            }
+          });
+        }];
+      });
+    }];
+  }];
+}
+
+- (void)stopWebRTCPreview {
+  self.webRTCPreviewStarting = NO;
+  self.webRTCPreviewActive = NO;
+  if (self.webRTCVideoTrack && self.webRTCPreviewView) {
+    [self.webRTCVideoTrack removeRenderer:self.webRTCPreviewView];
+  }
+  self.webRTCVideoTrack = nil;
+  self.webRTCLocalIceCandidates = nil;
+  [self.webRTCPeerConnection close];
+  self.webRTCPeerConnection = nil;
+  self.webRTCIceGatheringSemaphore = nil;
+  self.webRTCPreviewView.hidden = YES;
+  if (!g_iPhoneHost.empty() && !g_iPhoneToken.empty()) {
+    [self runVideoSyncCommandAsync:@"stop-webrtc"
+                    extraArguments:@[ @"--token", [NSString stringWithUTF8String:g_iPhoneToken.c_str()] ]
+                        completion:^(NSString *output, NSError *error) {
+      (void)output;
+      (void)error;
+    }];
+  }
+}
+
 - (NSURL *)remotePreviewStreamURL {
   [self persistIPhoneSettings];
   if (g_iPhoneHost.empty() || g_iPhoneToken.empty()) {
@@ -2036,6 +2319,18 @@ void setVideoEnabled(bool enabled);
                                                    g_iPhoneHttpPort.c_str(),
                                                    [NSString stringWithUTF8String:g_iPhoneToken.c_str()]];
   return [NSURL URLWithString:urlString];
+}
+
+- (void)stopRemotePreviewStreamOnly {
+  self.remotePreviewStreaming = NO;
+  [self.remotePreviewTask cancel];
+  self.remotePreviewTask = nil;
+  [self.remotePreviewSession invalidateAndCancel];
+  self.remotePreviewSession = nil;
+  self.remotePreviewBuffer = nil;
+  self.remotePreviewDecoding = NO;
+  self.remotePreviewUsingSnapshotFallback = NO;
+  [self refreshFormatDiagnosticMenu];
 }
 
 - (void)startRemotePreviewStream {
@@ -2107,21 +2402,26 @@ void setVideoEnabled(bool enabled);
   if (!g_useIPhoneSource) {
     return;
   }
-  self.remotePreviewView.hidden = NO;
+  if (!self.remotePreviewTask && !self.webRTCPeerConnection && !self.webRTCPreviewStarting) {
+    self.webRTCPreviewFailed = NO;
+    self.webRTCPreviewFallbackReason = nil;
+  }
   self.previewLayer.hidden = YES;
-  [self startRemotePreviewStream];
+  [self startWebRTCPreviewIfNeeded];
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, static_cast<int64_t>(4.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+    if (g_useIPhoneSource && !self.showingPlayback && self.webRTCPreviewFailed && !self.webRTCPeerConnection && !self.webRTCPreviewStarting && !self.remotePreviewTask) {
+      [self startBinaryRemotePreviewFallback];
+    }
+  });
 }
 
 - (void)stopRemotePreview {
-  self.remotePreviewStreaming = NO;
-  [self.remotePreviewTask cancel];
-  self.remotePreviewTask = nil;
-  [self.remotePreviewSession invalidateAndCancel];
-  self.remotePreviewSession = nil;
-  self.remotePreviewBuffer = nil;
-  self.remotePreviewDecoding = NO;
-  self.remotePreviewUsingSnapshotFallback = NO;
+  [self stopWebRTCPreview];
+  [self stopRemotePreviewStreamOnly];
+  self.webRTCPreviewFailed = NO;
+  self.webRTCPreviewFallbackReason = nil;
   self.remotePreviewView.hidden = YES;
+  [self refreshFormatDiagnosticMenu];
 }
 
 - (void)URLSession:(NSURLSession *)session dataTask:(NSURLSessionDataTask *)dataTask didReceiveData:(NSData *)data {
@@ -2224,10 +2524,107 @@ void setVideoEnabled(bool enabled);
   self.remotePreviewFramesDisplayedAtLastUpdate = self.remotePreviewFramesDisplayed;
   self.remotePreviewLastStatusTime = now;
   NSString *safe = g_activeTransportRecording ? @" safe" : @"";
-  [self setStatus:[NSString stringWithFormat:@"Preview: stream%@, %lu fps, dropped %lu",
+  NSString *transport = self.webRTCPreviewFallbackReason.length > 0 ? [NSString stringWithFormat:@"stream fallback (%@)", self.webRTCPreviewFallbackReason] : @"stream";
+  [self setStatus:[NSString stringWithFormat:@"Preview: %@%@, %lu fps, dropped %lu",
+                                             transport,
                                              safe,
                                              static_cast<unsigned long>(displayedDelta),
                                              static_cast<unsigned long>(self.remotePreviewFramesDropped)]];
+}
+
+- (void)peerConnection:(LKRTCPeerConnection *)peerConnection didChangeSignalingState:(LKRTCSignalingState)stateChanged {
+  (void)peerConnection;
+  (void)stateChanged;
+}
+
+- (void)peerConnection:(LKRTCPeerConnection *)peerConnection didAddStream:(LKRTCMediaStream *)stream {
+  (void)peerConnection;
+  (void)stream;
+}
+
+- (void)peerConnection:(LKRTCPeerConnection *)peerConnection didRemoveStream:(LKRTCMediaStream *)stream {
+  (void)peerConnection;
+  (void)stream;
+}
+
+- (void)peerConnectionShouldNegotiate:(LKRTCPeerConnection *)peerConnection {
+  (void)peerConnection;
+}
+
+- (void)peerConnection:(LKRTCPeerConnection *)peerConnection didChangeIceConnectionState:(LKRTCIceConnectionState)newState {
+  (void)peerConnection;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (!g_useIPhoneSource || self.recordingVisualState) {
+      return;
+    }
+    switch (newState) {
+      case LKRTCIceConnectionStateConnected:
+      case LKRTCIceConnectionStateCompleted:
+        [self setStatus:@"Preview: WebRTC connected"];
+        break;
+      case LKRTCIceConnectionStateFailed:
+      case LKRTCIceConnectionStateDisconnected:
+        [self setStatus:@"Preview: WebRTC disconnected"];
+        break;
+      default:
+        break;
+    }
+  });
+}
+
+- (void)peerConnection:(LKRTCPeerConnection *)peerConnection didChangeIceGatheringState:(LKRTCIceGatheringState)newState {
+  (void)peerConnection;
+  if (newState == LKRTCIceGatheringStateComplete && self.webRTCIceGatheringSemaphore) {
+    dispatch_semaphore_signal(self.webRTCIceGatheringSemaphore);
+  }
+}
+
+- (void)peerConnection:(LKRTCPeerConnection *)peerConnection didGenerateIceCandidate:(LKRTCIceCandidate *)candidate {
+  (void)peerConnection;
+  @synchronized(self) {
+    if (!self.webRTCLocalIceCandidates) {
+      self.webRTCLocalIceCandidates = [NSMutableArray array];
+    }
+    [self.webRTCLocalIceCandidates addObject:candidate];
+  }
+  if (self.webRTCPreviewActive) {
+    [self sendWebRTCIceCandidateToIPhone:candidate];
+  }
+}
+
+- (void)peerConnection:(LKRTCPeerConnection *)peerConnection didRemoveIceCandidates:(NSArray<LKRTCIceCandidate *> *)candidates {
+  (void)peerConnection;
+  (void)candidates;
+}
+
+- (void)peerConnection:(LKRTCPeerConnection *)peerConnection didOpenDataChannel:(LKRTCDataChannel *)dataChannel {
+  (void)peerConnection;
+  (void)dataChannel;
+}
+
+- (void)peerConnection:(LKRTCPeerConnection *)peerConnection didAddReceiver:(LKRTCRtpReceiver *)rtpReceiver streams:(NSArray<LKRTCMediaStream *> *)mediaStreams {
+  (void)peerConnection;
+  (void)mediaStreams;
+  LKRTCMediaStreamTrack *track = rtpReceiver.track;
+  if (![track isKindOfClass:LKRTCVideoTrack.class]) {
+    return;
+  }
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (self.webRTCVideoTrack && self.webRTCPreviewView) {
+      [self.webRTCVideoTrack removeRenderer:self.webRTCPreviewView];
+    }
+    self.webRTCVideoTrack = (LKRTCVideoTrack *)track;
+    [self.webRTCVideoTrack addRenderer:self.webRTCPreviewView];
+    self.webRTCPreviewView.hidden = NO;
+    self.remotePreviewView.hidden = YES;
+    self.webRTCPreviewActive = YES;
+    [self setStatus:@"Preview: WebRTC video"];
+  });
+}
+
+- (void)peerConnection:(LKRTCPeerConnection *)peerConnection didRemoveReceiver:(LKRTCRtpReceiver *)rtpReceiver {
+  (void)peerConnection;
+  (void)rtpReceiver;
 }
 
 - (void)showLivePreview {

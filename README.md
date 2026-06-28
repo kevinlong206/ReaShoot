@@ -29,7 +29,7 @@ macOS-only REAPER extension MVP for recording one webcam/video source in sync wi
 - Shows load/record/finalize/import state in the preview status label instead of console chatter.
 - Places recorded video using AVFoundation's actual recording-start callback to compensate for capture startup latency.
 - Can select an `iPhone Video Sync` source that controls the companion iPhone app for 4K recording, low-resolution Wi-Fi preview, download, and timeline insertion.
-- The iPhone source uses a persistent low-resolution binary JPEG preview stream instead of repeated snapshot polling, decodes frames off the main thread, drops stale frames, and lowers preview rate while REAPER records. MJPEG and snapshot endpoints remain available as fallbacks/debugging aids.
+- The iPhone source first attempts an experimental low-latency WebRTC preview using the bundled `LiveKitWebRTC.framework`. If that fails, it falls back to the persistent low-resolution binary JPEG preview stream, which decodes frames off the main thread, drops stale frames, and lowers preview rate while REAPER records. MJPEG and snapshot endpoints remain available as fallbacks/debugging aids.
 - For the iPhone source, the dock includes capture profile controls for resolution, FPS, orientation, and social aspect ratio. Changing a profile control sends the new profile to the iPhone immediately when paired.
 
 ## Build
@@ -64,7 +64,7 @@ codesign --force --sign - "$HOME/Library/Application Support/REAPER/UserPlugins/
 - REAPER remains responsible for production audio recording and mixing; camera audio is captured as a sync/alignment reference.
 - Camera and microphone permission are requested the first time the preview/session is opened.
 - Selected camera input is persisted in REAPER ext state.
-- The iPhone source builds and installs a bundled `video-sync-mac` helper next to the REAPER extension dylib.
+- The iPhone source builds and installs a bundled `video-sync-mac` helper and `LiveKitWebRTC.framework` next to the REAPER extension dylib.
 - To use the iPhone source, launch the iPhone app, select `iPhone Video Sync` in the REAPER dock, click `iPhone Setup`, click `Discover`, enter the pairing code shown on the iPhone, click `Pair`, then click `Test` to verify preview/control before recording.
 - The iPhone app shows the currently configured capture profile. Aspect ratio is currently metadata/framing intent; resolution, FPS, and orientation are applied on the iPhone capture session.
 - Captures are written under `Video Recordings` in the saved project directory, or under REAPER's resource path for unsaved projects.

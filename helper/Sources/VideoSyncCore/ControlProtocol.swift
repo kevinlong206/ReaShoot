@@ -10,6 +10,9 @@ public enum CommandType: String, Codable, Sendable {
     case startRecording
     case stopRecording
     case transferComplete
+    case startWebRTCPreview
+    case addWebRTCIceCandidate
+    case stopWebRTCPreview
     case ping
 }
 
@@ -19,6 +22,9 @@ public enum EventType: String, Codable, Sendable {
     case recordingStarted
     case recordingStopped
     case transferAcknowledged
+    case webRTCPreviewAnswer
+    case webRTCIceCandidateAdded
+    case webRTCPreviewStopped
     case pong
     case error
 }
@@ -32,6 +38,10 @@ public struct ControlCommand: Codable, Equatable, Sendable {
     public var sessionID: String?
     public var recordingID: String?
     public var captureProfile: CaptureProfile?
+    public var webRTCOfferSDP: String?
+    public var webRTCIceCandidateSDP: String?
+    public var webRTCIceCandidateMid: String?
+    public var webRTCIceCandidateMLineIndex: Int32?
     public var metadata: [String: String]
 
     public init(
@@ -43,6 +53,10 @@ public struct ControlCommand: Codable, Equatable, Sendable {
         sessionID: String? = nil,
         recordingID: String? = nil,
         captureProfile: CaptureProfile? = nil,
+        webRTCOfferSDP: String? = nil,
+        webRTCIceCandidateSDP: String? = nil,
+        webRTCIceCandidateMid: String? = nil,
+        webRTCIceCandidateMLineIndex: Int32? = nil,
         metadata: [String: String] = [:]
     ) {
         self.requestID = requestID
@@ -53,6 +67,10 @@ public struct ControlCommand: Codable, Equatable, Sendable {
         self.sessionID = sessionID
         self.recordingID = recordingID
         self.captureProfile = captureProfile
+        self.webRTCOfferSDP = webRTCOfferSDP
+        self.webRTCIceCandidateSDP = webRTCIceCandidateSDP
+        self.webRTCIceCandidateMid = webRTCIceCandidateMid
+        self.webRTCIceCandidateMLineIndex = webRTCIceCandidateMLineIndex
         self.metadata = metadata
     }
 }
@@ -135,6 +153,7 @@ public struct ControlEvent: Codable, Equatable, Sendable {
     public var recording: RecordingDescriptor?
     public var preview: PreviewDescriptor?
     public var captureProfile: CaptureProfile?
+    public var webRTCAnswerSDP: String?
     public var message: String?
 
     public init(
@@ -145,6 +164,7 @@ public struct ControlEvent: Codable, Equatable, Sendable {
         recording: RecordingDescriptor? = nil,
         preview: PreviewDescriptor? = nil,
         captureProfile: CaptureProfile? = nil,
+        webRTCAnswerSDP: String? = nil,
         message: String? = nil
     ) {
         self.requestID = requestID
@@ -154,6 +174,7 @@ public struct ControlEvent: Codable, Equatable, Sendable {
         self.recording = recording
         self.preview = preview
         self.captureProfile = captureProfile
+        self.webRTCAnswerSDP = webRTCAnswerSDP
         self.message = message
     }
 }

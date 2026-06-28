@@ -76,6 +76,38 @@ struct VideoSyncMacCLI {
                 throw ControlClientError.unexpectedEvent(event)
             }
             print(event.message ?? event.type.rawValue)
+        case "webrtc-answer":
+            let offerPath = required(args.value(after: "--offer-file"), "--offer-file")
+            let offer = try String(contentsOfFile: offerPath, encoding: .utf8)
+            let event = try await send(args, type: .startWebRTCPreview) {
+                ControlCommand(type: .startWebRTCPreview, token: required(args.value(after: "--token"), "--token"), webRTCOfferSDP: offer)
+            }
+            guard event.type == .webRTCPreviewAnswer, let answer = event.webRTCAnswerSDP else {
+                throw ControlClientError.unexpectedEvent(event)
+            }
+            print(answer)
+        case "stop-webrtc":
+            let event = try await send(args, type: .stopWebRTCPreview) {
+                ControlCommand(type: .stopWebRTCPreview, token: required(args.value(after: "--token"), "--token"))
+            }
+            guard event.type == .webRTCPreviewStopped else {
+                throw ControlClientError.unexpectedEvent(event)
+            }
+            print(event.message ?? event.type.rawValue)
+        case "webrtc-candidate":
+            let event = try await send(args, type: .addWebRTCIceCandidate) {
+                ControlCommand(
+                    type: .addWebRTCIceCandidate,
+                    token: required(args.value(after: "--token"), "--token"),
+                    webRTCIceCandidateSDP: required(args.value(after: "--candidate"), "--candidate"),
+                    webRTCIceCandidateMid: args.value(after: "--mid"),
+                    webRTCIceCandidateMLineIndex: Int32(args.int(after: "--mline", default: 0))
+                )
+            }
+            guard event.type == .webRTCIceCandidateAdded else {
+                throw ControlClientError.unexpectedEvent(event)
+            }
+            print(event.message ?? "candidate accepted")
         case "help", "--help", "-h":
             printHelp()
         default:
@@ -111,6 +143,9 @@ struct VideoSyncMacCLI {
           start --host HOST [--port 8787] --token TOKEN [--session SESSION]
           stop --host HOST [--port 8787] [--http-port 8788] --token TOKEN [--download-dir DIR]
           ping --host HOST [--port 8787] [--token TOKEN]
+          webrtc-answer --host HOST [--port 8787] --token TOKEN --offer-file PATH
+          webrtc-candidate --host HOST [--port 8787] --token TOKEN --candidate SDP [--mid MID] [--mline INDEX]
+          stop-webrtc --host HOST [--port 8787] --token TOKEN
         """)
     }
 }
