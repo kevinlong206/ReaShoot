@@ -80,21 +80,47 @@ public struct CaptureProfile: Codable, Equatable, Sendable {
     public var fps: Int
     public var orientation: String
     public var aspectRatio: String
+    public var lens: String
+    public var zoomFactor: Double
+
+    private enum CodingKeys: String, CodingKey {
+        case resolution
+        case fps
+        case orientation
+        case aspectRatio
+        case lens
+        case zoomFactor
+    }
 
     public init(
         resolution: String = "4K",
         fps: Int = 30,
         orientation: String = "portrait",
-        aspectRatio: String = "9:16"
+        aspectRatio: String = "9:16",
+        lens: String = "wide",
+        zoomFactor: Double = 1.0
     ) {
         self.resolution = resolution
         self.fps = fps
         self.orientation = orientation
         self.aspectRatio = aspectRatio
+        self.lens = lens
+        self.zoomFactor = zoomFactor
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        resolution = try container.decodeIfPresent(String.self, forKey: .resolution) ?? "4K"
+        fps = try container.decodeIfPresent(Int.self, forKey: .fps) ?? 30
+        orientation = try container.decodeIfPresent(String.self, forKey: .orientation) ?? "portrait"
+        aspectRatio = try container.decodeIfPresent(String.self, forKey: .aspectRatio) ?? "9:16"
+        lens = try container.decodeIfPresent(String.self, forKey: .lens) ?? "wide"
+        zoomFactor = try container.decodeIfPresent(Double.self, forKey: .zoomFactor) ?? 1.0
     }
 
     public var displayName: String {
-        "\(resolution) \(fps) fps, \(orientation), \(aspectRatio)"
+        let zoom = String(format: "%.1fx", zoomFactor)
+        return "\(resolution) \(fps) fps, \(orientation), \(aspectRatio), \(lens), \(zoom)"
     }
 }
 

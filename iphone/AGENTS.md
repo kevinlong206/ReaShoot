@@ -106,6 +106,13 @@ Keep the iPhone unlocked with the Video Sync app open in the foreground, then ru
 ```sh
 swift run video-sync-mac ping --host kevin-long-iphone.local --port 8787
 
+swift run video-sync-mac configure \
+  --host kevin-long-iphone.local \
+  --port 8787 \
+  --token "$VIDEO_SYNC_TOKEN" \
+  --lens ultrawide \
+  --zoom 0.5
+
 swift run video-sync-mac start \
   --host kevin-long-iphone.local \
   --port 8787 \
@@ -132,6 +139,7 @@ Expected result: a `.mov` appears in `test-downloads`, and the CLI prints `downl
 - REAPER sends its own candidates back with `addWebRTCIceCandidate`.
 - The iPhone app status UI exposes a `Preview` row so agents/users can see whether WebRTC is active.
 - Keep the HTTP preview endpoints working as fallback while iterating on WebRTC.
+- Lens selection uses AVFoundation rear camera discovery. Not every iPhone exposes `ultrawide` or `telephoto`; unavailable lens requests should fail clearly instead of silently pretending they worked.
 
 ## Known issues and next work
 

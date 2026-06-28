@@ -25,4 +25,8 @@ struct CLIArguments {
     func int(after flag: String, default defaultValue: Int) -> Int {
         value(after: flag).flatMap(Int.init) ?? defaultValue
     }
+
+    func double(after flag: String, default defaultValue: Double) -> Double {
+        value(after: flag).flatMap(Double.init) ?? defaultValue
+    }
 }

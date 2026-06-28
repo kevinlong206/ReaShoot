@@ -72,6 +72,7 @@ If DerivedData changes, compute the app path with `xcodebuild -showBuildSettings
 - iPhone preview attempts WebRTC first using `LiveKitWebRTC.framework` and a docked `LKRTCMTLVideoView`. If WebRTC fails, REAPER falls back to `/preview.bin` binary JPEG streaming, then snapshot fallback if needed.
 - WebRTC signaling uses the existing authenticated control WebSocket. REAPER sends a receive-only offer, the iPhone returns an answer, REAPER strips inline iPhone ICE candidates before `setRemoteDescription`, adds them separately, and trickles Mac ICE candidates back with `addWebRTCIceCandidate`.
 - The iPhone app UI has a `Preview` row showing `Idle`, `WebRTC`, or `WebRTC failed`.
+- The iPhone capture profile includes resolution, FPS, orientation, aspect, lens, and zoom. Lens availability is hardware-dependent; zoom is clamped by AVFoundation and is not guaranteed optical for every value.
 - On session creation the extension prefers 4K30, falls back to stable 1080p30, then the highest available 30 fps device format. It reapplies the requested format after the session starts because some capture sessions can reset device timing.
 - AVFoundation records a single `.mov` with video and camera audio embedded. The extension inserts only one media item on the `Video Recorder` track.
 - The docked preview uses an `AVPlayerLayer` for video playback preview but mutes that internal player so audio is heard only through REAPER. Avoid aggressive per-timer exact seeking; the player should seek on source changes/playback start and only correct larger drift.

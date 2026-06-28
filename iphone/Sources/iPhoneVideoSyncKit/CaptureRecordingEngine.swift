@@ -16,11 +16,12 @@ public enum CaptureError: Error, LocalizedError {
     case alreadyRecording
     case notRecording
     case cannotChangeProfileWhileRecording
+    case lensUnavailable(String)
 
     public var errorDescription: String? {
         switch self {
         case .cameraUnavailable:
-            return "A 4K-capable rear camera is not available."
+            return "A rear camera is not available."
         case .cannotAddInput:
             return "The camera input could not be added to the capture session."
         case .cannotAddOutput:
@@ -33,6 +34,8 @@ public enum CaptureError: Error, LocalizedError {
             return "No recording is currently in progress."
         case .cannotChangeProfileWhileRecording:
             return "Capture profile cannot be changed while recording."
+        case .lensUnavailable(let lens):
+            return "The requested iPhone lens is not available: \(lens)."
         }
     }
 }
@@ -117,6 +120,7 @@ public final class CaptureRecordingEngine: NSObject, ObservableObject {
     private nonisolated let previewFrameStore = PreviewFrameStore()
     private let store: RecordingStore
     private var videoDevice: AVCaptureDevice?
+    private var videoInput: AVCaptureDeviceInput?
     private var activeRecordingID: String?
     private var stopContinuation: CheckedContinuation<RecordingFile, Error>?
 
@@ -135,15 +139,14 @@ public final class CaptureRecordingEngine: NSObject, ObservableObject {
         session.beginConfiguration()
         session.sessionPreset = preset(for: currentProfile.resolution)
 
-        guard let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else {
-            throw CaptureError.cameraUnavailable
-        }
+        let camera = try cameraDevice(for: currentProfile.lens)
         videoDevice = camera
         let videoInput = try AVCaptureDeviceInput(device: camera)
         guard session.canAddInput(videoInput) else {
             throw CaptureError.cannotAddInput
         }
         session.addInput(videoInput)
+        self.videoInput = videoInput
 
         if let microphone = AVCaptureDevice.default(for: .audio),
            let audioInput = try? AVCaptureDeviceInput(device: microphone),
@@ -187,13 +190,22 @@ public final class CaptureRecordingEngine: NSObject, ObservableObject {
         guard !movieOutput.isRecording else {
             throw CaptureError.cannotChangeProfileWhileRecording
         }
-        currentProfile = profile
+        var normalizedProfile = profile
+        normalizedProfile.lens = normalizedLens(profile.lens)
         guard isConfigured else {
+            currentProfile = normalizedProfile
             return
         }
         session.beginConfiguration()
-        session.sessionPreset = preset(for: profile.resolution)
-        applyCurrentProfileToSession()
+        do {
+            try switchCameraIfNeeded(for: normalizedProfile.lens)
+            currentProfile = normalizedProfile
+            session.sessionPreset = preset(for: normalizedProfile.resolution)
+            applyCurrentProfileToSession()
+        } catch {
+            session.commitConfiguration()
+            throw error
+        }
         session.commitConfiguration()
     }
 
@@ -244,6 +256,68 @@ public final class CaptureRecordingEngine: NSObject, ObservableObject {
         applyOrientation()
     }
 
+    private func normalizedLens(_ lens: String) -> String {
+        switch lens.lowercased().replacingOccurrences(of: "-", with: "").replacingOccurrences(of: "_", with: "") {
+        case "ultrawide":
+            return "ultrawide"
+        case "telephoto", "tele":
+            return "telephoto"
+        case "auto":
+            return "auto"
+        default:
+            return "wide"
+        }
+    }
+
+    private func cameraDevice(for lens: String) throws -> AVCaptureDevice {
+        let normalized = normalizedLens(lens)
+        let deviceTypes: [AVCaptureDevice.DeviceType]
+        switch normalized {
+        case "ultrawide":
+            deviceTypes = [.builtInUltraWideCamera]
+        case "telephoto":
+            deviceTypes = [.builtInTelephotoCamera]
+        case "auto":
+            deviceTypes = [.builtInTripleCamera, .builtInDualWideCamera, .builtInDualCamera, .builtInWideAngleCamera]
+        default:
+            deviceTypes = [.builtInWideAngleCamera]
+        }
+
+        let discovery = AVCaptureDevice.DiscoverySession(deviceTypes: deviceTypes, mediaType: .video, position: .back)
+        if let device = discovery.devices.first {
+            return device
+        }
+        if normalized == "wide", let fallback = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) {
+            return fallback
+        }
+        throw normalized == "wide" ? CaptureError.cameraUnavailable : CaptureError.lensUnavailable(normalized)
+    }
+
+    private func switchCameraIfNeeded(for lens: String) throws {
+        let camera = try cameraDevice(for: lens)
+        guard videoDevice?.uniqueID != camera.uniqueID else {
+            return
+        }
+
+        let newInput = try AVCaptureDeviceInput(device: camera)
+        let oldInput = videoInput
+        let oldDevice = videoDevice
+        if let oldInput {
+            session.removeInput(oldInput)
+        }
+        guard session.canAddInput(newInput) else {
+            if let oldInput, session.canAddInput(oldInput) {
+                session.addInput(oldInput)
+                videoInput = oldInput
+                videoDevice = oldDevice
+            }
+            throw CaptureError.cannotAddInput
+        }
+        session.addInput(newInput)
+        videoInput = newInput
+        videoDevice = camera
+    }
+
     private func applyFrameRateAndFormat() {
         guard let videoDevice else {
             return
@@ -269,6 +343,12 @@ public final class CaptureRecordingEngine: NSObject, ObservableObject {
             let frameDuration = CMTime(value: 1, timescale: CMTimeScale(currentProfile.fps))
             videoDevice.activeVideoMinFrameDuration = frameDuration
             videoDevice.activeVideoMaxFrameDuration = frameDuration
+
+            let minimumZoom = videoDevice.minAvailableVideoZoomFactor
+            let maximumZoom = videoDevice.maxAvailableVideoZoomFactor
+            let clampedZoom = min(max(currentProfile.zoomFactor, minimumZoom), maximumZoom)
+            videoDevice.videoZoomFactor = clampedZoom
+            currentProfile.zoomFactor = clampedZoom
         } catch {
             lastError = error.localizedDescription
         }

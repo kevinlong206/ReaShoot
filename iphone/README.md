@@ -42,6 +42,7 @@ Then run:
 
 ```sh
 swift run video-sync-mac ping --host kevin-long-iphone.local --port 8787
+swift run video-sync-mac configure --host kevin-long-iphone.local --port 8787 --token "$VIDEO_SYNC_TOKEN" --lens ultrawide --zoom 0.5
 swift run video-sync-mac start --host kevin-long-iphone.local --port 8787 --token "$VIDEO_SYNC_TOKEN" --session smoke-test
 sleep 3
 swift run video-sync-mac stop --host kevin-long-iphone.local --port 8787 --http-port 8788 --token "$VIDEO_SYNC_TOKEN" --download-dir test-downloads
@@ -62,6 +63,8 @@ http://HOST:8788/preview.bin?token=TOKEN
 `/preview.jpg` returns the latest JPEG frame. `/preview.mjpg` streams a multipart MJPEG preview, and `/preview.bin` streams the same JPEG frames with a 4-byte big-endian length prefix before each frame. Preview frames are capped to 640 px on the longest side and are separate from the 4K movie recording path.
 
 The control WebSocket also supports an experimental authenticated WebRTC preview offer/answer flow. REAPER sends a receive-only SDP offer with `startWebRTCPreview`; the iPhone app answers with a low-resolution video track fed from the same preview capture output. The HTTP preview endpoints remain available as fallback/debugging paths.
+
+Capture configuration supports hardware-dependent lens selection (`wide`, `ultrawide`, `telephoto`, `auto`) and zoom. Zoom is applied through AVFoundation and clamped to the selected camera's supported range.
 
 ## iOS background note
 

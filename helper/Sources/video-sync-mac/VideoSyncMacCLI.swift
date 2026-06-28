@@ -35,7 +35,9 @@ struct VideoSyncMacCLI {
                 resolution: args.value(after: "--resolution") ?? "4K",
                 fps: args.int(after: "--fps", default: 30),
                 orientation: args.value(after: "--orientation") ?? "portrait",
-                aspectRatio: args.value(after: "--aspect") ?? "9:16"
+                aspectRatio: args.value(after: "--aspect") ?? "9:16",
+                lens: args.value(after: "--lens") ?? "wide",
+                zoomFactor: args.double(after: "--zoom", default: 1.0)
             )
             let event = try await send(args, type: .configureCapture) {
                 ControlCommand(type: .configureCapture, token: required(args.value(after: "--token"), "--token"), captureProfile: profile)
@@ -139,7 +141,7 @@ struct VideoSyncMacCLI {
         video-sync-mac commands:
           discover [--timeout 3]
           pair --host HOST [--port 8787] --code CODE
-          configure --host HOST [--port 8787] --token TOKEN [--resolution 4K] [--fps 30] [--orientation portrait] [--aspect 9:16]
+          configure --host HOST [--port 8787] --token TOKEN [--resolution 4K] [--fps 30] [--orientation portrait] [--aspect 9:16] [--lens wide] [--zoom 1.0]
           start --host HOST [--port 8787] --token TOKEN [--session SESSION]
           stop --host HOST [--port 8787] [--http-port 8788] --token TOKEN [--download-dir DIR]
           ping --host HOST [--port 8787] [--token TOKEN]
