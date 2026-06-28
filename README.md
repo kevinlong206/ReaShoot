@@ -12,6 +12,8 @@ macOS-only REAPER extension MVP for recording one webcam/video source in sync wi
 - Shows a native macOS live preview window using AVFoundation.
 - Shows the active capture format below the preview, including resolution, frame rate, and codec/source format, and turns the status text red while recording.
 - Provides a camera selector for available macOS video inputs, including Continuity Camera when macOS exposes it.
+- Provides a format diagnostics dropdown showing whether 4K30 and 1080p30 are available plus every format AVFoundation exposes for the selected camera.
+- Automatically requests a stable capture format, preferring 4K30, then 1080p30, then the highest exposed 30 fps camera format.
 - Records camera audio into the `.mov` alongside video so the inserted item contains an alignment reference.
 - Starts video recording when REAPER enters record.
 - Stops video recording when REAPER leaves record.
@@ -21,6 +23,7 @@ macOS-only REAPER extension MVP for recording one webcam/video source in sync wi
 - Shows the preview in REAPER's docker.
 - Shows recorded video playback in the same preview panel when REAPER plays over an item on the `Video Recorder` track.
 - Mutes the docked preview's internal player so playback audio comes only from REAPER.
+- Lets the docked playback player run smoothly and only re-seeks on source changes, playback start, or larger drift.
 - Inserts the finalized `.mov` onto a `Video Recorder` track at the record-start timeline position.
 - After insertion, compares the movie's embedded camera audio against overlapping non-video REAPER items and shifts the video item to the strongest correlation match.
 - Shows load/record/finalize/import state in the preview status label instead of console chatter.

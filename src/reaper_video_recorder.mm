@@ -594,15 +594,18 @@ void setVideoEnabled(bool enabled);
 @property(nonatomic, strong) AVPlayer *player;
 @property(nonatomic, strong) AVPlayerLayer *playerLayer;
 @property(nonatomic, copy) NSString *activePlaybackPath;
+@property(nonatomic, assign) CFTimeInterval lastPlaybackSeekHostTime;
 @property(nonatomic, strong) NSView *dockView;
 @property(nonatomic, strong) NSView *previewView;
 @property(nonatomic, strong) NSPopUpButton *devicePopup;
+@property(nonatomic, strong) NSPopUpButton *formatDiagnosticPopup;
 @property(nonatomic, strong) NSTextField *formatLabel;
 @property(nonatomic, strong) NSTextField *statusLabel;
 @property(nonatomic, copy) void (^startCompletion)(void);
 @property(nonatomic, copy) void (^stopCompletion)(NSString *path, NSError *error);
 @property(nonatomic, copy) NSString *activeOutputPath;
 @property(nonatomic, copy) NSString *audioDeviceName;
+@property(nonatomic, copy) NSString *captureQualityLabel;
 @property(nonatomic, assign) BOOL docked;
 @property(nonatomic, assign) BOOL hasAudioInput;
 @property(nonatomic, assign) BOOL recordingVisualState;
@@ -746,6 +749,118 @@ void setVideoEnabled(bool enabled);
   block();
 }
 
+- (BOOL)format:(AVCaptureDeviceFormat *)format supportsFPS:(double)fps {
+  for (AVFrameRateRange *range in format.videoSupportedFrameRateRanges) {
+    if (range.minFrameRate <= fps && fps <= range.maxFrameRate) {
+      return YES;
+    }
+  }
+  return NO;
+}
+
+- (double)bestFPSForFormat:(AVCaptureDeviceFormat *)format preferredFPS:(double)preferredFPS {
+  for (AVFrameRateRange *range in format.videoSupportedFrameRateRanges) {
+    if (range.minFrameRate <= preferredFPS && preferredFPS <= range.maxFrameRate) {
+      return preferredFPS;
+    }
+  }
+
+  double bestFPS = 0.0;
+  for (AVFrameRateRange *range in format.videoSupportedFrameRateRanges) {
+    if (range.maxFrameRate > bestFPS) {
+      bestFPS = range.maxFrameRate;
+    }
+  }
+  return bestFPS;
+}
+
+- (AVCaptureDeviceFormat *)formatForDevice:(AVCaptureDevice *)device
+                                     width:(int)width
+                                    height:(int)height
+                                       fps:(double)fps {
+  AVCaptureDeviceFormat *bestFormat = nil;
+  for (AVCaptureDeviceFormat *format in device.formats) {
+    CMVideoDimensions dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription);
+    if (dimensions.width == width && dimensions.height == height && [self format:format supportsFPS:fps]) {
+      bestFormat = format;
+      break;
+    }
+  }
+  return bestFormat;
+}
+
+- (AVCaptureDeviceFormat *)highestAvailableFormatForDevice:(AVCaptureDevice *)device
+                                              preferredFPS:(double)preferredFPS
+                                                 targetFPS:(double *)targetFPS
+                                              qualityLabel:(NSString **)qualityLabel {
+  AVCaptureDeviceFormat *bestFormat = nil;
+  int bestArea = 0;
+  double bestFPS = 0.0;
+
+  for (AVCaptureDeviceFormat *format in device.formats) {
+    CMVideoDimensions dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription);
+    const int area = dimensions.width * dimensions.height;
+    const double fps = [self bestFPSForFormat:format preferredFPS:preferredFPS];
+    if (area > bestArea || (area == bestArea && fps > bestFPS)) {
+      bestFormat = format;
+      bestArea = area;
+      bestFPS = fps;
+    }
+  }
+
+  if (targetFPS) {
+    *targetFPS = bestFPS > 0.0 ? bestFPS : 30.0;
+  }
+  if (qualityLabel && bestFormat) {
+    CMVideoDimensions dimensions = CMVideoFormatDescriptionGetDimensions(bestFormat.formatDescription);
+    *qualityLabel = [NSString stringWithFormat:@"Highest available %dx%d %.2f fps",
+                                               dimensions.width,
+                                               dimensions.height,
+                                               bestFPS];
+  }
+  return bestFormat;
+}
+
+- (void)applyPreferredCaptureFormatForDevice:(AVCaptureDevice *)device {
+  AVCaptureDeviceFormat *format = [self formatForDevice:device width:3840 height:2160 fps:30.0];
+  double targetFPS = 30.0;
+  NSString *qualityLabel = @"Requested 4K30";
+
+  if (!format) {
+    format = [self formatForDevice:device width:1920 height:1080 fps:30.0];
+    qualityLabel = @"4K30 unavailable; using stable 1080p30";
+  }
+  if (!format) {
+    targetFPS = 30.0;
+    format = [self highestAvailableFormatForDevice:device
+                                      preferredFPS:30.0
+                                         targetFPS:&targetFPS
+                                      qualityLabel:&qualityLabel];
+    if (format) {
+      qualityLabel = [@"4K30/1080p30 unavailable; using " stringByAppendingString:qualityLabel];
+    }
+  }
+  if (!format) {
+    self.captureQualityLabel = @"Using device default format";
+    return;
+  }
+
+  NSError *lockError = nil;
+  if (![device lockForConfiguration:&lockError]) {
+    self.captureQualityLabel = [NSString stringWithFormat:@"Could not set 4K format: %@",
+                                                          lockError.localizedDescription ?: @"lock failed"];
+    return;
+  }
+
+  device.activeFormat = format;
+  CMTime frameDuration = CMTimeMake(1000, static_cast<int32_t>(std::llround(targetFPS * 1000.0)));
+  device.activeVideoMinFrameDuration = frameDuration;
+  device.activeVideoMaxFrameDuration = frameDuration;
+  [device unlockForConfiguration];
+
+  self.captureQualityLabel = qualityLabel;
+}
+
 - (BOOL)ensureSession:(NSError **)error {
   AVAuthorizationStatus status = [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeVideo];
   if (status != AVAuthorizationStatusAuthorized) {
@@ -791,6 +906,7 @@ void setVideoEnabled(bool enabled);
     return NO;
   }
   [session addInput:input];
+  [self applyPreferredCaptureFormatForDevice:device];
 
   self.hasAudioInput = NO;
   self.audioDeviceName = nil;
@@ -832,6 +948,7 @@ void setVideoEnabled(bool enabled);
   self.session = session;
   self.movieOutput = movieOutput;
   [session startRunning];
+  [self applyPreferredCaptureFormatForDevice:device];
   [self updateCaptureFormatLabel];
   return YES;
 }
@@ -990,11 +1107,13 @@ void setVideoEnabled(bool enabled);
   }
 
   NSString *fpsText = fps > 0.0 ? [NSString stringWithFormat:@"%.2f fps", fps] : @"fps unknown";
-  return [NSString stringWithFormat:@"Format: %dx%d, %@, codec/source: %@",
+  NSString *quality = self.captureQualityLabel.length > 0 ? self.captureQualityLabel : @"Auto";
+  return [NSString stringWithFormat:@"Format: %dx%d, %@, codec/source: %@ (%@)",
                                     dimensions.width,
                                     dimensions.height,
                                     fpsText,
-                                    codec];
+                                    codec,
+                                    quality];
 }
 
 - (void)updateCaptureFormatLabel {
@@ -1003,6 +1122,62 @@ void setVideoEnabled(bool enabled);
   }
   self.formatLabel.stringValue = [self captureFormatDescription];
   [self updateRecordingTextColor];
+}
+
+- (NSString *)formatDiagnosticTitleForFormat:(AVCaptureDeviceFormat *)format {
+  CMVideoDimensions dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription);
+  NSString *codec = [self fourCharacterCodeString:CMFormatDescriptionGetMediaSubType(format.formatDescription)];
+  double minFPS = 0.0;
+  double maxFPS = 0.0;
+  for (AVFrameRateRange *range in format.videoSupportedFrameRateRanges) {
+    if (minFPS == 0.0 || range.minFrameRate < minFPS) {
+      minFPS = range.minFrameRate;
+    }
+    if (range.maxFrameRate > maxFPS) {
+      maxFPS = range.maxFrameRate;
+    }
+  }
+  NSString *fpsText = minFPS > 0.0 && std::fabs(minFPS - maxFPS) > 0.01
+                          ? [NSString stringWithFormat:@"%.2f-%.2f fps", minFPS, maxFPS]
+                          : [NSString stringWithFormat:@"%.2f fps", maxFPS];
+  return [NSString stringWithFormat:@"%dx%d, %@, %@", dimensions.width, dimensions.height, fpsText, codec];
+}
+
+- (void)refreshFormatDiagnosticMenu {
+  if (!self.formatDiagnosticPopup) {
+    return;
+  }
+
+  [self.formatDiagnosticPopup removeAllItems];
+  AVCaptureDevice *device = [self selectedVideoDevice];
+  if (!device) {
+    [self.formatDiagnosticPopup addItemWithTitle:@"Formats: no camera selected"];
+    return;
+  }
+
+  BOOL has4K30 = [self formatForDevice:device width:3840 height:2160 fps:30.0] != nil;
+  BOOL has1080p30 = [self formatForDevice:device width:1920 height:1080 fps:30.0] != nil;
+  BOOL has1080p60 = [self formatForDevice:device width:1920 height:1080 fps:60.0] != nil;
+  [self.formatDiagnosticPopup addItemWithTitle:[NSString stringWithFormat:@"4K30: %@", has4K30 ? @"available" : @"unavailable"]];
+  [self.formatDiagnosticPopup addItemWithTitle:[NSString stringWithFormat:@"1080p30: %@", has1080p30 ? @"available" : @"unavailable"]];
+  [self.formatDiagnosticPopup addItemWithTitle:[NSString stringWithFormat:@"1080p60: %@", has1080p60 ? @"available" : @"unavailable"]];
+
+  NSMutableSet<NSString *> *seen = [NSMutableSet set];
+  NSMutableArray<NSString *> *formats = [NSMutableArray array];
+  for (AVCaptureDeviceFormat *format in device.formats) {
+    NSString *title = [self formatDiagnosticTitleForFormat:format];
+    if (![seen containsObject:title]) {
+      [seen addObject:title];
+      [formats addObject:title];
+    }
+  }
+  [formats sortUsingSelector:@selector(localizedStandardCompare:)];
+  for (NSString *formatTitle in formats) {
+    [self.formatDiagnosticPopup addItemWithTitle:[@"Format: " stringByAppendingString:formatTitle]];
+  }
+  if (self.formatDiagnosticPopup.numberOfItems > 0) {
+    [self.formatDiagnosticPopup selectItemAtIndex:0];
+  }
 }
 
 - (void)refreshDeviceMenu {
@@ -1023,6 +1198,7 @@ void setVideoEnabled(bool enabled);
     NSInteger index = [self.devicePopup indexOfItemWithRepresentedObject:selectedID];
     if (index >= 0) {
       [self.devicePopup selectItemAtIndex:index];
+      [self refreshFormatDiagnosticMenu];
       return;
     }
   }
@@ -1033,6 +1209,7 @@ void setVideoEnabled(bool enabled);
       g_selectedDeviceUniqueID = uniqueID.UTF8String;
     }
   }
+  [self refreshFormatDiagnosticMenu];
 }
 
 - (void)deviceSelectionChanged:(id)sender {
@@ -1066,30 +1243,35 @@ void setVideoEnabled(bool enabled);
   }
   [self ensureDockView];
   [self showLivePreview];
+  [self refreshFormatDiagnosticMenu];
   [self updateCaptureFormatLabel];
   [self setStatus:[NSString stringWithFormat:@"Camera: %@", self.devicePopup.selectedItem.title]];
 }
 
 - (void)ensureDockView {
   if (!self.dockView) {
-    NSRect frame = NSMakeRect(0, 0, 640, 450);
+    NSRect frame = NSMakeRect(0, 0, 640, 480);
     self.dockView = [[NSView alloc] initWithFrame:frame];
     self.dockView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     self.dockView.wantsLayer = YES;
 
-    self.previewView = [[NSView alloc] initWithFrame:NSMakeRect(0, 82, frame.size.width, frame.size.height - 82)];
+    self.previewView = [[NSView alloc] initWithFrame:NSMakeRect(0, 104, frame.size.width, frame.size.height - 104)];
     self.previewView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     self.previewView.wantsLayer = YES;
     [self.dockView addSubview:self.previewView];
 
-    self.devicePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(12, 53, frame.size.width - 24, 24) pullsDown:NO];
+    self.devicePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(12, 75, frame.size.width - 24, 24) pullsDown:NO];
     self.devicePopup.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
     self.devicePopup.target = self;
     self.devicePopup.action = @selector(deviceSelectionChanged:);
     [self.dockView addSubview:self.devicePopup];
 
+    self.formatDiagnosticPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(12, 49, frame.size.width - 24, 24) pullsDown:NO];
+    self.formatDiagnosticPopup.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
+    [self.dockView addSubview:self.formatDiagnosticPopup];
+
     self.formatLabel = [NSTextField labelWithString:@"Format: unavailable"];
-    self.formatLabel.frame = NSMakeRect(12, 31, frame.size.width - 24, 18);
+    self.formatLabel.frame = NSMakeRect(12, 29, frame.size.width - 24, 18);
     self.formatLabel.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
     [self.dockView addSubview:self.formatLabel];
 
@@ -1098,6 +1280,7 @@ void setVideoEnabled(bool enabled);
     self.statusLabel.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
     [self.dockView addSubview:self.statusLabel];
     [self refreshDeviceMenu];
+    [self refreshFormatDiagnosticMenu];
     [self updateCaptureFormatLabel];
   }
 
@@ -1123,9 +1306,12 @@ void setVideoEnabled(bool enabled);
                 projectPosition:(double)projectPosition {
   [self ensureDockView];
   NSString *playbackPath = [NSString stringWithUTF8String:path.c_str()];
-  if (!self.player || ![self.activePlaybackPath isEqualToString:playbackPath]) {
+  const BOOL switchedSource = !self.player || ![self.activePlaybackPath isEqualToString:playbackPath];
+  const BOOL startingPlayback = !self.showingPlayback;
+  if (switchedSource) {
     self.activePlaybackPath = playbackPath;
     self.player = [AVPlayer playerWithURL:[NSURL fileURLWithPath:playbackPath]];
+    self.player.automaticallyWaitsToMinimizeStalling = NO;
     if (!self.playerLayer) {
       self.playerLayer = [AVPlayerLayer playerLayerWithPlayer:self.player];
       self.playerLayer.videoGravity = AVLayerVideoGravityResizeAspect;
@@ -1146,8 +1332,13 @@ void setVideoEnabled(bool enabled);
   const double sourceTime = projectPosition - itemStart + sourceOffset;
   CMTime targetTime = CMTimeMakeWithSeconds(sourceTime > 0.0 ? sourceTime : 0.0, 600);
   const double currentTime = CMTimeGetSeconds(self.player.currentTime);
-  if (!std::isfinite(currentTime) || std::fabs(currentTime - sourceTime) > 0.08) {
-    [self.player seekToTime:targetTime toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero];
+  const CFTimeInterval now = CACurrentMediaTime();
+  const bool forceSeek = switchedSource || startingPlayback || !std::isfinite(currentTime);
+  const bool drifted = std::isfinite(currentTime) && std::fabs(currentTime - sourceTime) > 0.50;
+  if (forceSeek || (drifted && now - self.lastPlaybackSeekHostTime > 1.0)) {
+    const CMTime tolerance = forceSeek ? kCMTimeZero : CMTimeMakeWithSeconds(0.05, 600);
+    [self.player seekToTime:targetTime toleranceBefore:tolerance toleranceAfter:tolerance];
+    self.lastPlaybackSeekHostTime = now;
   }
   if (self.player.rate != 1.0f) {
     [self.player play];
