@@ -49,7 +49,10 @@ REAPER must be restarted after installing a new dylib.
 
 - Automatic audio alignment is a first pass. It searches +/-5 seconds around expected placement and requires enough shared sound between the camera audio and a reference REAPER audio item. If alignment is unreliable, improve reference-track selection and correlation diagnostics before changing placement heuristics.
 - Capture quality is automatically selected, but not yet user-selectable. A likely next step is adding a quality selector such as `Auto`, `4K 30`, `1080p 30`, and `Highest`.
-- Continuity Camera may not expose 4K or codec controls on all macOS/iPhone combinations. Always show the actual active format rather than assuming the requested format was applied.
+- Continuity Camera may not expose 4K, vertical formats, or codec controls on all macOS/iPhone combinations. Always show the actual active format rather than assuming the requested format was applied.
+- A direct AVFoundation probe on this machine found the connected iPhone Continuity Camera exposed only `640x480`, `1280x720`, `1920x1080`, and `1920x1440` in `420v`; no 4K or portrait iPhone formats were exposed. The built-in FaceTime camera did expose portrait-ish formats such as `1080x1920`.
+- A recorded file at `~/Desktop/ReaperMedia/Video Recordings/unsaved_project_20260627_162649.mov` inspected with `ffprobe` was healthy: `1920x1080` H.264 Main, ~29.99/30 fps, steady decoded 33.34 ms frame cadence, ~23.7 Mbps video, and AAC mono 48 kHz audio. If playback looks jumpy in the extension but fine in VLC, suspect docked preview playback/resync behavior before changing capture settings.
+- The preview `AVPlayer` should remain muted and should not exact-seek every timer tick. Current behavior seeks on source changes/playback start, disables stalling waits, and corrects only large drift.
 - Real-time waveform drawing during capture is not implemented. With the current `AVCaptureMovieFileOutput` path, REAPER sees the media only after AVFoundation finalizes the movie.
 
 ## Commit style
