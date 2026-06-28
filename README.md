@@ -44,6 +44,13 @@ By default the Makefile builds for the current Mac architecture. To build a univ
 make ARCH_FLAGS="-arch arm64 -arch x86_64"
 ```
 
+The companion iPhone app is now consolidated in this repository under `iphone/`. Build it with:
+
+```sh
+cd iphone
+xcodebuild -project iPhoneVideoSync.xcodeproj -scheme iPhoneVideoSync -destination 'generic/platform=iOS' build
+```
+
 ## Install
 
 ```sh
@@ -64,6 +71,7 @@ codesign --force --sign - "$HOME/Library/Application Support/REAPER/UserPlugins/
 - REAPER remains responsible for production audio recording and mixing; camera audio is captured as a sync/alignment reference.
 - Camera and microphone permission are requested the first time the preview/session is opened.
 - Selected camera input is persisted in REAPER ext state.
+- The companion iPhone app sources live in `iphone/`; `~/iphone_reapervideosync` was the original development copy and should no longer be treated as the source of truth.
 - The iPhone source builds and installs a bundled `video-sync-mac` helper and `LiveKitWebRTC.framework` next to the REAPER extension dylib.
 - To use the iPhone source, launch the iPhone app, select `iPhone Video Sync` in the REAPER dock, click `iPhone Setup`, click `Discover`, enter the pairing code shown on the iPhone, click `Pair`, then click `Test` to verify preview/control before recording.
 - The iPhone app shows the currently configured capture profile. Aspect ratio is currently metadata/framing intent; resolution, FPS, and orientation are applied on the iPhone capture session.

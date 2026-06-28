@@ -1,0 +1,228 @@
+#if os(iOS)
+import Combine
+import Foundation
+import Network
+import UIKit
+#if canImport(VideoSyncCore)
+import VideoSyncCore
+#endif
+
+@MainActor
+public final class iPhoneVideoSyncService: ObservableObject {
+    @Published public private(set) var status = "Stopped"
+    @Published public private(set) var previewStatus = "Idle"
+    @Published public private(set) var lastError: String?
+
+    public let store: RecordingStore
+    public let pairingStore: PairingStore
+    public let capture: CaptureRecordingEngine
+
+    private let controlPort: UInt16
+    private let httpPort: UInt16
+    private var webSocketServer: LocalWebSocketServer?
+    private var httpServer: HTTPRecordingServer?
+    private var webRTCPreviewSession: WebRTCPreviewSession?
+    private var netService: NetService?
+    private let previewDescriptor = PreviewDescriptor()
+    private var cancellables: Set<AnyCancellable> = []
+
+    public init(controlPort: UInt16 = 8787, httpPort: UInt16 = 8788) throws {
+        self.controlPort = controlPort
+        self.httpPort = httpPort
+        let store = try RecordingStore()
+        self.store = store
+        self.pairingStore = PairingStore()
+        self.capture = CaptureRecordingEngine(store: store)
+        self.pairingStore.objectWillChange
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+            .store(in: &cancellables)
+        self.capture.objectWillChange
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+            .store(in: &cancellables)
+    }
+
+    public func prepare() async {
+        guard await capture.requestPermissions() else {
+            lastError = "Camera and microphone permissions are required."
+            return
+        }
+        do {
+            try capture.configure()
+            capture.startSession()
+            status = "Ready"
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    public func startNetworkServices() {
+        do {
+            let httpServer = HTTPRecordingServer(
+                port: httpPort,
+                store: store,
+                pairingStore: pairingStore,
+                previewFrameProvider: { [capture] in
+                    capture.latestPreviewJPEG()
+                }
+            )
+            try httpServer.start()
+            self.httpServer = httpServer
+
+            let server = LocalWebSocketServer(port: controlPort) { [weak self] data in
+                guard let self else {
+                    return try ProtocolCodec.encodeEvent(ControlEvent(type: .error, message: "Service is unavailable."))
+                }
+                return try await self.handleControlMessage(data)
+            }
+            try server.start()
+            self.webSocketServer = server
+            try advertiseBonjour()
+            status = "Listening on Wi-Fi"
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    public func stopNetworkServices() {
+        webSocketServer?.stop()
+        httpServer?.stop()
+        netService?.stop()
+        status = "Stopped"
+    }
+
+    public func resetPairing() {
+        pairingStore.reset()
+        updateBonjourTXTRecord()
+        status = "Pairing reset"
+    }
+
+    private func handleControlMessage(_ data: Data) async throws -> Data {
+        let command = try ProtocolCodec.decodeCommand(data)
+
+        switch command.type {
+        case .pair:
+            let token = try pairingStore.pair(code: command.pairingCode ?? "")
+            updateBonjourTXTRecord()
+            return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .paired, token: token, preview: previewDescriptor, message: "Paired"))
+        case .ping:
+            return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .pong, preview: previewDescriptor, captureProfile: capture.currentProfile, message: "OK"))
+        case .configureCapture:
+            guard pairingStore.validate(token: command.token), let profile = command.captureProfile else {
+                return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .error, message: "Unauthorized"))
+            }
+            try capture.apply(profile: profile)
+            status = "Configured \(capture.currentProfile.displayName)"
+            return try ProtocolCodec.encodeEvent(ControlEvent(
+                requestID: command.requestID,
+                type: .captureConfigured,
+                preview: previewDescriptor,
+                captureProfile: capture.currentProfile,
+                message: "Configured \(capture.currentProfile.displayName)"
+            ))
+        case .startRecording:
+            guard pairingStore.validate(token: command.token) else {
+                return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .error, message: "Unauthorized"))
+            }
+            let id = try capture.startRecording(sessionID: command.sessionID, metadata: command.metadata)
+            return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .recordingStarted, message: "Recording \(id)"))
+        case .stopRecording:
+            guard pairingStore.validate(token: command.token) else {
+                return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .error, message: "Unauthorized"))
+            }
+            let recording = try await capture.stopRecording()
+            let descriptor = RecordingDescriptor(
+                id: recording.id,
+                filename: recording.url.lastPathComponent,
+                byteCount: recording.byteCount,
+                checksumSHA256: recording.checksumSHA256,
+                downloadPath: "/recordings/\(recording.id)"
+            )
+            return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .recordingStopped, recording: descriptor, message: "Recording stopped"))
+        case .transferComplete:
+            guard pairingStore.validate(token: command.token), let id = command.recordingID else {
+                return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .error, message: "Unauthorized"))
+            }
+            try store.mark(id, as: .transferred)
+            return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .transferAcknowledged, message: "Transfer acknowledged"))
+        case .startWebRTCPreview:
+            guard pairingStore.validate(token: command.token), let offer = command.webRTCOfferSDP else {
+                return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .error, message: "Unauthorized"))
+            }
+            capture.setPreviewSampleBufferConsumer(nil)
+            webRTCPreviewSession?.stop()
+            let session = WebRTCPreviewSession()
+            webRTCPreviewSession = session
+            capture.setPreviewSampleBufferConsumer { [weak session] sampleBuffer in
+                session?.consume(sampleBuffer: sampleBuffer)
+            }
+            do {
+                let answer = try await session.start(offerSDP: offer)
+                status = "WebRTC preview active"
+                previewStatus = "WebRTC"
+                return try ProtocolCodec.encodeEvent(ControlEvent(
+                    requestID: command.requestID,
+                    type: .webRTCPreviewAnswer,
+                    webRTCAnswerSDP: answer,
+                    message: "WebRTC preview active"
+                ))
+            } catch {
+                capture.setPreviewSampleBufferConsumer(nil)
+                webRTCPreviewSession = nil
+                previewStatus = "WebRTC failed"
+                return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .error, message: error.localizedDescription))
+            }
+        case .addWebRTCIceCandidate:
+            guard pairingStore.validate(token: command.token),
+                  let candidateSDP = command.webRTCIceCandidateSDP else {
+                return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .error, message: "Unauthorized"))
+            }
+            webRTCPreviewSession?.addIceCandidate(
+                sdp: candidateSDP,
+                sdpMid: command.webRTCIceCandidateMid,
+                sdpMLineIndex: command.webRTCIceCandidateMLineIndex ?? 0
+            )
+            return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .webRTCIceCandidateAdded, message: "ICE candidate accepted"))
+        case .stopWebRTCPreview:
+            guard pairingStore.validate(token: command.token) else {
+                return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .error, message: "Unauthorized"))
+            }
+            capture.setPreviewSampleBufferConsumer(nil)
+            webRTCPreviewSession?.stop()
+            webRTCPreviewSession = nil
+            status = "WebRTC preview stopped"
+            previewStatus = "Idle"
+            return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .webRTCPreviewStopped, message: "WebRTC preview stopped"))
+        }
+    }
+
+    private func advertiseBonjour() throws {
+        let service = NetService(domain: "local.", type: "_iphone-video-sync._tcp.", name: UIDevice.current.name, port: Int32(controlPort))
+        let txtValues = [
+            "version": "\(ProtocolVersion.current)",
+            "httpPort": "\(httpPort)",
+            "previewSnapshotPath": previewDescriptor.snapshotPath,
+            "previewStreamPath": previewDescriptor.streamPath,
+            "paired": pairingStore.isPaired ? "true" : "false"
+        ].mapValues { Data($0.utf8) }
+        let txt = NetService.data(fromTXTRecord: txtValues)
+        service.setTXTRecord(txt)
+        service.publish()
+        netService = service
+    }
+
+    private func updateBonjourTXTRecord() {
+        let txtValues = [
+            "version": "\(ProtocolVersion.current)",
+            "httpPort": "\(httpPort)",
+            "previewSnapshotPath": previewDescriptor.snapshotPath,
+            "previewStreamPath": previewDescriptor.streamPath,
+            "paired": pairingStore.isPaired ? "true" : "false"
+        ].mapValues { Data($0.utf8) }
+        netService?.setTXTRecord(NetService.data(fromTXTRecord: txtValues))
+    }
+}
+#endif

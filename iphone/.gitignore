@@ -1,0 +1,12 @@
+.build/
+.swiftpm/
+DerivedData/
+*.xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+test-downloads/
+*.mov
+*.MOV
+*.mp4
+*.log
+.DS_Store
