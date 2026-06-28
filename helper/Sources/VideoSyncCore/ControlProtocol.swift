@@ -108,17 +108,20 @@ public struct RecordingDescriptor: Codable, Equatable, Sendable {
 public struct PreviewDescriptor: Codable, Equatable, Sendable {
     public var snapshotPath: String
     public var streamPath: String
+    public var binaryStreamPath: String
     public var maximumDimension: Int
     public var approximateFrameRate: Double
 
     public init(
         snapshotPath: String = "/preview.jpg",
         streamPath: String = "/preview.mjpg",
+        binaryStreamPath: String = "/preview.bin",
         maximumDimension: Int = 640,
-        approximateFrameRate: Double = 5.0
+        approximateFrameRate: Double = 12.0
     ) {
         self.snapshotPath = snapshotPath
         self.streamPath = streamPath
+        self.binaryStreamPath = binaryStreamPath
         self.maximumDimension = maximumDimension
         self.approximateFrameRate = approximateFrameRate
     }

@@ -1443,7 +1443,7 @@ void setVideoEnabled(bool enabled);
 
   [self.formatDiagnosticPopup removeAllItems];
   if (g_useIPhoneSource) {
-    [self.formatDiagnosticPopup addItemWithTitle:@"Preview: /preview.mjpg or /preview.jpg"];
+    [self.formatDiagnosticPopup addItemWithTitle:@"Preview: /preview.bin, /preview.mjpg, or /preview.jpg"];
     [self.formatDiagnosticPopup addItemWithTitle:@"Recording: full-resolution iPhone .mov"];
     [self.formatDiagnosticPopup selectItemAtIndex:0];
     return;
@@ -2031,7 +2031,7 @@ void setVideoEnabled(bool enabled);
   if (g_iPhoneHost.empty() || g_iPhoneToken.empty()) {
     return nil;
   }
-  NSString *urlString = [NSString stringWithFormat:@"http://%s:%s/preview.mjpg?token=%@",
+  NSString *urlString = [NSString stringWithFormat:@"http://%s:%s/preview.bin?token=%@",
                                                    g_iPhoneHost.c_str(),
                                                    g_iPhoneHttpPort.c_str(),
                                                    [NSString stringWithUTF8String:g_iPhoneToken.c_str()]];
@@ -2066,7 +2066,7 @@ void setVideoEnabled(bool enabled);
   self.remotePreviewSession = [NSURLSession sessionWithConfiguration:configuration delegate:self delegateQueue:self.remotePreviewQueue];
   self.remotePreviewTask = [self.remotePreviewSession dataTaskWithURL:url];
   [self.remotePreviewTask resume];
-  [self setStatus:@"Preview: MJPEG connecting"];
+  [self setStatus:@"Preview: binary stream connecting"];
   dispatch_after(dispatch_time(DISPATCH_TIME_NOW, static_cast<int64_t>(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
     if (self.remotePreviewStreaming && self.remotePreviewFramesDisplayed == 0 && g_useIPhoneSource && !self.showingPlayback) {
       self.remotePreviewUsingSnapshotFallback = YES;
@@ -2152,35 +2152,21 @@ void setVideoEnabled(bool enabled);
 }
 
 - (void)processRemotePreviewBuffer {
-  while (self.remotePreviewBuffer.length > 0) {
-    NSRange headerRange = [self.remotePreviewBuffer rangeOfData:[NSData dataWithBytes:"\r\n\r\n" length:4]
-                                                        options:0
-                                                          range:NSMakeRange(0, self.remotePreviewBuffer.length)];
-    if (headerRange.location == NSNotFound) {
+  while (self.remotePreviewBuffer.length >= 4) {
+    const uint8_t *bytes = static_cast<const uint8_t *>(self.remotePreviewBuffer.bytes);
+    const uint32_t frameLength = (static_cast<uint32_t>(bytes[0]) << 24) |
+                                 (static_cast<uint32_t>(bytes[1]) << 16) |
+                                 (static_cast<uint32_t>(bytes[2]) << 8) |
+                                 static_cast<uint32_t>(bytes[3]);
+    if (frameLength == 0 || frameLength > 2 * 1024 * 1024) {
+      [self.remotePreviewBuffer setLength:0];
       return;
     }
-    NSData *headerData = [self.remotePreviewBuffer subdataWithRange:NSMakeRange(0, headerRange.location)];
-    NSString *header = [[NSString alloc] initWithData:headerData encoding:NSUTF8StringEncoding] ?: @"";
-    NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:@"Content-Length:\\s*(\\d+)"
-                                                                           options:NSRegularExpressionCaseInsensitive
-                                                                             error:nil];
-    NSTextCheckingResult *match = [regex firstMatchInString:header options:0 range:NSMakeRange(0, header.length)];
-    if (!match || match.numberOfRanges < 2) {
-      [self.remotePreviewBuffer replaceBytesInRange:NSMakeRange(0, NSMaxRange(headerRange) + 4) withBytes:nullptr length:0];
-      continue;
-    }
-    NSString *lengthText = [header substringWithRange:[match rangeAtIndex:1]];
-    const NSUInteger frameLength = static_cast<NSUInteger>(lengthText.integerValue);
-    const NSUInteger frameStart = NSMaxRange(headerRange);
-    if (self.remotePreviewBuffer.length < frameStart + frameLength) {
+    if (self.remotePreviewBuffer.length < 4 + frameLength) {
       return;
     }
-    NSData *frameData = [self.remotePreviewBuffer subdataWithRange:NSMakeRange(frameStart, frameLength)];
-    NSUInteger removeLength = frameStart + frameLength;
-    if (self.remotePreviewBuffer.length >= removeLength + 2) {
-      removeLength += 2;
-    }
-    [self.remotePreviewBuffer replaceBytesInRange:NSMakeRange(0, removeLength) withBytes:nullptr length:0];
+    NSData *frameData = [self.remotePreviewBuffer subdataWithRange:NSMakeRange(4, frameLength)];
+    [self.remotePreviewBuffer replaceBytesInRange:NSMakeRange(0, 4 + frameLength) withBytes:nullptr length:0];
     [self handleRemotePreviewFrame:frameData];
   }
 }
@@ -2238,7 +2224,7 @@ void setVideoEnabled(bool enabled);
   self.remotePreviewFramesDisplayedAtLastUpdate = self.remotePreviewFramesDisplayed;
   self.remotePreviewLastStatusTime = now;
   NSString *safe = g_activeTransportRecording ? @" safe" : @"";
-  [self setStatus:[NSString stringWithFormat:@"Preview: MJPEG%@, %lu fps, dropped %lu",
+  [self setStatus:[NSString stringWithFormat:@"Preview: stream%@, %lu fps, dropped %lu",
                                              safe,
                                              static_cast<unsigned long>(displayedDelta),
                                              static_cast<unsigned long>(self.remotePreviewFramesDropped)]];

@@ -29,7 +29,7 @@ macOS-only REAPER extension MVP for recording one webcam/video source in sync wi
 - Shows load/record/finalize/import state in the preview status label instead of console chatter.
 - Places recorded video using AVFoundation's actual recording-start callback to compensate for capture startup latency.
 - Can select an `iPhone Video Sync` source that controls the companion iPhone app for 4K recording, low-resolution Wi-Fi preview, download, and timeline insertion.
-- The iPhone source uses a persistent MJPEG preview stream instead of repeated snapshot polling, decodes frames off the main thread, drops stale frames, and lowers preview rate while REAPER records.
+- The iPhone source uses a persistent low-resolution binary JPEG preview stream instead of repeated snapshot polling, decodes frames off the main thread, drops stale frames, and lowers preview rate while REAPER records. MJPEG and snapshot endpoints remain available as fallbacks/debugging aids.
 - For the iPhone source, the dock includes capture profile controls for resolution, FPS, orientation, and social aspect ratio. Changing a profile control sends the new profile to the iPhone immediately when paired.
 
 ## Build
