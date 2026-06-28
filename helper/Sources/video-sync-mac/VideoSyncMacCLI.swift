@@ -65,7 +65,13 @@ struct VideoSyncMacCLI {
                 throw ControlClientError.unexpectedEvent(event)
             }
             let directory = URL(fileURLWithPath: args.value(after: "--download-dir") ?? FileManager.default.currentDirectoryPath)
-            let downloaded = try await RecordingDownloader.download(recording: recording, host: host, httpPort: httpPort, token: token, destinationDirectory: directory)
+            let showProgress = args.hasFlag("--progress")
+            let downloaded = try await RecordingDownloader.download(recording: recording, host: host, httpPort: httpPort, token: token, destinationDirectory: directory) { bytes, expected in
+                guard showProgress else {
+                    return
+                }
+                printProgress(bytes: bytes, expected: expected > 0 ? expected : recording.byteCount)
+            }
             _ = try await send(args, type: .transferComplete) {
                 ControlCommand(type: .transferComplete, token: token, recordingID: recording.id)
             }
@@ -143,11 +149,18 @@ struct VideoSyncMacCLI {
           pair --host HOST [--port 8787] --code CODE
           configure --host HOST [--port 8787] --token TOKEN [--resolution 4K] [--fps 30] [--orientation portrait] [--aspect 9:16] [--lens wide] [--zoom 1.0]
           start --host HOST [--port 8787] --token TOKEN [--session SESSION]
-          stop --host HOST [--port 8787] [--http-port 8788] --token TOKEN [--download-dir DIR]
+          stop --host HOST [--port 8787] [--http-port 8788] --token TOKEN [--download-dir DIR] [--progress]
           ping --host HOST [--port 8787] [--token TOKEN]
           webrtc-answer --host HOST [--port 8787] --token TOKEN --offer-file PATH
           webrtc-candidate --host HOST [--port 8787] --token TOKEN --candidate SDP [--mid MID] [--mline INDEX]
           stop-webrtc --host HOST [--port 8787] --token TOKEN
         """)
+    }
+
+    private static func printProgress(bytes: Int64, expected: Int64) {
+        let total = max(expected, 0)
+        let percent = total > 0 ? min(100.0, (Double(bytes) / Double(total)) * 100.0) : 0.0
+        let line = "progress bytes=\(bytes) total=\(total) percent=\(String(format: "%.1f", percent))\n"
+        FileHandle.standardError.write(Data(line.utf8))
     }
 }

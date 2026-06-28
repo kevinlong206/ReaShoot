@@ -802,6 +802,13 @@ void setVideoEnabled(bool enabled);
 - (void)runVideoSyncCommandAsync:(NSString *)command
                   extraArguments:(NSArray<NSString *> *)extraArguments
                       completion:(void (^)(NSString *output, NSError *error))completion {
+  [self runVideoSyncCommandAsync:command extraArguments:extraArguments outputHandler:nil completion:completion];
+}
+
+- (void)runVideoSyncCommandAsync:(NSString *)command
+                  extraArguments:(NSArray<NSString *> *)extraArguments
+                   outputHandler:(void (^)(NSString *line))outputHandler
+                      completion:(void (^)(NSString *output, NSError *error))completion {
   NSString *helperPath = [self videoSyncHelperPath];
   if (![[NSFileManager defaultManager] isExecutableFileAtPath:helperPath]) {
     NSError *missingError = [NSError errorWithDomain:@"KlongVideoRecorder"
@@ -819,8 +826,54 @@ void setVideoEnabled(bool enabled);
   NSPipe *pipe = [NSPipe pipe];
   task.standardOutput = pipe;
   task.standardError = pipe;
+  NSFileHandle *readHandle = pipe.fileHandleForReading;
+  NSMutableData *outputData = [NSMutableData data];
+  NSMutableString *pendingLine = [NSMutableString string];
+  void (^consumeData)(NSData *) = ^(NSData *data) {
+    if (data.length == 0) {
+      return;
+    }
+    @synchronized (outputData) {
+      [outputData appendData:data];
+    }
+    if (!outputHandler) {
+      return;
+    }
+    NSString *chunk = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
+    NSArray<NSString *> *parts = [chunk componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet];
+    for (NSUInteger i = 0; i < parts.count; ++i) {
+      NSString *part = parts[i];
+      if (i == 0) {
+        [pendingLine appendString:part];
+      } else {
+        NSString *line = [pendingLine copy];
+        [pendingLine setString:part];
+        if (line.length > 0) {
+          dispatch_async(dispatch_get_main_queue(), ^{
+            outputHandler(line);
+          });
+        }
+      }
+    }
+  };
+  readHandle.readabilityHandler = ^(NSFileHandle *handle) {
+    NSData *data = handle.availableData;
+    consumeData(data);
+  };
   task.terminationHandler = ^(NSTask *finishedTask) {
-    NSData *data = [pipe.fileHandleForReading readDataToEndOfFile];
+    readHandle.readabilityHandler = nil;
+    consumeData([readHandle readDataToEndOfFile]);
+    if (outputHandler && pendingLine.length > 0) {
+      NSString *line = [pendingLine copy];
+      [pendingLine setString:@""];
+      dispatch_async(dispatch_get_main_queue(), ^{
+        outputHandler(line);
+      });
+    }
+    NSData *data = nil;
+    @synchronized (outputData) {
+      data = [outputData copy];
+    }
     NSString *output = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
     NSError *commandError = nil;
     if (finishedTask.terminationStatus != 0) {
@@ -918,6 +971,30 @@ void setVideoEnabled(bool enabled);
   return nil;
 }
 
+- (void)handleVideoSyncProgressLine:(NSString *)line {
+  if (![line hasPrefix:@"progress "]) {
+    return;
+  }
+  NSMutableDictionary<NSString *, NSString *> *fields = [NSMutableDictionary dictionary];
+  for (NSString *part in [line componentsSeparatedByString:@" "]) {
+    NSRange equals = [part rangeOfString:@"="];
+    if (equals.location == NSNotFound || equals.location == 0) {
+      continue;
+    }
+    NSString *key = [part substringToIndex:equals.location];
+    NSString *value = [part substringFromIndex:equals.location + 1];
+    fields[key] = value;
+  }
+  NSString *percent = fields[@"percent"];
+  NSString *bytes = fields[@"bytes"];
+  NSString *total = fields[@"total"];
+  if (percent.length > 0) {
+    [self setStatus:[NSString stringWithFormat:@"Downloading iPhone video: %@%%", percent]];
+  } else if (bytes.length > 0 && total.length > 0) {
+    [self setStatus:[NSString stringWithFormat:@"Downloading iPhone video: %@/%@ bytes", bytes, total]];
+  }
+}
+
 - (BOOL)startRecordingToPath:(const std::string &)path
              startCompletion:(void (^)(void))startCompletion
                         error:(NSError **)error {
@@ -990,9 +1067,12 @@ void setVideoEnabled(bool enabled);
       @"--token",
       [NSString stringWithUTF8String:g_iPhoneToken.c_str()],
       @"--download-dir",
-      self.activeRemoteDownloadDirectory ?: NSHomeDirectory()
+      self.activeRemoteDownloadDirectory ?: NSHomeDirectory(),
+      @"--progress"
     ];
-    [self runVideoSyncCommandAsync:@"stop" extraArguments:arguments completion:^(NSString *output, NSError *error) {
+    [self runVideoSyncCommandAsync:@"stop" extraArguments:arguments outputHandler:^(NSString *line) {
+      [self handleVideoSyncProgressLine:line];
+    } completion:^(NSString *output, NSError *error) {
       self.remoteRecording = NO;
       [self setRecordingVisualState:NO];
       if (error) {

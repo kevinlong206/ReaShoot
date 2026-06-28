@@ -31,6 +31,7 @@ macOS-only REAPER extension MVP for recording one webcam/video source in sync wi
 - Can select an `iPhone Video Sync` source that controls the companion iPhone app for 4K recording, low-resolution Wi-Fi preview, download, and timeline insertion.
 - The iPhone source first attempts an experimental low-latency WebRTC preview using the bundled `LiveKitWebRTC.framework`. If that fails, it falls back to the persistent low-resolution binary JPEG preview stream, which decodes frames off the main thread, drops stale frames, and lowers preview rate while REAPER records. MJPEG and snapshot endpoints remain available as fallbacks/debugging aids.
 - For the iPhone source, the dock includes capture profile controls for resolution, FPS, orientation, social aspect ratio, lens, and zoom. Changing a profile control sends the new profile to the iPhone immediately when paired.
+- During iPhone recording stop, the dock status shows video transfer progress while the full-resolution movie downloads.
 
 ## Build
 

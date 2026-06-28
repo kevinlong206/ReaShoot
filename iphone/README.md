@@ -48,7 +48,7 @@ sleep 3
 swift run video-sync-mac stop --host kevin-long-iphone.local --port 8787 --http-port 8788 --token "$VIDEO_SYNC_TOKEN" --download-dir test-downloads
 ```
 
-Expected result: the CLI prints a downloaded `.mov` path in `test-downloads`.
+Expected result: the CLI prints a downloaded `.mov` path in `test-downloads`. Add `--progress` to the `stop` command to print transfer progress lines during the movie download.
 
 ## Preview endpoints
 

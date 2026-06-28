@@ -29,4 +29,8 @@ struct CLIArguments {
     func double(after flag: String, default defaultValue: Double) -> Double {
         value(after: flag).flatMap(Double.init) ?? defaultValue
     }
+
+    func hasFlag(_ flag: String) -> Bool {
+        values.contains(flag)
+    }
 }

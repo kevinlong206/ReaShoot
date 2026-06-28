@@ -131,6 +131,8 @@ swift run video-sync-mac stop \
 
 Expected result: a `.mov` appears in `test-downloads`, and the CLI prints `downloaded ...`.
 
+Add `--progress` to `swift run video-sync-mac stop ...` when testing transfer progress. It emits `progress bytes=... total=... percent=...` lines during the HTTP download.
+
 ## WebRTC preview notes
 
 - REAPER sends `startWebRTCPreview` with an SDP offer.

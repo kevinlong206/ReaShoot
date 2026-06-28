@@ -19,7 +19,14 @@ enum DownloadError: Error, LocalizedError {
 }
 
 enum RecordingDownloader {
-    static func download(recording: RecordingDescriptor, host: String, httpPort: Int, token: String, destinationDirectory: URL) async throws -> URL {
+    static func download(
+        recording: RecordingDescriptor,
+        host: String,
+        httpPort: Int,
+        token: String,
+        destinationDirectory: URL,
+        progress: ((Int64, Int64) -> Void)? = nil
+    ) async throws -> URL {
         var components = URLComponents()
         components.scheme = "http"
         components.host = host
@@ -31,7 +38,7 @@ enum RecordingDownloader {
             throw ControlClientError.invalidURL
         }
 
-        let (temporaryURL, response) = try await URLSession.shared.download(from: url)
+        let (temporaryURL, response) = try await download(from: url, progress: progress)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw DownloadError.missingResponse
         }
@@ -54,5 +61,63 @@ enum RecordingDownloader {
         }
 
         return destination
+    }
+
+    private static func download(from url: URL, progress: ((Int64, Int64) -> Void)?) async throws -> (URL, URLResponse) {
+        let delegate = DownloadProgressDelegate(progress: progress)
+        let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
+        defer {
+            session.invalidateAndCancel()
+        }
+        return try await withCheckedThrowingContinuation { continuation in
+            delegate.continuation = continuation
+            session.downloadTask(with: url).resume()
+        }
+    }
+}
+
+private final class DownloadProgressDelegate: NSObject, URLSessionDownloadDelegate {
+    var continuation: CheckedContinuation<(URL, URLResponse), Error>?
+    private let progress: ((Int64, Int64) -> Void)?
+    private var completed = false
+
+    init(progress: ((Int64, Int64) -> Void)?) {
+        self.progress = progress
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didWriteData bytesWritten: Int64,
+        totalBytesWritten: Int64,
+        totalBytesExpectedToWrite: Int64
+    ) {
+        progress?(totalBytesWritten, totalBytesExpectedToWrite)
+    }
+
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
+        guard !completed, let response = downloadTask.response else {
+            return
+        }
+        do {
+            let temporaryURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try FileManager.default.moveItem(at: location, to: temporaryURL)
+            completed = true
+            continuation?.resume(returning: (temporaryURL, response))
+            continuation = nil
+        } catch {
+            completed = true
+            continuation?.resume(throwing: error)
+            continuation = nil
+        }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        guard !completed, let error else {
+            return
+        }
+        completed = true
+        continuation?.resume(throwing: error)
+        continuation = nil
     }
 }
