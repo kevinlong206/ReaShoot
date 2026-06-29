@@ -219,7 +219,6 @@ public final class CaptureRecordingEngine: NSObject, ObservableObject {
 
         let recording = store.newRecordingURL(sessionID: sessionID)
         activeRecordingID = recording.id
-        UIApplication.shared.isIdleTimerDisabled = true
         previewFrameStore.setTargetFPS(6.0)
         applyOrientation()
         movieOutput.startRecording(to: recording.url, recordingDelegate: self)
@@ -407,7 +406,6 @@ extension CaptureRecordingEngine: AVCaptureFileOutputRecordingDelegate {
         Task { @MainActor in
             isRecording = false
             previewFrameStore.setTargetFPS(12.0)
-            UIApplication.shared.isIdleTimerDisabled = false
 
             if let error {
                 lastError = error.localizedDescription

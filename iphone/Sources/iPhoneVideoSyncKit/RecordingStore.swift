@@ -46,5 +46,20 @@ public final class RecordingStore: ObservableObject {
         }
         recordings[index].state = next
     }
+
+    public func deleteTransferredRecording(id: String) throws {
+        try deleteRecording(id: id)
+    }
+
+    public func deleteRecording(id: String) throws {
+        guard let index = recordings.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+        let recording = recordings[index]
+        if fileManager.fileExists(atPath: recording.url.path) {
+            try fileManager.removeItem(at: recording.url)
+        }
+        recordings.remove(at: index)
+    }
 }
 #endif

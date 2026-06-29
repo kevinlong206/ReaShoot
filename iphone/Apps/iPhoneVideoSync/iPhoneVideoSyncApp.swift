@@ -6,6 +6,7 @@ import iPhoneVideoSyncKit
 
 @main
 struct iPhoneVideoSyncApp: App {
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var service = AppServiceFactory.make()
 
     var body: some Scene {
@@ -15,6 +16,16 @@ struct iPhoneVideoSyncApp: App {
                 .task {
                     await service.prepare()
                     service.startNetworkServices()
+                }
+                .onChange(of: scenePhase) { _, newPhase in
+                    switch newPhase {
+                    case .active:
+                        service.applicationBecameActive()
+                    case .inactive, .background:
+                        service.applicationResignedActive()
+                    @unknown default:
+                        break
+                    }
                 }
         }
     }

@@ -7,6 +7,8 @@ macOS-only REAPER extension MVP for recording one webcam/video source in sync wi
 - Adds REAPER actions:
   - `Video Recorder: Enable/Disable video features`
   - `Video Recorder: Show/Hide Preview`
+  - `Video Recorder: Float/Dock Preview`
+  - `Video Recorder: Align Selected Video Item`
   - `Video Recorder: Enable/Disable Transport Follow`
 - Adds a main-toolbar toggle button for enabling/disabling all video behavior.
 - Shows a native macOS live preview window using AVFoundation.
@@ -20,18 +22,24 @@ macOS-only REAPER extension MVP for recording one webcam/video source in sync wi
 - Keeps video behavior disabled by default until the toolbar/action toggle is enabled.
 - Creates the `Video Recorder` track as soon as video features are enabled, before the first recording finishes.
 - Keeps REAPER audio recording disabled on the `Video Recorder` track; camera audio stays embedded in the recorded movie item.
-- Shows the preview in REAPER's docker.
+- Shows the preview in a floating window by default; the `Float/Dock Preview` action can still toggle docking and remembers that choice.
 - Shows recorded video playback in the same preview panel when REAPER plays over an item on the `Video Recorder` track.
+- Adds a `Float/Dock Preview` action because REAPER's normal docker undock controls do not work reliably for this custom native preview view.
 - Mutes the docked preview's internal player so playback audio comes only from REAPER.
 - Lets the docked playback player run smoothly and only re-seeks on source changes, playback start, or larger drift.
 - Inserts the finalized `.mov` onto a `Video Recorder` track at the record-start timeline position.
-- After insertion, compares the movie's embedded camera audio against overlapping non-video REAPER items and shifts the video item to the strongest correlation match.
+- After insertion, compares the movie's embedded camera audio against the first non-video track item that overlaps the video item and shifts the video item to the strongest correlation match on that reference.
+- Can manually re-run alignment for an existing project with `Video Recorder: Align Selected Video Item`; select the item on the `Video Recorder` track first, or it falls back to that track's latest item. If a REAPER time selection is active, only that region is analyzed.
 - Shows load/record/finalize/import state in the preview status label instead of console chatter.
 - Places recorded video using AVFoundation's actual recording-start callback to compensate for capture startup latency.
 - Can select an `iPhone Video Sync` source that controls the companion iPhone app for 4K recording, low-resolution Wi-Fi preview, download, and timeline insertion.
 - The iPhone source first attempts an experimental low-latency WebRTC preview using the bundled `LiveKitWebRTC.framework`. If that fails, it falls back to the persistent low-resolution binary JPEG preview stream, which decodes frames off the main thread, drops stale frames, and lowers preview rate while REAPER records. MJPEG and snapshot endpoints remain available as fallbacks/debugging aids.
 - For the iPhone source, the dock includes capture profile controls for resolution, FPS, orientation, social aspect ratio, lens, and zoom. Changing a profile control sends the new profile to the iPhone immediately when paired.
 - During iPhone recording stop, the dock status shows video transfer progress while the full-resolution movie downloads.
+- When an iPhone recording stops, REAPER prompts to either download the video or delete it from the iPhone. Delete requires a second confirmation; canceling that confirmation downloads instead.
+- After the Mac verifies the downloaded movie and acknowledges transfer, the iPhone app deletes its local copy immediately.
+- The iPhone app disables the idle timer while it is ready/listening so the phone does not sleep and interrupt preview on a tripod.
+- The iPhone app status screen shows `Keep awake: Yes` when the idle timer is disabled.
 
 ## Build
 

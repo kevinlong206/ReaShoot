@@ -48,7 +48,7 @@ sleep 3
 swift run video-sync-mac stop --host kevin-long-iphone.local --port 8787 --http-port 8788 --token "$VIDEO_SYNC_TOKEN" --download-dir test-downloads
 ```
 
-Expected result: the CLI prints a downloaded `.mov` path in `test-downloads`. Add `--progress` to the `stop` command to print transfer progress lines during the movie download.
+Expected result: the CLI prints a downloaded `.mov` path in `test-downloads`, then acknowledges transfer so the iPhone deletes its local copy. Add `--progress` to the `stop` command to print transfer progress lines during the movie download. For REAPER's prompted stop flow, the helper also exposes `stop-only`, `download-recording`, and `delete-recording`.
 
 ## Preview endpoints
 
@@ -68,6 +68,6 @@ Capture configuration supports hardware-dependent lens selection (`wide`, `ultra
 
 ## iOS background note
 
-The app is designed for reliable foreground recording with the screen kept awake while armed or recording. iOS normally suspends ordinary apps while backgrounded or locked, so true locked-screen video recording must be validated on device and may require a guided-access or managed-device workflow.
+The app is designed for reliable foreground recording and disables the idle timer while ready/listening so the screen stays awake during tripod preview. The status UI shows `Keep awake: Yes` when this is active. iOS normally suspends ordinary apps while backgrounded or locked, so true locked-screen video recording must be validated on device and may require a guided-access or managed-device workflow.
 
 See `AGENTS.md` for detailed handoff notes, device/signing details, known issues, and future work.

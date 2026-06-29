@@ -12,6 +12,7 @@ public final class iPhoneVideoSyncService: ObservableObject {
     @Published public private(set) var status = "Stopped"
     @Published public private(set) var previewStatus = "Idle"
     @Published public private(set) var lastError: String?
+    @Published public private(set) var keepsScreenAwake = false
 
     public let store: RecordingStore
     public let pairingStore: PairingStore
@@ -53,6 +54,7 @@ public final class iPhoneVideoSyncService: ObservableObject {
         do {
             try capture.configure()
             capture.startSession()
+            setKeepsScreenAwake(true)
             status = "Ready"
         } catch {
             lastError = error.localizedDescription
@@ -61,6 +63,7 @@ public final class iPhoneVideoSyncService: ObservableObject {
 
     public func startNetworkServices() {
         do {
+            setKeepsScreenAwake(true)
             let httpServer = HTTPRecordingServer(
                 port: httpPort,
                 store: store,
@@ -91,7 +94,25 @@ public final class iPhoneVideoSyncService: ObservableObject {
         webSocketServer?.stop()
         httpServer?.stop()
         netService?.stop()
+        setKeepsScreenAwake(false)
         status = "Stopped"
+    }
+
+    public func applicationBecameActive() {
+        if status != "Stopped" || capture.isConfigured {
+            setKeepsScreenAwake(true)
+        }
+    }
+
+    public func applicationResignedActive() {
+        if !capture.isRecording {
+            setKeepsScreenAwake(false)
+        }
+    }
+
+    private func setKeepsScreenAwake(_ enabled: Bool) {
+        keepsScreenAwake = enabled
+        UIApplication.shared.isIdleTimerDisabled = enabled
     }
 
     public func resetPairing() {
@@ -147,7 +168,14 @@ public final class iPhoneVideoSyncService: ObservableObject {
                 return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .error, message: "Unauthorized"))
             }
             try store.mark(id, as: .transferred)
-            return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .transferAcknowledged, message: "Transfer acknowledged"))
+            try store.deleteTransferredRecording(id: id)
+            return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .transferAcknowledged, message: "Transfer acknowledged and deleted from iPhone"))
+        case .deleteRecording:
+            guard pairingStore.validate(token: command.token), let id = command.recordingID else {
+                return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .error, message: "Unauthorized"))
+            }
+            try store.deleteRecording(id: id)
+            return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .recordingDeleted, message: "Recording deleted from iPhone"))
         case .startWebRTCPreview:
             guard pairingStore.validate(token: command.token), let offer = command.webRTCOfferSDP else {
                 return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .error, message: "Unauthorized"))

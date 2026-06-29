@@ -14,6 +14,7 @@ struct ContentView: View {
                     LabeledContent("Network", value: service.status)
                     LabeledContent("Pairing code", value: service.pairingStore.pairingCode)
                     LabeledContent("Paired", value: service.pairingStore.isPaired ? "Yes" : "No")
+                    LabeledContent("Keep awake", value: service.keepsScreenAwake ? "Yes" : "No")
                     LabeledContent("Preview", value: service.previewStatus)
                     LabeledContent("Recording", value: service.capture.isRecording ? "Yes" : "No")
                     LabeledContent("Profile", value: service.capture.currentProfile.displayName)

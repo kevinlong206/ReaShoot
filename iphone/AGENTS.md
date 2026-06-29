@@ -16,7 +16,7 @@ The current implementation has been installed and tested on a physical iPhone in
 4. iPhone records video with AVFoundation.
 5. Mac sends stop, receives a recording descriptor, downloads the `.mov` over HTTP on port `8788`, verifies checksum, and acknowledges transfer.
 
-Do not assume locked-screen or background recording works. iOS may suspend ordinary apps when backgrounded or locked; that remains a real-device feasibility item.
+The app disables the idle timer while ready/listening so foreground preview does not sleep on a tripod. Do not assume locked-screen or background recording works; iOS may still suspend ordinary apps when backgrounded or locked.
 
 ## Repository layout
 
@@ -132,6 +132,8 @@ swift run video-sync-mac stop \
 Expected result: a `.mov` appears in `test-downloads`, and the CLI prints `downloaded ...`.
 
 Add `--progress` to `swift run video-sync-mac stop ...` when testing transfer progress. It emits `progress bytes=... total=... percent=...` lines during the HTTP download.
+
+For the REAPER prompted stop flow, use `stop-only` to get recording metadata, then either `download-recording --progress` or `delete-recording`.
 
 ## WebRTC preview notes
 

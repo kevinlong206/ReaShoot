@@ -76,6 +76,46 @@ struct VideoSyncMacCLI {
                 ControlCommand(type: .transferComplete, token: token, recordingID: recording.id)
             }
             print("downloaded \(downloaded.path)")
+        case "stop-only":
+            let token = required(args.value(after: "--token"), "--token")
+            let event = try await send(args, type: .stopRecording) {
+                ControlCommand(type: .stopRecording, token: token)
+            }
+            guard let recording = event.recording else {
+                throw ControlClientError.unexpectedEvent(event)
+            }
+            printRecording(recording)
+        case "download-recording":
+            let host = required(args.value(after: "--host"), "--host")
+            let httpPort = args.int(after: "--http-port", default: 8788)
+            let token = required(args.value(after: "--token"), "--token")
+            let recording = RecordingDescriptor(
+                id: required(args.value(after: "--recording-id"), "--recording-id"),
+                filename: required(args.value(after: "--filename"), "--filename"),
+                byteCount: args.int64(after: "--byte-count", default: 0),
+                checksumSHA256: args.value(after: "--checksum"),
+                downloadPath: required(args.value(after: "--download-path"), "--download-path")
+            )
+            let directory = URL(fileURLWithPath: args.value(after: "--download-dir") ?? FileManager.default.currentDirectoryPath)
+            let showProgress = args.hasFlag("--progress")
+            let downloaded = try await RecordingDownloader.download(recording: recording, host: host, httpPort: httpPort, token: token, destinationDirectory: directory) { bytes, expected in
+                guard showProgress else {
+                    return
+                }
+                printProgress(bytes: bytes, expected: expected > 0 ? expected : recording.byteCount)
+            }
+            _ = try await send(args, type: .transferComplete) {
+                ControlCommand(type: .transferComplete, token: token, recordingID: recording.id)
+            }
+            print("downloaded \(downloaded.path)")
+        case "delete-recording":
+            let event = try await send(args, type: .deleteRecording) {
+                ControlCommand(type: .deleteRecording, token: required(args.value(after: "--token"), "--token"), recordingID: required(args.value(after: "--recording-id"), "--recording-id"))
+            }
+            guard event.type == .recordingDeleted else {
+                throw ControlClientError.unexpectedEvent(event)
+            }
+            print(event.message ?? "recording deleted")
         case "ping":
             let event = try await send(args, type: .ping, tokenRequired: false) {
                 ControlCommand(type: .ping, token: args.value(after: "--token"))
@@ -150,6 +190,9 @@ struct VideoSyncMacCLI {
           configure --host HOST [--port 8787] --token TOKEN [--resolution 4K] [--fps 30] [--orientation portrait] [--aspect 9:16] [--lens wide] [--zoom 1.0]
           start --host HOST [--port 8787] --token TOKEN [--session SESSION]
           stop --host HOST [--port 8787] [--http-port 8788] --token TOKEN [--download-dir DIR] [--progress]
+          stop-only --host HOST [--port 8787] --token TOKEN
+          download-recording --host HOST [--port 8787] [--http-port 8788] --token TOKEN --recording-id ID --filename NAME --byte-count BYTES --download-path PATH [--checksum SHA256] [--download-dir DIR] [--progress]
+          delete-recording --host HOST [--port 8787] --token TOKEN --recording-id ID
           ping --host HOST [--port 8787] [--token TOKEN]
           webrtc-answer --host HOST [--port 8787] --token TOKEN --offer-file PATH
           webrtc-candidate --host HOST [--port 8787] --token TOKEN --candidate SDP [--mid MID] [--mline INDEX]
@@ -162,5 +205,19 @@ struct VideoSyncMacCLI {
         let percent = total > 0 ? min(100.0, (Double(bytes) / Double(total)) * 100.0) : 0.0
         let line = "progress bytes=\(bytes) total=\(total) percent=\(String(format: "%.1f", percent))\n"
         FileHandle.standardError.write(Data(line.utf8))
+    }
+
+    private static func printRecording(_ recording: RecordingDescriptor) {
+        var fields = [
+            "recording",
+            "id=\(recording.id)",
+            "filename=\(recording.filename)",
+            "byteCount=\(recording.byteCount)",
+            "downloadPath=\(recording.downloadPath)"
+        ]
+        if let checksum = recording.checksumSHA256 {
+            fields.append("checksum=\(checksum)")
+        }
+        print(fields.joined(separator: "\t"))
     }
 }

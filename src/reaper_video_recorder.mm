@@ -1,4 +1,5 @@
 #import <AVFoundation/AVFoundation.h>
+#import <AudioToolbox/AudioToolbox.h>
 #import <Cocoa/Cocoa.h>
 #import <ImageIO/ImageIO.h>
 #import <LiveKitWebRTC/RTCConfiguration.h>
@@ -20,8 +21,10 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdio>
 #include <ctime>
 #include <limits>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -30,22 +33,28 @@
 #define REAPERAPI_WANT_AddMediaItemToTrack
 #define REAPERAPI_WANT_AddTakeToMediaItem
 #define REAPERAPI_WANT_CountMediaItems
+#define REAPERAPI_WANT_CountSelectedMediaItems
 #define REAPERAPI_WANT_CountTracks
 #define REAPERAPI_WANT_CountTrackMediaItems
+#define REAPERAPI_WANT_CreateTakeAudioAccessor
+#define REAPERAPI_WANT_DestroyAudioAccessor
 #define REAPERAPI_WANT_DockWindowActivate
 #define REAPERAPI_WANT_DockWindowAddEx
 #define REAPERAPI_WANT_DockWindowRefreshForHWND
 #define REAPERAPI_WANT_DockWindowRemove
 #define REAPERAPI_WANT_EnumProjects
 #define REAPERAPI_WANT_GetActiveTake
+#define REAPERAPI_WANT_GetAudioAccessorSamples
 #define REAPERAPI_WANT_GetCursorPositionEx
 #define REAPERAPI_WANT_GetExtState
+#define REAPERAPI_WANT_GetSet_LoopTimeRange2
 #define REAPERAPI_WANT_GetMediaItemInfo_Value
 #define REAPERAPI_WANT_GetMediaItem
 #define REAPERAPI_WANT_GetMediaItemTake_Source
 #define REAPERAPI_WANT_GetMediaItemTake_Peaks
 #define REAPERAPI_WANT_GetMediaItemTakeInfo_Value
 #define REAPERAPI_WANT_GetMediaItemTrack
+#define REAPERAPI_WANT_GetSelectedMediaItem
 #define REAPERAPI_WANT_GetMediaSourceLength
 #define REAPERAPI_WANT_GetMediaSourceFileName
 #define REAPERAPI_WANT_GetPlayPositionEx
@@ -57,8 +66,10 @@
 #define REAPERAPI_WANT_GetTrackMediaItem
 #define REAPERAPI_WANT_GetTrackName
 #define REAPERAPI_WANT_InsertTrackAtIndex
+#define REAPERAPI_WANT_IsMediaItemSelected
 #define REAPERAPI_WANT_PCM_Source_BuildPeaks
 #define REAPERAPI_WANT_PCM_Source_CreateFromFile
+#define REAPERAPI_WANT_PCM_Source_GetPeaks
 #define REAPERAPI_WANT_RefreshToolbar2
 #define REAPERAPI_WANT_SetExtState
 #define REAPERAPI_WANT_SetMediaItemInfo_Value
@@ -68,12 +79,14 @@
 #define REAPERAPI_WANT_ShowMessageBox
 #define REAPERAPI_WANT_UpdateArrange
 #define REAPERAPI_WANT_UpdateTimeline
+#define REAPERAPI_WANT_ValidatePtr2
 #include "reaper_plugin_functions.h"
 
 namespace {
 
 constexpr const char *kExtStateSection = "klong_reaper_video_recorder";
 constexpr const char *kFollowEnabledKey = "follow_enabled";
+constexpr const char *kPreviewFloatingKey = "preview_floating";
 constexpr const char *kSelectedDeviceKey = "selected_device_unique_id";
 constexpr const char *kSourceKindKey = "source_kind";
 constexpr const char *kIPhoneHostKey = "iphone_host";
@@ -91,20 +104,31 @@ constexpr const char *kVideoTrackName = "Video Recorder";
 constexpr const char *kRepoHelperPath = "/Users/klong/reaper_video_recorder/build/video-sync-mac";
 constexpr const char *kDefaultIPhoneHost = "kevin-long-iphone.local";
 constexpr int kRecordBit = 4;
-constexpr double kAlignmentPeakRate = 100.0;
+constexpr double kAlignmentPeakRate = 200.0;
+constexpr double kAlignmentFinePeakRate = 1000.0;
+constexpr int kAlignmentSampleRate = 48000;
 constexpr double kAlignmentMaxDuration = 120.0;
+constexpr double kAlignmentFineMaxDuration = 30.0;
+constexpr double kAlignmentFineSearchSeconds = 0.20;
+constexpr double kAlignmentSampleRefineDuration = 1.0;
+constexpr double kAlignmentSampleRefineSearchSeconds = 0.030;
 constexpr double kAlignmentSearchSeconds = 5.0;
 constexpr double kAlignmentMinimumScore = 0.15;
+constexpr int kAlignmentRetryLimit = 15;
 
 reaper_plugin_info_t *g_reaper = nullptr;
 int g_videoEnabledCommand = 0;
 int g_showPreviewCommand = 0;
+int g_floatPreviewCommand = 0;
+int g_alignSelectedCommand = 0;
 int g_toggleFollowCommand = 0;
 int g_previousPlayState = 0;
 bool g_videoEnabled = false;
 bool g_followEnabled = true;
+bool g_previewFloating = true;
 bool g_activeTransportRecording = false;
 bool g_pendingInsert = false;
+bool g_pendingAlignment = false;
 bool g_useIPhoneSource = false;
 std::string g_selectedDeviceUniqueID;
 std::string g_iPhoneHost;
@@ -118,9 +142,15 @@ std::string g_iPhoneAspect = "9:16";
 std::string g_iPhoneLens = "wide";
 std::string g_iPhoneZoom = "1.0";
 std::string g_pendingInsertPath;
+std::string g_lastAlignmentStatus;
 double g_pendingInsertPosition = 0.0;
 ReaProject *g_recordProject = nullptr;
+ReaProject *g_pendingAlignmentProject = nullptr;
+MediaTrack *g_pendingAlignmentTrack = nullptr;
+MediaItem *g_pendingAlignmentItem = nullptr;
 double g_recordStartPosition = 0.0;
+int g_pendingAlignmentAttempts = 0;
+std::time_t g_nextAlignmentAttemptTime = 0;
 
 struct PlaybackVideo {
   bool found = false;
@@ -134,6 +164,22 @@ struct AlignmentResult {
   bool aligned = false;
   double correction = 0.0;
   double score = 0.0;
+  int videoSamples = 0;
+  int videoPeaks = 0;
+  int candidateReferences = 0;
+  int usableReferences = 0;
+  std::string videoDebug;
+};
+
+struct TransientPeak {
+  int index = 0;
+  double value = 0.0;
+};
+
+struct AlignmentWindow {
+  bool active = false;
+  double start = 0.0;
+  double end = 0.0;
 };
 
 bool hasPathExtension(const std::string &path, const std::string &extension) {
@@ -400,35 +446,15 @@ MediaItem *insertMediaItem(MediaTrack *track,
   return item;
 }
 
-std::vector<double> takeEnvelope(MediaItem_Take *take, double itemPosition, double duration, int &sampleCountOut) {
-  sampleCountOut = 0;
-  if (!take || !GetMediaItemTake_Peaks || duration <= 0.0) {
+std::vector<double> normalizedEnvelope(std::vector<double> envelope) {
+  if (envelope.empty()) {
     return {};
   }
-
-  const int sampleCount = (std::max)(1, static_cast<int>(std::floor(duration * kAlignmentPeakRate)));
-  std::vector<double> peaks(static_cast<size_t>(sampleCount) * 2);
-  const int result = GetMediaItemTake_Peaks(take,
-                                            kAlignmentPeakRate,
-                                            itemPosition,
-                                            1,
-                                            sampleCount,
-                                            0,
-                                            peaks.data());
-  const int returnedSamples = result & 0xfffff;
-  if (returnedSamples <= 0) {
-    return {};
-  }
-
-  std::vector<double> envelope(static_cast<size_t>(returnedSamples));
   double mean = 0.0;
-  for (int i = 0; i < returnedSamples; ++i) {
-    const double value = (std::max)(std::fabs(peaks[static_cast<size_t>(i)]),
-                                    std::fabs(peaks[static_cast<size_t>(returnedSamples + i)]));
-    envelope[static_cast<size_t>(i)] = value;
+  for (double value : envelope) {
     mean += value;
   }
-  mean /= returnedSamples;
+  mean /= static_cast<double>(envelope.size());
 
   double energy = 0.0;
   for (double &value : envelope) {
@@ -438,14 +464,346 @@ std::vector<double> takeEnvelope(MediaItem_Take *take, double itemPosition, doub
   if (energy <= 1e-9) {
     return {};
   }
+  return envelope;
+}
 
+std::vector<double> shapeEnvelope(std::vector<double> envelope, double peakRate) {
+  if (envelope.empty()) {
+    return {};
+  }
+
+  for (double &value : envelope) {
+    value = std::log1p((std::max)(0.0, value) * 24.0);
+  }
+
+  const int radius = (std::max)(1, static_cast<int>(std::llround((peakRate >= kAlignmentFinePeakRate ? 0.015 : 0.25) * peakRate)));
+  std::vector<double> smoothed(envelope.size(), 0.0);
+  double sum = 0.0;
+  int count = 0;
+  int left = 0;
+  int right = -1;
+  for (int i = 0; i < static_cast<int>(envelope.size()); ++i) {
+    const int targetRight = (std::min)(static_cast<int>(envelope.size()) - 1, i + radius);
+    while (right < targetRight) {
+      ++right;
+      sum += envelope[static_cast<size_t>(right)];
+      ++count;
+    }
+    const int targetLeft = (std::max)(0, i - radius);
+    while (left < targetLeft) {
+      sum -= envelope[static_cast<size_t>(left)];
+      --count;
+      ++left;
+    }
+    smoothed[static_cast<size_t>(i)] = count > 0 ? sum / static_cast<double>(count) : 0.0;
+  }
+
+  return normalizedEnvelope(std::move(smoothed));
+}
+
+std::vector<double> transientEnvelope(const std::vector<double> &rawEnvelope) {
+  if (rawEnvelope.empty()) {
+    return {};
+  }
+  std::vector<double> onset(rawEnvelope.size(), 0.0);
+  double slowEnvelope = rawEnvelope.front();
+  for (size_t i = 1; i < rawEnvelope.size(); ++i) {
+    const double previousSlow = slowEnvelope;
+    slowEnvelope = (0.90 * slowEnvelope) + (0.10 * rawEnvelope[i]);
+    onset[i] = (std::max)(0.0, rawEnvelope[i] - previousSlow);
+  }
+  return normalizedEnvelope(std::move(onset));
+}
+
+double takeSourceOffset(MediaItem_Take *take) {
+  if (!take || !GetMediaItemTakeInfo_Value) {
+    return 0.0;
+  }
+  const double offset = GetMediaItemTakeInfo_Value(take, "D_STARTOFFS");
+  return std::isfinite(offset) && offset > 0.0 ? offset : 0.0;
+}
+
+double takePlayRate(MediaItem_Take *take) {
+  if (!take || !GetMediaItemTakeInfo_Value) {
+    return 1.0;
+  }
+  const double rate = GetMediaItemTakeInfo_Value(take, "D_PLAYRATE");
+  return std::isfinite(rate) && rate > 0.0 ? rate : 1.0;
+}
+
+bool takeSourcePath(MediaItem_Take *take, std::string &path) {
+  if (!take || !GetMediaItemTake_Source || !GetMediaSourceFileName) {
+    return false;
+  }
+  PCM_source *source = GetMediaItemTake_Source(take);
+  if (!source) {
+    return false;
+  }
+  char filePath[4096] = {};
+  GetMediaSourceFileName(source, filePath, sizeof(filePath));
+  if (filePath[0] == '\0') {
+    return false;
+  }
+  path = filePath;
+  return true;
+}
+
+bool pathLooksLikeMovie(const std::string &path) {
+  return hasPathExtension(path, ".mov") || hasPathExtension(path, ".mp4") || hasPathExtension(path, ".m4v");
+}
+
+std::vector<double> envelopeFromPeakBuffer(const std::vector<double> &peaks, int returnedSamples, double peakRate) {
+  std::vector<double> envelope(static_cast<size_t>(returnedSamples));
+  for (int i = 0; i < returnedSamples; ++i) {
+    const double value = (std::max)(std::fabs(peaks[static_cast<size_t>(i)]),
+                                    std::fabs(peaks[static_cast<size_t>(returnedSamples + i)]));
+    envelope[static_cast<size_t>(i)] = value;
+  }
+
+  return shapeEnvelope(std::move(envelope), peakRate);
+}
+
+std::vector<double> movieAudioEnvelope(const std::string &path, double sourceStart, double duration, double peakRate, int &sampleCountOut, std::string *debug) {
+  sampleCountOut = 0;
+  if (path.empty() || duration <= 0.0) {
+    if (debug) {
+      *debug = "movie fallback skipped: empty path or duration";
+    }
+    return {};
+  }
+
+  NSURL *url = [NSURL fileURLWithPath:[NSString stringWithUTF8String:path.c_str()]];
+  AVURLAsset *asset = [AVURLAsset URLAssetWithURL:url options:nil];
+  NSArray<AVAssetTrack *> *audioTracks = [asset tracksWithMediaType:AVMediaTypeAudio];
+  AVAssetTrack *audioTrack = audioTracks.firstObject;
+  if (!audioTrack) {
+    if (debug) {
+      *debug = "movie fallback failed: no audio track in " + path;
+    }
+    return {};
+  }
+
+  NSError *error = nil;
+  AVAssetReader *reader = [[AVAssetReader alloc] initWithAsset:asset error:&error];
+  if (!reader || error) {
+    if (debug) {
+      NSString *message = error.localizedDescription ?: @"unknown reader error";
+      *debug = "movie fallback failed: " + std::string(message.UTF8String ?: "reader error");
+    }
+    return {};
+  }
+
+  NSDictionary *settings = @{
+    AVFormatIDKey: @(kAudioFormatLinearPCM),
+    AVLinearPCMIsFloatKey: @YES,
+    AVLinearPCMBitDepthKey: @32,
+    AVLinearPCMIsNonInterleavedKey: @NO,
+    AVLinearPCMIsBigEndianKey: @NO
+  };
+  AVAssetReaderTrackOutput *output = [[AVAssetReaderTrackOutput alloc] initWithTrack:audioTrack outputSettings:settings];
+  output.alwaysCopiesSampleData = NO;
+  if (![reader canAddOutput:output]) {
+    if (debug) {
+      *debug = "movie fallback failed: cannot add audio reader output";
+    }
+    return {};
+  }
+  [reader addOutput:output];
+  reader.timeRange = CMTimeRangeMake(CMTimeMakeWithSeconds((std::max)(0.0, sourceStart), 600),
+                                     CMTimeMakeWithSeconds(duration, 600));
+
+  if (![reader startReading]) {
+    if (debug) {
+      NSString *message = reader.error.localizedDescription ?: @"unknown start error";
+      *debug = "movie fallback failed: " + std::string(message.UTF8String ?: "start error");
+    }
+    return {};
+  }
+
+  const int bucketCount = (std::max)(1, static_cast<int>(std::floor(duration * peakRate)));
+  std::vector<double> envelope(static_cast<size_t>(bucketCount), 0.0);
+  int observedBuckets = 0;
+  int64_t decodedFrames = 0;
+
+  while (reader.status == AVAssetReaderStatusReading) {
+    CMSampleBufferRef sampleBuffer = [output copyNextSampleBuffer];
+    if (!sampleBuffer) {
+      break;
+    }
+
+    CMFormatDescriptionRef formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer);
+    const AudioStreamBasicDescription *format =
+        formatDescription ? CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription) : nullptr;
+    const int frameCount = static_cast<int>(CMSampleBufferGetNumSamples(sampleBuffer));
+    size_t audioBufferListSize = 0;
+    CMBlockBufferRef retainedBlockBuffer = nullptr;
+    OSStatus status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+        sampleBuffer,
+        &audioBufferListSize,
+        nullptr,
+        0,
+        nullptr,
+        nullptr,
+        kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment,
+        nullptr);
+
+    std::unique_ptr<uint8_t[]> audioBufferListStorage;
+    AudioBufferList *audioBufferList = nullptr;
+    if (status == noErr && audioBufferListSize > 0) {
+      audioBufferListStorage.reset(new uint8_t[audioBufferListSize]);
+      audioBufferList = reinterpret_cast<AudioBufferList *>(audioBufferListStorage.get());
+      status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+          sampleBuffer,
+          nullptr,
+          audioBufferList,
+          audioBufferListSize,
+          nullptr,
+          nullptr,
+          kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment,
+          &retainedBlockBuffer);
+    }
+
+    if (status == noErr && audioBufferList && format && frameCount > 0) {
+      const double sampleRate = format->mSampleRate > 0.0 ? format->mSampleRate : 48000.0;
+      for (int frame = 0; frame < frameCount; ++frame) {
+        const int bucket = static_cast<int>(std::floor(((static_cast<double>(decodedFrames) + static_cast<double>(frame)) / sampleRate) * peakRate));
+        if (bucket < 0 || bucket >= bucketCount) {
+          continue;
+        }
+        double peak = 0.0;
+        for (UInt32 bufferIndex = 0; bufferIndex < audioBufferList->mNumberBuffers; ++bufferIndex) {
+          const AudioBuffer &audioBuffer = audioBufferList->mBuffers[bufferIndex];
+          if (!audioBuffer.mData || audioBuffer.mNumberChannels == 0) {
+            continue;
+          }
+          const float *samples = reinterpret_cast<const float *>(audioBuffer.mData);
+          const UInt32 channelCount = audioBuffer.mNumberChannels;
+          for (UInt32 channel = 0; channel < channelCount; ++channel) {
+            const size_t sampleIndex = audioBufferList->mNumberBuffers == 1
+                                           ? (static_cast<size_t>(frame) * channelCount) + channel
+                                           : static_cast<size_t>(frame);
+            peak = (std::max)(peak, std::fabs(static_cast<double>(samples[sampleIndex])));
+          }
+        }
+        envelope[static_cast<size_t>(bucket)] = (std::max)(envelope[static_cast<size_t>(bucket)], peak);
+        observedBuckets = (std::max)(observedBuckets, bucket + 1);
+      }
+      decodedFrames += frameCount;
+    } else if (debug && debug->empty()) {
+      char message[160] = {};
+      std::snprintf(message,
+                    sizeof(message),
+                    "movie fallback buffer failed: status %d, format %s, frames %d",
+                    static_cast<int>(status),
+                    format ? "yes" : "no",
+                    frameCount);
+      *debug = message;
+    }
+
+    if (retainedBlockBuffer) {
+      CFRelease(retainedBlockBuffer);
+    }
+    CFRelease(sampleBuffer);
+  }
+
+  if (observedBuckets <= 0) {
+    if (debug && debug->empty()) {
+      NSString *message = reader.error.localizedDescription ?: @"no decoded audio buckets";
+      *debug = "movie fallback failed: " + std::string(message.UTF8String ?: "no decoded audio buckets");
+    }
+    return {};
+  }
+  if (observedBuckets < static_cast<int>(envelope.size())) {
+    envelope.resize(static_cast<size_t>(observedBuckets));
+  }
+
+  envelope = shapeEnvelope(std::move(envelope), peakRate);
+  if (envelope.empty()) {
+    return {};
+  }
+  sampleCountOut = static_cast<int>(envelope.size());
+  return envelope;
+}
+
+std::vector<double> takeEnvelope(MediaItem_Take *take, double sourceStart, double duration, int &sampleCountOut, std::string *debug = nullptr, double peakRate = kAlignmentPeakRate) {
+  sampleCountOut = 0;
+  if (!take || duration <= 0.0) {
+    return {};
+  }
+
+  const int sampleCount = (std::max)(1, static_cast<int>(std::floor(duration * peakRate)));
+  std::vector<double> peaks(static_cast<size_t>(sampleCount) * 2);
+  int returnedSamples = 0;
+  if (PCM_Source_GetPeaks && GetMediaItemTake_Source) {
+    if (PCM_source *source = GetMediaItemTake_Source(take)) {
+      const int result = PCM_Source_GetPeaks(source,
+                                             peakRate,
+                                             sourceStart,
+                                             1,
+                                             sampleCount,
+                                             0,
+                                             peaks.data());
+      returnedSamples = result & 0xfffff;
+    }
+  }
+
+  std::vector<double> envelope = returnedSamples > 0 ? envelopeFromPeakBuffer(peaks, returnedSamples, peakRate) : std::vector<double>{};
+  if (envelope.empty() && GetMediaItemTake_Peaks) {
+    std::fill(peaks.begin(), peaks.end(), 0.0);
+    const int result = GetMediaItemTake_Peaks(take,
+                                              peakRate,
+                                              sourceStart,
+                                              1,
+                                              sampleCount,
+                                              0,
+                                              peaks.data());
+    returnedSamples = result & 0xfffff;
+    envelope = returnedSamples > 0 ? envelopeFromPeakBuffer(peaks, returnedSamples, peakRate) : std::vector<double>{};
+  }
+
+  if (envelope.empty()) {
+    std::string path;
+    if (takeSourcePath(take, path) && pathLooksLikeMovie(path)) {
+      std::string movieDebug;
+      std::vector<double> movieEnvelope = movieAudioEnvelope(path, sourceStart, duration, peakRate, sampleCountOut, &movieDebug);
+      if (!movieEnvelope.empty()) {
+        return movieEnvelope;
+      }
+      if (debug) {
+        if (!movieDebug.empty()) {
+          *debug = movieDebug;
+        } else {
+          char message[180] = {};
+          std::snprintf(message,
+                        sizeof(message),
+                        "movie fallback produced no audio after %d silent REAPER peak samples",
+                        returnedSamples);
+          *debug = message;
+        }
+      }
+      return {};
+    }
+    if (debug) {
+      if (path.empty()) {
+        *debug = returnedSamples > 0
+                     ? "REAPER peak APIs returned silent samples and source path is empty"
+                     : "take/source peak APIs returned no samples and source path is empty";
+      } else {
+        *debug = returnedSamples > 0
+                     ? "REAPER peak APIs returned silent samples for non-movie source: " + path
+                     : "take/source peak APIs returned no samples for non-movie source: " + path;
+      }
+    }
+    return {};
+  }
   sampleCountOut = returnedSamples;
   return envelope;
 }
 
 double normalizedCorrelationAtLag(const std::vector<double> &video,
                                   const std::vector<double> &reference,
-                                  int lagSamples) {
+                                  int lagSamples,
+                                  int minimumOverlapSamples = static_cast<int>(kAlignmentPeakRate)) {
   int videoStart = 0;
   int referenceStart = lagSamples;
   int count = static_cast<int>(video.size());
@@ -455,7 +813,7 @@ double normalizedCorrelationAtLag(const std::vector<double> &video,
     count -= videoStart;
   }
   count = (std::min)(count, static_cast<int>(reference.size()) - referenceStart);
-  if (count < static_cast<int>(kAlignmentPeakRate)) {
+  if (count < minimumOverlapSamples) {
     return -std::numeric_limits<double>::infinity();
   }
 
@@ -475,7 +833,381 @@ double normalizedCorrelationAtLag(const std::vector<double> &video,
   return dot / std::sqrt(videoEnergy * referenceEnergy);
 }
 
-AlignmentResult alignVideoItemToReference(ReaProject *project, MediaTrack *videoTrack, MediaItem *videoItem) {
+std::vector<double> normalizedSampleShape(std::vector<double> samples) {
+  if (samples.empty()) {
+    return {};
+  }
+
+  for (double &sample : samples) {
+    sample = std::sqrt(std::fabs(sample));
+  }
+
+  const int radius = (std::max)(1, static_cast<int>(std::llround(0.0015 * kAlignmentSampleRate)));
+  std::vector<double> smoothed(samples.size(), 0.0);
+  double sum = 0.0;
+  int count = 0;
+  int left = 0;
+  int right = -1;
+  for (int i = 0; i < static_cast<int>(samples.size()); ++i) {
+    const int targetRight = (std::min)(static_cast<int>(samples.size()) - 1, i + radius);
+    while (right < targetRight) {
+      ++right;
+      sum += samples[static_cast<size_t>(right)];
+      ++count;
+    }
+    const int targetLeft = (std::max)(0, i - radius);
+    while (left < targetLeft) {
+      sum -= samples[static_cast<size_t>(left)];
+      --count;
+      ++left;
+    }
+    smoothed[static_cast<size_t>(i)] = count > 0 ? sum / static_cast<double>(count) : 0.0;
+  }
+
+  return normalizedEnvelope(std::move(smoothed));
+}
+
+std::vector<double> movieAudioSamples(const std::string &path, double sourceStart, double duration) {
+  if (path.empty() || duration <= 0.0) {
+    return {};
+  }
+
+  NSURL *url = [NSURL fileURLWithPath:[NSString stringWithUTF8String:path.c_str()]];
+  AVURLAsset *asset = [AVURLAsset URLAssetWithURL:url options:nil];
+  AVAssetTrack *audioTrack = [asset tracksWithMediaType:AVMediaTypeAudio].firstObject;
+  if (!audioTrack) {
+    return {};
+  }
+
+  NSError *error = nil;
+  AVAssetReader *reader = [[AVAssetReader alloc] initWithAsset:asset error:&error];
+  if (!reader || error) {
+    return {};
+  }
+
+  NSDictionary *settings = @{
+    AVFormatIDKey: @(kAudioFormatLinearPCM),
+    AVSampleRateKey: @(kAlignmentSampleRate),
+    AVNumberOfChannelsKey: @1,
+    AVLinearPCMIsFloatKey: @YES,
+    AVLinearPCMBitDepthKey: @32,
+    AVLinearPCMIsNonInterleavedKey: @NO,
+    AVLinearPCMIsBigEndianKey: @NO
+  };
+  AVAssetReaderTrackOutput *output = [[AVAssetReaderTrackOutput alloc] initWithTrack:audioTrack outputSettings:settings];
+  if (![reader canAddOutput:output]) {
+    return {};
+  }
+  [reader addOutput:output];
+  reader.timeRange = CMTimeRangeMake(CMTimeMakeWithSeconds((std::max)(0.0, sourceStart), 600),
+                                     CMTimeMakeWithSeconds(duration, 600));
+  if (![reader startReading]) {
+    return {};
+  }
+
+  std::vector<double> samples;
+  samples.reserve(static_cast<size_t>(std::ceil(duration * kAlignmentSampleRate)));
+  while (reader.status == AVAssetReaderStatusReading) {
+    CMSampleBufferRef sampleBuffer = [output copyNextSampleBuffer];
+    if (!sampleBuffer) {
+      break;
+    }
+
+    CMBlockBufferRef blockBuffer = nullptr;
+    AudioBufferList audioBufferList = {};
+    OSStatus status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+        sampleBuffer,
+        nullptr,
+        &audioBufferList,
+        sizeof(audioBufferList),
+        nullptr,
+        nullptr,
+        kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment,
+        &blockBuffer);
+    if (status == noErr && audioBufferList.mNumberBuffers > 0 && audioBufferList.mBuffers[0].mData) {
+      const int frameCount = static_cast<int>(CMSampleBufferGetNumSamples(sampleBuffer));
+      const float *buffer = reinterpret_cast<const float *>(audioBufferList.mBuffers[0].mData);
+      for (int i = 0; i < frameCount; ++i) {
+        samples.push_back(static_cast<double>(buffer[i]));
+      }
+    }
+    if (blockBuffer) {
+      CFRelease(blockBuffer);
+    }
+    CFRelease(sampleBuffer);
+  }
+
+  return samples;
+}
+
+std::vector<double> takeAudioAccessorSamples(MediaItem_Take *take, double projectStart, double duration) {
+  if (!take || !CreateTakeAudioAccessor || !GetAudioAccessorSamples || !DestroyAudioAccessor || duration <= 0.0) {
+    return {};
+  }
+
+  const int sampleCount = static_cast<int>(std::ceil(duration * kAlignmentSampleRate));
+  if (sampleCount <= 0) {
+    return {};
+  }
+  std::vector<double> samples(static_cast<size_t>(sampleCount), 0.0);
+  AudioAccessor *accessor = CreateTakeAudioAccessor(take);
+  if (!accessor) {
+    return {};
+  }
+  const int result = GetAudioAccessorSamples(accessor,
+                                             kAlignmentSampleRate,
+                                             1,
+                                             projectStart,
+                                             sampleCount,
+                                             samples.data());
+  DestroyAudioAccessor(accessor);
+  if (result <= 0) {
+    return {};
+  }
+  return samples;
+}
+
+bool sampleAccurateRefine(MediaItem_Take *videoTake,
+                          MediaItem_Take *referenceTake,
+                          double videoSourceStart,
+                          double videoDuration,
+                          double referencePosition,
+                          double referenceLength,
+                          double coarseSegmentPosition,
+                          double analysisOffset,
+                          double &refinedPosition,
+                          double &refinedScore) {
+  std::string videoPath;
+  if (!takeSourcePath(videoTake, videoPath) || !pathLooksLikeMovie(videoPath)) {
+    return false;
+  }
+
+  const double search = kAlignmentSampleRefineSearchSeconds;
+  const double duration = (std::min)(videoDuration, kAlignmentSampleRefineDuration);
+  const double referenceOffset = coarseSegmentPosition - referencePosition;
+  const double referenceWindowOffset = (std::max)(0.0, referenceOffset - search);
+  const double referenceWindowProjectPosition = referencePosition + referenceWindowOffset;
+  const double referenceDuration = (std::min)(referenceLength - referenceWindowOffset, duration + (2.0 * search));
+  if (referenceDuration <= duration * 0.5) {
+    return false;
+  }
+
+  std::vector<double> videoSamples = normalizedSampleShape(movieAudioSamples(videoPath, videoSourceStart, duration));
+  std::vector<double> referenceSamples = normalizedSampleShape(
+      takeAudioAccessorSamples(referenceTake, referenceWindowProjectPosition, referenceDuration));
+  if (videoSamples.empty() || referenceSamples.empty()) {
+    return false;
+  }
+
+  const int expectedLag = static_cast<int>(std::llround((coarseSegmentPosition - referenceWindowProjectPosition) * kAlignmentSampleRate));
+  const int searchSamples = static_cast<int>(std::llround(search * kAlignmentSampleRate));
+  const int minLag = (std::max)(0, expectedLag - searchSamples);
+  const int maxLag = (std::min)(static_cast<int>(referenceSamples.size()) - static_cast<int>(videoSamples.size()),
+                                expectedLag + searchSamples);
+  if (minLag > maxLag) {
+    return false;
+  }
+
+  const int minimumOverlapSamples = static_cast<int>(std::llround(0.25 * kAlignmentSampleRate));
+  double bestScore = -std::numeric_limits<double>::infinity();
+  int bestLag = expectedLag;
+  for (int lag = minLag; lag <= maxLag; ++lag) {
+    const double score = normalizedCorrelationAtLag(videoSamples, referenceSamples, lag, minimumOverlapSamples);
+    if (score > bestScore) {
+      bestScore = score;
+      bestLag = lag;
+    }
+  }
+  if (!std::isfinite(bestScore)) {
+    return false;
+  }
+
+  refinedPosition = referenceWindowProjectPosition + (static_cast<double>(bestLag) / kAlignmentSampleRate) - analysisOffset;
+  refinedScore = bestScore;
+  return true;
+}
+
+std::vector<TransientPeak> strongestTransientPeaks(const std::vector<double> &signal) {
+  std::vector<TransientPeak> peaks;
+  if (signal.size() < 3) {
+    return peaks;
+  }
+
+  double maxValue = 0.0;
+  for (double value : signal) {
+    maxValue = (std::max)(maxValue, value);
+  }
+  if (maxValue <= 0.0) {
+    return peaks;
+  }
+
+  const double threshold = maxValue * 0.35;
+  const int minDistance = static_cast<int>(std::llround(0.08 * kAlignmentPeakRate));
+  for (int i = 1; i < static_cast<int>(signal.size()) - 1; ++i) {
+    const double value = signal[static_cast<size_t>(i)];
+    if (value < threshold || value < signal[static_cast<size_t>(i - 1)] || value < signal[static_cast<size_t>(i + 1)]) {
+      continue;
+    }
+    bool merged = false;
+    for (TransientPeak &peak : peaks) {
+      if (std::abs(peak.index - i) <= minDistance) {
+        if (value > peak.value) {
+          peak.index = i;
+          peak.value = value;
+        }
+        merged = true;
+        break;
+      }
+    }
+    if (!merged) {
+      peaks.push_back({i, value});
+    }
+  }
+
+  std::sort(peaks.begin(), peaks.end(), [](const TransientPeak &a, const TransientPeak &b) {
+    return a.value > b.value;
+  });
+  if (peaks.size() > 32) {
+    peaks.resize(32);
+  }
+  return peaks;
+}
+
+bool refineAlignment(MediaItem_Take *videoTake,
+                     MediaItem_Take *referenceTake,
+                     double videoSourceStart,
+                     double videoDuration,
+                     double referencePosition,
+                     double referenceLength,
+                     double coarseSegmentPosition,
+                     double analysisOffset,
+                     double &refinedPosition,
+                     double &refinedScore) {
+  videoDuration = (std::min)(videoDuration, kAlignmentFineMaxDuration);
+  const double referenceOffset = coarseSegmentPosition - referencePosition;
+  const double referenceWindowOffset = (std::max)(0.0, referenceOffset - kAlignmentFineSearchSeconds);
+  const double referenceWindowProjectPosition = referencePosition + referenceWindowOffset;
+  const double referenceWindowDuration =
+      (std::min)(referenceLength - referenceWindowOffset, videoDuration + (2.0 * kAlignmentFineSearchSeconds));
+  if (!videoTake || !referenceTake || videoDuration <= 0.0 || referenceWindowDuration <= 0.0) {
+    return false;
+  }
+
+  int videoSampleCount = 0;
+  std::vector<double> videoEnvelope =
+      takeEnvelope(videoTake, videoSourceStart, videoDuration, videoSampleCount, nullptr, kAlignmentFinePeakRate);
+  if (videoEnvelope.empty()) {
+    return false;
+  }
+
+  int referenceSampleCount = 0;
+  std::vector<double> referenceEnvelope =
+      takeEnvelope(referenceTake,
+                   takeSourceOffset(referenceTake) + (referenceWindowOffset * takePlayRate(referenceTake)),
+                   referenceWindowDuration,
+                   referenceSampleCount,
+                   nullptr,
+                   kAlignmentFinePeakRate);
+  if (referenceEnvelope.empty()) {
+    return false;
+  }
+
+  const int expectedLagSamples =
+      static_cast<int>(std::llround((coarseSegmentPosition - referenceWindowProjectPosition) * kAlignmentFinePeakRate));
+  const int searchSamples = static_cast<int>(std::llround(kAlignmentFineSearchSeconds * kAlignmentFinePeakRate));
+  const int minLag = (std::max)(-videoSampleCount + 1, expectedLagSamples - searchSamples);
+  const int maxLag = (std::min)(referenceSampleCount - 1, expectedLagSamples + searchSamples);
+  if (minLag > maxLag) {
+    return false;
+  }
+
+  const int minimumOverlapSamples = static_cast<int>(std::llround(0.25 * kAlignmentFinePeakRate));
+  double bestScore = -std::numeric_limits<double>::infinity();
+  int bestLag = expectedLagSamples;
+  std::vector<double> lagScores(static_cast<size_t>(maxLag - minLag + 1), -std::numeric_limits<double>::infinity());
+  for (int lag = minLag; lag <= maxLag; ++lag) {
+    const double score = normalizedCorrelationAtLag(videoEnvelope, referenceEnvelope, lag, minimumOverlapSamples);
+    lagScores[static_cast<size_t>(lag - minLag)] = score;
+    if (score > bestScore) {
+      bestScore = score;
+      bestLag = lag;
+    }
+  }
+  if (!std::isfinite(bestScore)) {
+    return false;
+  }
+
+  double weightedLag = static_cast<double>(bestLag);
+  double weightSum = 0.0;
+  double lagSum = 0.0;
+  const double neighborhoodThreshold = bestScore - 0.02;
+  const int neighborhoodSamples = static_cast<int>(std::llround(0.025 * kAlignmentFinePeakRate));
+  const int neighborhoodStart = (std::max)(minLag, bestLag - neighborhoodSamples);
+  const int neighborhoodEnd = (std::min)(maxLag, bestLag + neighborhoodSamples);
+  for (int lag = neighborhoodStart; lag <= neighborhoodEnd; ++lag) {
+    const double score = lagScores[static_cast<size_t>(lag - minLag)];
+    if (!std::isfinite(score) || score < neighborhoodThreshold) {
+      continue;
+    }
+    const double weight = score - neighborhoodThreshold;
+    lagSum += static_cast<double>(lag) * weight;
+    weightSum += weight;
+  }
+  if (weightSum > 1e-9) {
+    weightedLag = lagSum / weightSum;
+  }
+
+  refinedPosition = referenceWindowProjectPosition + (weightedLag / kAlignmentFinePeakRate) - analysisOffset;
+  refinedScore = bestScore;
+  return true;
+}
+
+bool mediaItemInList(MediaItem *item, const std::vector<MediaItem *> *items) {
+  if (!items) {
+    return true;
+  }
+  return std::find(items->begin(), items->end(), item) != items->end();
+}
+
+MediaItem *firstOverlappingReferenceItem(ReaProject *project, MediaTrack *videoTrack, MediaItem *videoItem) {
+  if (!project || !videoTrack || !videoItem || !CountTracks || !GetTrack || !CountTrackMediaItems ||
+      !GetTrackMediaItem || !GetMediaItemInfo_Value) {
+    return nullptr;
+  }
+
+  const double videoPosition = GetMediaItemInfo_Value(videoItem, "D_POSITION");
+  const double videoLength = GetMediaItemInfo_Value(videoItem, "D_LENGTH");
+  const double videoEnd = videoPosition + (videoLength > 0.0 ? videoLength : 0.0);
+  const int trackCount = CountTracks(project);
+  for (int trackIndex = 0; trackIndex < trackCount; ++trackIndex) {
+    MediaTrack *track = GetTrack(project, trackIndex);
+    if (!track || track == videoTrack) {
+      continue;
+    }
+
+    const int itemCount = CountTrackMediaItems(track);
+    for (int itemIndex = 0; itemIndex < itemCount; ++itemIndex) {
+      MediaItem *item = GetTrackMediaItem(track, itemIndex);
+      if (!item) {
+        continue;
+      }
+      const double itemPosition = GetMediaItemInfo_Value(item, "D_POSITION");
+      const double itemLength = GetMediaItemInfo_Value(item, "D_LENGTH");
+      const double itemEnd = itemPosition + (itemLength > 0.0 ? itemLength : 0.0);
+      if (itemLength > 0.0 && itemPosition <= videoEnd && itemEnd >= videoPosition) {
+        return item;
+      }
+    }
+  }
+
+  return nullptr;
+}
+
+AlignmentResult alignVideoItemToReference(ReaProject *project,
+                                          MediaTrack *videoTrack,
+                                          MediaItem *videoItem,
+                                          const std::vector<MediaItem *> *referenceItems = nullptr,
+                                          AlignmentWindow analysisWindow = {}) {
   AlignmentResult result;
   if (!project || !videoTrack || !videoItem || !CountMediaItems || !GetMediaItem ||
       !GetMediaItemTrack || !GetActiveTake || !GetMediaItemInfo_Value || !SetMediaItemInfo_Value) {
@@ -489,20 +1221,50 @@ AlignmentResult alignVideoItemToReference(ReaProject *project, MediaTrack *video
     return result;
   }
 
+  const double videoEnd = videoPosition + videoLength;
+  double analysisProjectStart = videoPosition;
+  double videoAnalysisDuration = (std::min)(videoLength, kAlignmentMaxDuration);
+  if (analysisWindow.active) {
+    analysisProjectStart = (std::max)(videoPosition, analysisWindow.start);
+    const double analysisProjectEnd = (std::min)(videoEnd, analysisWindow.end);
+    videoAnalysisDuration = analysisProjectEnd - analysisProjectStart;
+    if (videoAnalysisDuration <= 0.0) {
+      result.videoDebug = "time selection does not overlap selected video item";
+      return result;
+    }
+    videoAnalysisDuration = (std::min)(videoAnalysisDuration, kAlignmentMaxDuration);
+  }
+  const double analysisOffset = analysisProjectStart - videoPosition;
+  const double videoSourceStart = takeSourceOffset(videoTake) + (analysisOffset * takePlayRate(videoTake));
+
   int videoSampleCount = 0;
+  std::string videoDebug;
   std::vector<double> videoEnvelope =
-      takeEnvelope(videoTake, videoPosition, (std::min)(videoLength, kAlignmentMaxDuration), videoSampleCount);
+      takeEnvelope(videoTake, videoSourceStart, videoAnalysisDuration, videoSampleCount, &videoDebug);
+  result.videoSamples = videoSampleCount;
+  result.videoDebug = videoDebug;
   if (videoEnvelope.empty()) {
     return result;
   }
+  result.videoPeaks = static_cast<int>(strongestTransientPeaks(transientEnvelope(videoEnvelope)).size());
 
   const int itemCount = CountMediaItems(project);
   double bestScore = -std::numeric_limits<double>::infinity();
   double bestPosition = videoPosition;
+  std::vector<MediaItem *> defaultReferenceItems;
+  if (!referenceItems) {
+    if (MediaItem *referenceItem = firstOverlappingReferenceItem(project, videoTrack, videoItem)) {
+      defaultReferenceItems.push_back(referenceItem);
+    }
+    referenceItems = &defaultReferenceItems;
+  }
 
   for (int i = 0; i < itemCount; ++i) {
     MediaItem *referenceItem = GetMediaItem(project, i);
     if (!referenceItem || referenceItem == videoItem || GetMediaItemTrack(referenceItem) == videoTrack) {
+      continue;
+    }
+    if (!mediaItemInList(referenceItem, referenceItems)) {
       continue;
     }
 
@@ -510,44 +1272,96 @@ AlignmentResult alignVideoItemToReference(ReaProject *project, MediaTrack *video
     if (!referenceTake) {
       continue;
     }
+    result.candidateReferences += 1;
 
     const double referencePosition = GetMediaItemInfo_Value(referenceItem, "D_POSITION");
     const double referenceLength = GetMediaItemInfo_Value(referenceItem, "D_LENGTH");
-    const double expectedLag = videoPosition - referencePosition;
+    const double expectedLag = analysisProjectStart - referencePosition;
     if (referenceLength <= 0.0 ||
         expectedLag < -kAlignmentSearchSeconds ||
         expectedLag > referenceLength + kAlignmentSearchSeconds) {
       continue;
     }
 
+    const double referenceWindowOffset = (std::max)(0.0, expectedLag - kAlignmentSearchSeconds);
+    const double referenceWindowProjectPosition = referencePosition + referenceWindowOffset;
+    const double referenceWindowDuration =
+        (std::min)(referenceLength - referenceWindowOffset, videoAnalysisDuration + (2.0 * kAlignmentSearchSeconds));
+    if (referenceWindowDuration <= 0.0) {
+      continue;
+    }
+
     int referenceSampleCount = 0;
     std::vector<double> referenceEnvelope =
         takeEnvelope(referenceTake,
-                     referencePosition,
-                     (std::min)(referenceLength, kAlignmentMaxDuration),
+                     takeSourceOffset(referenceTake) + (referenceWindowOffset * takePlayRate(referenceTake)),
+                     referenceWindowDuration,
                      referenceSampleCount);
     if (referenceEnvelope.empty()) {
       continue;
     }
-
-    const int expectedLagSamples = static_cast<int>(std::llround(expectedLag * kAlignmentPeakRate));
+    result.usableReferences += 1;
+    const int expectedLagSamples = static_cast<int>(std::llround((analysisProjectStart - referenceWindowProjectPosition) * kAlignmentPeakRate));
     const int searchSamples = static_cast<int>(std::llround(kAlignmentSearchSeconds * kAlignmentPeakRate));
     const int minLag = (std::max)(-videoSampleCount + 1, expectedLagSamples - searchSamples);
     const int maxLag = (std::min)(referenceSampleCount - 1, expectedLagSamples + searchSamples);
+    if (minLag > maxLag) {
+      continue;
+    }
 
+    double referenceBestScore = -std::numeric_limits<double>::infinity();
+    double referenceBestPosition = videoPosition;
     for (int lag = minLag; lag <= maxLag; ++lag) {
       const double score = normalizedCorrelationAtLag(videoEnvelope, referenceEnvelope, lag);
-      if (score > bestScore) {
-        bestScore = score;
-        bestPosition = referencePosition + (static_cast<double>(lag) / kAlignmentPeakRate);
+      if (score > referenceBestScore) {
+        referenceBestScore = score;
+        referenceBestPosition = referenceWindowProjectPosition + (static_cast<double>(lag) / kAlignmentPeakRate) - analysisOffset;
+      }
+    }
+
+    if (referenceBestScore > bestScore) {
+      double refinedPosition = referenceBestPosition;
+      double refinedScore = referenceBestScore;
+      if (refineAlignment(videoTake,
+                          referenceTake,
+                          videoSourceStart,
+                          videoAnalysisDuration,
+                          referencePosition,
+                          referenceLength,
+                          referenceBestPosition + analysisOffset,
+                          analysisOffset,
+                          refinedPosition,
+                          refinedScore)) {
+        double samplePosition = refinedPosition;
+        double sampleScore = refinedScore;
+        if (sampleAccurateRefine(videoTake,
+                                 referenceTake,
+                                 videoSourceStart,
+                                 videoAnalysisDuration,
+                                 referencePosition,
+                                 referenceLength,
+                                 refinedPosition + analysisOffset,
+                                 analysisOffset,
+                                 samplePosition,
+                                 sampleScore)) {
+          refinedPosition = samplePosition;
+          refinedScore = sampleScore;
+        }
+        bestPosition = refinedPosition;
+        bestScore = refinedScore;
+      } else {
+        bestPosition = referenceBestPosition;
+        bestScore = referenceBestScore;
       }
     }
   }
 
+  if (std::isfinite(bestScore)) {
+    result.score = bestScore;
+  }
   if (std::isfinite(bestScore) && bestScore >= kAlignmentMinimumScore) {
     result.aligned = true;
     result.correction = bestPosition - videoPosition;
-    result.score = bestScore;
     SetMediaItemInfo_Value(videoItem, "D_POSITION", bestPosition);
     if (UpdateArrange) {
       UpdateArrange();
@@ -560,7 +1374,67 @@ AlignmentResult alignVideoItemToReference(ReaProject *project, MediaTrack *video
   return result;
 }
 
-bool insertRecordedMedia(const std::string &path, double position, std::string &error) {
+std::string alignmentStatusText(const AlignmentResult &alignment) {
+  if (alignment.aligned) {
+    const double correctionMs = alignment.correction * 1000.0;
+    char message[160] = {};
+    std::snprintf(message,
+                  sizeof(message),
+                  "Recorded to Video Recorder track; aligned %.0f ms (score %.2f)",
+                  correctionMs,
+                  alignment.score);
+    return message;
+  }
+  char message[200] = {};
+  if (alignment.videoSamples <= 0) {
+    if (!alignment.videoDebug.empty()) {
+      std::snprintf(message, sizeof(message), "No alignment match: %s", alignment.videoDebug.c_str());
+    } else {
+      std::snprintf(message, sizeof(message), "No alignment match: no audio peaks in video item");
+    }
+  } else if (alignment.candidateReferences <= 0) {
+    std::snprintf(message, sizeof(message), "No alignment match: no nearby reference items");
+  } else if (alignment.usableReferences <= 0) {
+    std::snprintf(message,
+                  sizeof(message),
+                  "No alignment match: no reference peaks (%d candidates)",
+                  alignment.candidateReferences);
+  } else if (std::isfinite(alignment.score)) {
+    std::snprintf(message,
+                  sizeof(message),
+                  "No alignment match: best score %.2f below %.2f (%d refs)",
+                  alignment.score,
+                  kAlignmentMinimumScore,
+                  alignment.usableReferences);
+  } else {
+    std::snprintf(message,
+                  sizeof(message),
+                  "No alignment match: %d video peaks, %d refs",
+                  alignment.videoPeaks,
+                  alignment.usableReferences);
+  }
+  return message;
+}
+
+void clearPendingAlignment() {
+  g_pendingAlignment = false;
+  g_pendingAlignmentProject = nullptr;
+  g_pendingAlignmentTrack = nullptr;
+  g_pendingAlignmentItem = nullptr;
+  g_pendingAlignmentAttempts = 0;
+  g_nextAlignmentAttemptTime = 0;
+}
+
+void queuePendingAlignment(ReaProject *project, MediaTrack *track, MediaItem *item) {
+  g_pendingAlignment = project && track && item;
+  g_pendingAlignmentProject = project;
+  g_pendingAlignmentTrack = track;
+  g_pendingAlignmentItem = item;
+  g_pendingAlignmentAttempts = 0;
+  g_nextAlignmentAttemptTime = std::time(nullptr) + 1;
+}
+
+bool insertRecordedMedia(const std::string &path, double position, bool fromIPhone, std::string &error) {
   ReaProject *project = g_recordProject ? g_recordProject : currentProject();
   if (!project) {
     error = "Recording finished, but there is no active REAPER project to insert into:\n" + path;
@@ -590,7 +1464,15 @@ bool insertRecordedMedia(const std::string &path, double position, std::string &
     return false;
   }
 
-  alignVideoItemToReference(project, track, videoItem);
+  (void)fromIPhone;
+  AlignmentResult alignment = alignVideoItemToReference(project, track, videoItem);
+  if (alignment.aligned) {
+    clearPendingAlignment();
+    g_lastAlignmentStatus = alignmentStatusText(alignment);
+  } else {
+    queuePendingAlignment(project, track, videoItem);
+    g_lastAlignmentStatus = "Recorded to Video Recorder track; aligning audio";
+  }
 
   if (UpdateArrange) {
     UpdateArrange();
@@ -636,6 +1518,7 @@ void setVideoEnabled(bool enabled);
 @property(nonatomic, assign) CFTimeInterval lastPlaybackSeekHostTime;
 @property(nonatomic, strong) NSView *dockView;
 @property(nonatomic, strong) NSView *previewView;
+@property(nonatomic, strong) NSWindow *floatingPreviewWindow;
 @property(nonatomic, strong) NSPopUpButton *sourcePopup;
 @property(nonatomic, strong) NSPopUpButton *devicePopup;
 @property(nonatomic, strong) NSPopUpButton *formatDiagnosticPopup;
@@ -647,6 +1530,12 @@ void setVideoEnabled(bool enabled);
 @property(nonatomic, strong) NSButton *iPhoneDiscoverButton;
 @property(nonatomic, strong) NSButton *iPhonePairButton;
 @property(nonatomic, strong) NSButton *iPhoneTestButton;
+@property(nonatomic, strong) NSTextField *iPhoneSetupHostField;
+@property(nonatomic, strong) NSTextField *iPhoneSetupTokenField;
+@property(nonatomic, strong) NSTextField *iPhoneSetupPairingCodeField;
+@property(nonatomic, strong) NSButton *iPhoneSetupDiscoverButton;
+@property(nonatomic, strong) NSButton *iPhoneSetupPairButton;
+@property(nonatomic, strong) NSButton *iPhoneSetupTestButton;
 @property(nonatomic, strong) NSPopUpButton *iPhoneResolutionPopup;
 @property(nonatomic, strong) NSPopUpButton *iPhoneFPSPopup;
 @property(nonatomic, strong) NSPopUpButton *iPhoneOrientationPopup;
@@ -687,6 +1576,7 @@ void setVideoEnabled(bool enabled);
 @property(nonatomic, copy) NSString *audioDeviceName;
 @property(nonatomic, copy) NSString *captureQualityLabel;
 @property(nonatomic, assign) BOOL docked;
+@property(nonatomic, assign) BOOL floatingPreview;
 @property(nonatomic, assign) BOOL hasAudioInput;
 @property(nonatomic, assign) BOOL recordingVisualState;
 @property(nonatomic, assign) BOOL showingPlayback;
@@ -695,12 +1585,24 @@ void setVideoEnabled(bool enabled);
 
 @implementation KlongVideoRecorder
 
+- (instancetype)init {
+  self = [super init];
+  if (self) {
+    _floatingPreview = g_previewFloating;
+  }
+  return self;
+}
+
 - (void)showPreview {
   dispatch_async(dispatch_get_main_queue(), ^{
     if (g_useIPhoneSource) {
       [self ensureDockView];
       [self showLivePreview];
-      [self showDockedPreview];
+      if (self.floatingPreview) {
+        [self showFloatingPreview];
+      } else {
+        [self showDockedPreview];
+      }
       [self setStatus:[NSString stringWithUTF8String:followStatusText().c_str()]];
       return;
     }
@@ -711,17 +1613,41 @@ void setVideoEnabled(bool enabled);
         return;
       }
       [self ensureDockView];
-      [self showDockedPreview];
+      if (self.floatingPreview) {
+        [self showFloatingPreview];
+      } else {
+        [self showDockedPreview];
+      }
       [self setStatus:[NSString stringWithUTF8String:followStatusText().c_str()]];
     }];
   });
 }
 
 - (void)togglePreview {
-  if (self.docked) {
+  if (self.floatingPreview && self.floatingPreviewWindow.visible) {
+    [self hideFloatingPreview];
+  } else if (self.docked) {
     [self hideDockedPreview];
   } else {
     [self showPreview];
+  }
+}
+
+- (void)togglePreviewDockMode {
+  [self ensureDockView];
+  self.floatingPreview = !self.floatingPreview;
+  g_previewFloating = self.floatingPreview;
+  if (SetExtState) {
+    SetExtState(kExtStateSection, kPreviewFloatingKey, g_previewFloating ? "1" : "0", true);
+  }
+  if (self.floatingPreview) {
+    [self hideDockedPreview];
+    [self showFloatingPreview];
+    [self setStatus:@"Preview floating"];
+  } else {
+    [self hideFloatingPreview];
+    [self showDockedPreview];
+    [self setStatus:@"Preview docked"];
   }
 }
 
@@ -971,6 +1897,15 @@ void setVideoEnabled(bool enabled);
   return nil;
 }
 
+- (NSDictionary<NSString *, NSString *> *)recordingDescriptorFromVideoSyncOutput:(NSString *)output {
+  for (NSString *line in [output componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
+    if ([line hasPrefix:@"recording\t"]) {
+      return [self fieldsFromHelperLine:line];
+    }
+  }
+  return nil;
+}
+
 - (void)handleVideoSyncProgressLine:(NSString *)line {
   if (![line hasPrefix:@"progress "]) {
     return;
@@ -992,6 +1927,109 @@ void setVideoEnabled(bool enabled);
     [self setStatus:[NSString stringWithFormat:@"Downloading iPhone video: %@%%", percent]];
   } else if (bytes.length > 0 && total.length > 0) {
     [self setStatus:[NSString stringWithFormat:@"Downloading iPhone video: %@/%@ bytes", bytes, total]];
+  }
+}
+
+- (void)finishIPhoneStopWithPath:(NSString *)path error:(NSError *)error {
+  if (self.stopCompletion) {
+    self.stopCompletion(path, error);
+    self.stopCompletion = nil;
+  }
+}
+
+- (void)downloadStoppedIPhoneRecording:(NSDictionary<NSString *, NSString *> *)recording {
+  NSMutableArray<NSString *> *arguments = [NSMutableArray arrayWithObjects:
+    @"--http-port",
+    [NSString stringWithUTF8String:g_iPhoneHttpPort.c_str()],
+    @"--token",
+    [NSString stringWithUTF8String:g_iPhoneToken.c_str()],
+    @"--recording-id",
+    recording[@"id"] ?: @"",
+    @"--filename",
+    recording[@"filename"] ?: @"recording.mov",
+    @"--byte-count",
+    recording[@"byteCount"] ?: @"0",
+    @"--download-path",
+    recording[@"downloadPath"] ?: @"",
+    @"--download-dir",
+    self.activeRemoteDownloadDirectory ?: NSHomeDirectory(),
+    @"--progress",
+    nil];
+  NSString *checksum = recording[@"checksum"];
+  if (checksum.length > 0) {
+    [arguments addObjectsFromArray:@[ @"--checksum", checksum ]];
+  }
+  [self setStatus:@"Downloading iPhone video"];
+  [self runVideoSyncCommandAsync:@"download-recording" extraArguments:arguments outputHandler:^(NSString *line) {
+    [self handleVideoSyncProgressLine:line];
+  } completion:^(NSString *output, NSError *error) {
+    if (error) {
+      [self setStatus:@"iPhone download failed"];
+      [self finishIPhoneStopWithPath:nil error:error];
+      return;
+    }
+    NSString *path = [self downloadedPathFromVideoSyncOutput:output ?: @""];
+    NSError *missingPathError = nil;
+    if (path.length == 0) {
+      missingPathError = [NSError errorWithDomain:@"KlongVideoRecorder"
+                                             code:23
+                                         userInfo:@{NSLocalizedDescriptionKey: @"The iPhone recording downloaded, but video-sync-mac did not report a file path."}];
+    }
+    [self finishIPhoneStopWithPath:path error:missingPathError];
+  }];
+}
+
+- (void)deleteStoppedIPhoneRecording:(NSDictionary<NSString *, NSString *> *)recording {
+  NSString *recordingID = recording[@"id"];
+  if (recordingID.length == 0) {
+    NSError *error = [NSError errorWithDomain:@"KlongVideoRecorder"
+                                         code:24
+                                     userInfo:@{NSLocalizedDescriptionKey: @"The iPhone recording stopped, but video-sync-mac did not report a recording ID to delete."}];
+    [self finishIPhoneStopWithPath:nil error:error];
+    return;
+  }
+  [self setStatus:@"Deleting iPhone video"];
+  NSArray<NSString *> *arguments = @[
+    @"--token",
+    [NSString stringWithUTF8String:g_iPhoneToken.c_str()],
+    @"--recording-id",
+    recordingID
+  ];
+  [self runVideoSyncCommandAsync:@"delete-recording" extraArguments:arguments completion:^(NSString *output, NSError *error) {
+    (void)output;
+    if (error) {
+      [self setStatus:@"iPhone delete failed"];
+      [self finishIPhoneStopWithPath:nil error:error];
+      return;
+    }
+    [self setStatus:@"iPhone video deleted"];
+    [self finishIPhoneStopWithPath:nil error:nil];
+  }];
+}
+
+- (void)promptForStoppedIPhoneRecording:(NSDictionary<NSString *, NSString *> *)recording {
+  NSString *filename = recording[@"filename"] ?: @"the stopped iPhone video";
+  NSAlert *alert = [[NSAlert alloc] init];
+  alert.messageText = @"Download iPhone video?";
+  alert.informativeText = [NSString stringWithFormat:@"Download %@ into the REAPER project, or delete it from the iPhone without downloading?", filename];
+  [alert addButtonWithTitle:@"Download"];
+  [alert addButtonWithTitle:@"Delete from iPhone"];
+  NSModalResponse response = [alert runModal];
+  if (response == NSAlertFirstButtonReturn) {
+    [self downloadStoppedIPhoneRecording:recording];
+    return;
+  }
+
+  NSAlert *confirm = [[NSAlert alloc] init];
+  confirm.alertStyle = NSAlertStyleWarning;
+  confirm.messageText = @"Delete iPhone recording?";
+  confirm.informativeText = [NSString stringWithFormat:@"This will permanently delete %@ from the iPhone without downloading it.", filename];
+  [confirm addButtonWithTitle:@"Delete"];
+  [confirm addButtonWithTitle:@"Cancel"];
+  if ([confirm runModal] == NSAlertFirstButtonReturn) {
+    [self deleteStoppedIPhoneRecording:recording];
+  } else {
+    [self downloadStoppedIPhoneRecording:recording];
   }
 }
 
@@ -1043,7 +2081,11 @@ void setVideoEnabled(bool enabled);
   self.startCompletion = startCompletion;
   [self showLivePreview];
   [self ensureDockView];
-  [self showDockedPreview];
+  if (self.floatingPreview) {
+    [self showFloatingPreview];
+  } else {
+    [self showDockedPreview];
+  }
   [self setStatus:@"Starting recording"];
   [self.movieOutput startRecordingToOutputFileURL:[NSURL fileURLWithPath:outputPath]
                                 recordingDelegate:self];
@@ -1060,36 +2102,28 @@ void setVideoEnabled(bool enabled);
       }
       return;
     }
-    [self setStatus:@"Stopping iPhone; downloading 4K video"];
+    [self setStatus:@"Stopping iPhone recording"];
     NSArray<NSString *> *arguments = @[
-      @"--http-port",
-      [NSString stringWithUTF8String:g_iPhoneHttpPort.c_str()],
       @"--token",
-      [NSString stringWithUTF8String:g_iPhoneToken.c_str()],
-      @"--download-dir",
-      self.activeRemoteDownloadDirectory ?: NSHomeDirectory(),
-      @"--progress"
+      [NSString stringWithUTF8String:g_iPhoneToken.c_str()]
     ];
-    [self runVideoSyncCommandAsync:@"stop" extraArguments:arguments outputHandler:^(NSString *line) {
-      [self handleVideoSyncProgressLine:line];
-    } completion:^(NSString *output, NSError *error) {
+    [self runVideoSyncCommandAsync:@"stop-only" extraArguments:arguments completion:^(NSString *output, NSError *error) {
       self.remoteRecording = NO;
       [self setRecordingVisualState:NO];
       if (error) {
-        [self setStatus:@"iPhone download failed"];
-        if (self.stopCompletion) {
-          self.stopCompletion(nil, error);
-          self.stopCompletion = nil;
-        }
+        [self setStatus:@"iPhone stop failed"];
+        [self finishIPhoneStopWithPath:nil error:error];
         return;
       }
-      NSString *path = [self downloadedPathFromVideoSyncOutput:output ?: @""];
-      if (self.stopCompletion) {
-        self.stopCompletion(path, path.length > 0 ? nil : [NSError errorWithDomain:@"KlongVideoRecorder"
-                                                                               code:23
-                                                                           userInfo:@{NSLocalizedDescriptionKey: @"The iPhone recording downloaded, but video-sync-mac did not report a file path."}]);
-        self.stopCompletion = nil;
+      NSDictionary<NSString *, NSString *> *recording = [self recordingDescriptorFromVideoSyncOutput:output ?: @""];
+      if (!recording) {
+        NSError *descriptorError = [NSError errorWithDomain:@"KlongVideoRecorder"
+                                                       code:25
+                                                   userInfo:@{NSLocalizedDescriptionKey: @"The iPhone recording stopped, but video-sync-mac did not report recording details."}];
+        [self finishIPhoneStopWithPath:nil error:descriptorError];
+        return;
       }
+      [self promptForStoppedIPhoneRecording:recording];
     }];
     return;
   }
@@ -1644,12 +2678,18 @@ void setVideoEnabled(bool enabled);
 }
 
 - (void)persistIPhoneSettings {
-  if (self.iPhoneHostField) {
-    g_iPhoneHost = self.iPhoneHostField.stringValue.UTF8String ?: "";
+  NSTextField *hostField = self.iPhoneSetupWindow.visible && self.iPhoneSetupHostField ? self.iPhoneSetupHostField : self.iPhoneHostField;
+  NSTextField *tokenField = self.iPhoneSetupWindow.visible && self.iPhoneSetupTokenField ? self.iPhoneSetupTokenField : self.iPhoneTokenField;
+  if (hostField) {
+    g_iPhoneHost = hostField.stringValue.UTF8String ?: "";
   }
-  if (self.iPhoneTokenField) {
-    g_iPhoneToken = self.iPhoneTokenField.stringValue.UTF8String ?: "";
+  if (tokenField) {
+    g_iPhoneToken = tokenField.stringValue.UTF8String ?: "";
   }
+  self.iPhoneHostField.stringValue = [NSString stringWithUTF8String:g_iPhoneHost.c_str()];
+  self.iPhoneTokenField.stringValue = [NSString stringWithUTF8String:g_iPhoneToken.c_str()];
+  self.iPhoneSetupHostField.stringValue = [NSString stringWithUTF8String:g_iPhoneHost.c_str()];
+  self.iPhoneSetupTokenField.stringValue = [NSString stringWithUTF8String:g_iPhoneToken.c_str()];
   if (self.iPhoneResolutionPopup.selectedItem.title.length > 0) {
     g_iPhoneResolution = self.iPhoneResolutionPopup.selectedItem.title.UTF8String ?: "4K";
   }
@@ -1775,6 +2815,7 @@ void setVideoEnabled(bool enabled);
       g_iPhoneHttpPort = httpPort.UTF8String;
     }
     self.iPhoneHostField.stringValue = host;
+    self.iPhoneSetupHostField.stringValue = host;
     [self persistIPhoneSettings];
     [self setStatus:[NSString stringWithFormat:@"Found iPhone: %@", fields[@"name"] ?: host]];
     return YES;
@@ -1795,6 +2836,7 @@ void setVideoEnabled(bool enabled);
       if (g_iPhoneHost.empty()) {
         g_iPhoneHost = kDefaultIPhoneHost;
         self.iPhoneHostField.stringValue = [NSString stringWithUTF8String:kDefaultIPhoneHost];
+        self.iPhoneSetupHostField.stringValue = [NSString stringWithUTF8String:kDefaultIPhoneHost];
         [self persistIPhoneSettings];
         [self setStatus:@"Bonjour not found; using known iPhone host"];
       } else {
@@ -1807,7 +2849,8 @@ void setVideoEnabled(bool enabled);
 - (void)pairIPhone:(id)sender {
   (void)sender;
   [self persistIPhoneSettings];
-  NSString *code = self.iPhonePairingCodeField.stringValue;
+  NSTextField *codeField = self.iPhoneSetupWindow.visible && self.iPhoneSetupPairingCodeField ? self.iPhoneSetupPairingCodeField : self.iPhonePairingCodeField;
+  NSString *code = codeField.stringValue;
   if (g_iPhoneHost.empty() || code.length == 0) {
     [self setStatus:@"Enter iPhone host and pairing code"];
     return;
@@ -1824,6 +2867,7 @@ void setVideoEnabled(bool enabled);
       if ([line hasPrefix:prefix]) {
         NSString *token = [line substringFromIndex:prefix.length];
         self.iPhoneTokenField.stringValue = token;
+        self.iPhoneSetupTokenField.stringValue = token;
         g_iPhoneToken = token.UTF8String ?: "";
         [self persistIPhoneSettings];
         [self setStatus:@"iPhone paired"];
@@ -1936,44 +2980,54 @@ void setVideoEnabled(bool enabled);
                                                          styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
                                                            backing:NSBackingStoreBuffered
                                                              defer:NO];
+    self.iPhoneSetupWindow.releasedWhenClosed = NO;
     self.iPhoneSetupWindow.title = @"iPhone Video Sync Setup";
     NSView *content = self.iPhoneSetupWindow.contentView;
 
-    self.iPhoneHostField.frame = NSMakeRect(12, 112, 240, 22);
-    self.iPhoneHostField.hidden = NO;
-    [content addSubview:self.iPhoneHostField];
+    self.iPhoneSetupHostField = [[NSTextField alloc] initWithFrame:NSMakeRect(12, 112, 240, 22)];
+    self.iPhoneSetupHostField.placeholderString = @"iPhone host, e.g. kevin-long-iphone.local";
+    self.iPhoneSetupHostField.target = self;
+    self.iPhoneSetupHostField.action = @selector(iPhoneSettingsChanged:);
+    [content addSubview:self.iPhoneSetupHostField];
 
-    self.iPhoneTokenField.frame = NSMakeRect(268, 112, 240, 22);
-    self.iPhoneTokenField.hidden = NO;
-    [content addSubview:self.iPhoneTokenField];
+    self.iPhoneSetupTokenField = [[NSTextField alloc] initWithFrame:NSMakeRect(268, 112, 240, 22)];
+    self.iPhoneSetupTokenField.placeholderString = @"Pairing token";
+    self.iPhoneSetupTokenField.target = self;
+    self.iPhoneSetupTokenField.action = @selector(iPhoneSettingsChanged:);
+    [content addSubview:self.iPhoneSetupTokenField];
 
-    self.iPhonePairingCodeField.frame = NSMakeRect(12, 78, 220, 22);
-    self.iPhonePairingCodeField.hidden = NO;
-    [content addSubview:self.iPhonePairingCodeField];
+    self.iPhoneSetupPairingCodeField = [[NSTextField alloc] initWithFrame:NSMakeRect(12, 78, 220, 22)];
+    self.iPhoneSetupPairingCodeField.placeholderString = @"Pairing code from iPhone";
+    [content addSubview:self.iPhoneSetupPairingCodeField];
 
-    self.iPhoneDiscoverButton.frame = NSMakeRect(244, 77, 82, 24);
-    self.iPhoneDiscoverButton.hidden = NO;
-    [content addSubview:self.iPhoneDiscoverButton];
+    self.iPhoneSetupDiscoverButton = [[NSButton alloc] initWithFrame:NSMakeRect(244, 77, 82, 24)];
+    self.iPhoneSetupDiscoverButton.title = @"Discover";
+    self.iPhoneSetupDiscoverButton.bezelStyle = NSBezelStyleRounded;
+    self.iPhoneSetupDiscoverButton.target = self;
+    self.iPhoneSetupDiscoverButton.action = @selector(discoverIPhone:);
+    [content addSubview:self.iPhoneSetupDiscoverButton];
 
-    self.iPhonePairButton.frame = NSMakeRect(338, 77, 76, 24);
-    self.iPhonePairButton.hidden = NO;
-    [content addSubview:self.iPhonePairButton];
+    self.iPhoneSetupPairButton = [[NSButton alloc] initWithFrame:NSMakeRect(338, 77, 76, 24)];
+    self.iPhoneSetupPairButton.title = @"Pair";
+    self.iPhoneSetupPairButton.bezelStyle = NSBezelStyleRounded;
+    self.iPhoneSetupPairButton.target = self;
+    self.iPhoneSetupPairButton.action = @selector(pairIPhone:);
+    [content addSubview:self.iPhoneSetupPairButton];
 
-    self.iPhoneTestButton.frame = NSMakeRect(426, 77, 76, 24);
-    self.iPhoneTestButton.hidden = NO;
-    [content addSubview:self.iPhoneTestButton];
+    self.iPhoneSetupTestButton = [[NSButton alloc] initWithFrame:NSMakeRect(426, 77, 76, 24)];
+    self.iPhoneSetupTestButton.title = @"Test";
+    self.iPhoneSetupTestButton.bezelStyle = NSBezelStyleRounded;
+    self.iPhoneSetupTestButton.target = self;
+    self.iPhoneSetupTestButton.action = @selector(testIPhoneConnection:);
+    [content addSubview:self.iPhoneSetupTestButton];
 
     NSTextField *hint = [NSTextField labelWithString:@"Launch the iPhone app, Discover, enter pairing code, Pair, then Test."];
     hint.frame = NSMakeRect(12, 24, 496, 36);
     hint.lineBreakMode = NSLineBreakByWordWrapping;
     [content addSubview:hint];
   }
-  self.iPhoneHostField.hidden = NO;
-  self.iPhoneTokenField.hidden = NO;
-  self.iPhonePairingCodeField.hidden = NO;
-  self.iPhoneDiscoverButton.hidden = NO;
-  self.iPhonePairButton.hidden = NO;
-  self.iPhoneTestButton.hidden = NO;
+  self.iPhoneSetupHostField.stringValue = [NSString stringWithUTF8String:g_iPhoneHost.c_str()];
+  self.iPhoneSetupTokenField.stringValue = [NSString stringWithUTF8String:g_iPhoneToken.c_str()];
   [self.iPhoneSetupWindow makeKeyAndOrderFront:nil];
 }
 
@@ -2889,6 +3943,7 @@ void setVideoEnabled(bool enabled);
   if (!DockWindowAddEx || !self.dockView) {
     return;
   }
+  [self hideFloatingPreview];
   HWND hwnd = (__bridge HWND)self.dockView;
   if (!self.docked) {
     DockWindowAddEx(hwnd, "Video Recorder", kDockIdent, true);
@@ -2899,6 +3954,35 @@ void setVideoEnabled(bool enabled);
   }
   if (DockWindowRefreshForHWND) {
     DockWindowRefreshForHWND(hwnd);
+  }
+}
+
+- (void)showFloatingPreview {
+  if (!self.dockView) {
+    return;
+  }
+  [self hideDockedPreview];
+  if (!self.floatingPreviewWindow) {
+    self.floatingPreviewWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(120, 120, 720, 540)
+                                                             styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable
+                                                               backing:NSBackingStoreBuffered
+                                                                 defer:NO];
+    self.floatingPreviewWindow.title = @"Video Recorder Preview";
+    self.floatingPreviewWindow.releasedWhenClosed = NO;
+  }
+  self.dockView.frame = self.floatingPreviewWindow.contentView.bounds;
+  self.dockView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+  self.floatingPreviewWindow.contentView = self.dockView;
+  [self.floatingPreviewWindow makeKeyAndOrderFront:nil];
+}
+
+- (void)hideFloatingPreview {
+  if (!self.floatingPreviewWindow) {
+    return;
+  }
+  [self.floatingPreviewWindow orderOut:nil];
+  if (self.floatingPreviewWindow.contentView == self.dockView) {
+    self.floatingPreviewWindow.contentView = [[NSView alloc] initWithFrame:self.floatingPreviewWindow.contentView.bounds];
   }
 }
 
@@ -3010,6 +4094,7 @@ void setVideoEnabled(bool enabled) {
     }
     [recorder() stopPlaybackAndShowLive];
     [recorder() hideDockedPreview];
+    [recorder() hideFloatingPreview];
   }
 
   updateFollowStatusText();
@@ -3075,21 +4160,162 @@ void processPendingInsert() {
   }
   const std::string path = g_pendingInsertPath;
   const double position = g_pendingInsertPosition;
+  const bool fromIPhone = g_useIPhoneSource;
   g_pendingInsert = false;
   g_pendingInsertPath.clear();
 
   std::string error;
-  if (insertRecordedMedia(path, position, error)) {
-    [recorder() setStatus:@"Recorded to Video Recorder track"];
+  if (insertRecordedMedia(path, position, fromIPhone, error)) {
+    const char *status = g_lastAlignmentStatus.empty() ? "Recorded to Video Recorder track" : g_lastAlignmentStatus.c_str();
+    [recorder() setStatus:[NSString stringWithUTF8String:status]];
   } else {
     [recorder() setStatus:@"Import error"];
     showError(error);
   }
 }
 
+void processPendingAlignment() {
+  if (!g_pendingAlignment) {
+    return;
+  }
+
+  const std::time_t now = std::time(nullptr);
+  if (now < g_nextAlignmentAttemptTime) {
+    return;
+  }
+
+  if (ValidatePtr2 &&
+      (!ValidatePtr2(g_pendingAlignmentProject, g_pendingAlignmentTrack, "MediaTrack*") ||
+       !ValidatePtr2(g_pendingAlignmentProject, g_pendingAlignmentItem, "MediaItem*"))) {
+    clearPendingAlignment();
+    return;
+  }
+
+  ++g_pendingAlignmentAttempts;
+  AlignmentResult alignment =
+      alignVideoItemToReference(g_pendingAlignmentProject, g_pendingAlignmentTrack, g_pendingAlignmentItem);
+  if (alignment.aligned) {
+    clearPendingAlignment();
+    g_lastAlignmentStatus = alignmentStatusText(alignment);
+    [recorder() setStatus:[NSString stringWithUTF8String:g_lastAlignmentStatus.c_str()]];
+    return;
+  }
+
+  if (g_pendingAlignmentAttempts >= kAlignmentRetryLimit) {
+    clearPendingAlignment();
+    g_lastAlignmentStatus = alignmentStatusText(alignment);
+    [recorder() setStatus:[NSString stringWithUTF8String:g_lastAlignmentStatus.c_str()]];
+    return;
+  }
+
+  g_nextAlignmentAttemptTime = now + 1;
+  [recorder() setStatus:@"Recorded to Video Recorder track; aligning audio"];
+}
+
+MediaItem *selectedOrLatestVideoTrackItem(MediaTrack *track) {
+  if (!track || !CountTrackMediaItems || !GetTrackMediaItem) {
+    return nullptr;
+  }
+
+  MediaItem *latestItem = nullptr;
+  double latestPosition = -std::numeric_limits<double>::infinity();
+  const int itemCount = CountTrackMediaItems(track);
+  for (int i = 0; i < itemCount; ++i) {
+    MediaItem *item = GetTrackMediaItem(track, i);
+    if (!item) {
+      continue;
+    }
+    if (IsMediaItemSelected && IsMediaItemSelected(item)) {
+      return item;
+    }
+    if (GetMediaItemInfo_Value) {
+      const double position = GetMediaItemInfo_Value(item, "D_POSITION");
+      if (position >= latestPosition) {
+        latestPosition = position;
+        latestItem = item;
+      }
+    } else if (!latestItem) {
+      latestItem = item;
+    }
+  }
+  return latestItem;
+}
+
+bool itemUsesMovieFile(MediaItem *item) {
+  if (!item || !GetActiveTake || !GetMediaItemTake_Source || !GetMediaSourceFileName) {
+    return false;
+  }
+  MediaItem_Take *take = GetActiveTake(item);
+  PCM_source *source = take ? GetMediaItemTake_Source(take) : nullptr;
+  if (!source) {
+    return false;
+  }
+  char filePath[4096] = {};
+  GetMediaSourceFileName(source, filePath, sizeof(filePath));
+  return hasPathExtension(filePath, ".mov") || hasPathExtension(filePath, ".mp4") || hasPathExtension(filePath, ".m4v");
+}
+
+MediaItem *selectedMovieItem(ReaProject *project) {
+  if (!project || !CountSelectedMediaItems || !GetSelectedMediaItem) {
+    return nullptr;
+  }
+  const int selectedCount = CountSelectedMediaItems(project);
+  for (int i = 0; i < selectedCount; ++i) {
+    MediaItem *item = GetSelectedMediaItem(project, i);
+    if (itemUsesMovieFile(item)) {
+      return item;
+    }
+  }
+  return nullptr;
+}
+
+AlignmentWindow currentTimeSelection(ReaProject *project) {
+  AlignmentWindow window;
+  if (!project || !GetSet_LoopTimeRange2) {
+    return window;
+  }
+  double start = 0.0;
+  double end = 0.0;
+  GetSet_LoopTimeRange2(project, false, false, &start, &end, false);
+  if (std::isfinite(start) && std::isfinite(end) && end > start) {
+    window.active = true;
+    window.start = start;
+    window.end = end;
+  }
+  return window;
+}
+
+void alignSelectedVideoItem() {
+  ReaProject *project = currentProject();
+  MediaTrack *track = project ? findVideoTrack(project) : nullptr;
+  MediaItem *item = selectedMovieItem(project);
+  if (!item) {
+    item = selectedOrLatestVideoTrackItem(track);
+  }
+  MediaTrack *itemTrack = item && GetMediaItemTrack ? GetMediaItemTrack(item) : track;
+  if (!project || !item || !itemTrack) {
+    const char *message = "Select a movie item, then run the align action again.";
+    [recorder() setStatus:[NSString stringWithUTF8String:message]];
+    showError(message);
+    return;
+  }
+
+  clearPendingAlignment();
+  [recorder() setStatus:@"Aligning selected video item"];
+  AlignmentWindow timeSelection = currentTimeSelection(project);
+  AlignmentResult alignment = alignVideoItemToReference(project, itemTrack ? itemTrack : track, item, nullptr, timeSelection);
+  g_lastAlignmentStatus = alignmentStatusText(alignment);
+  if (timeSelection.active) {
+    g_lastAlignmentStatus += " using time selection";
+  }
+  [recorder() setStatus:[NSString stringWithUTF8String:g_lastAlignmentStatus.c_str()]];
+  ShowMessageBox(g_lastAlignmentStatus.c_str(), "Video Recorder Alignment", 0);
+}
+
 void timerPoll() {
   @autoreleasepool {
     processPendingInsert();
+    processPendingAlignment();
 
     if (!g_videoEnabled) {
       g_previousPlayState = 0;
@@ -3150,6 +4376,16 @@ bool hookCommand2(KbdSectionInfo *section, int command, int val, int val2, int r
     return true;
   }
 
+  if (command == g_floatPreviewCommand) {
+    [recorder() togglePreviewDockMode];
+    return true;
+  }
+
+  if (command == g_alignSelectedCommand) {
+    alignSelectedVideoItem();
+    return true;
+  }
+
   if (command == g_toggleFollowCommand) {
     setFollowEnabled(!g_followEnabled);
     if (!g_followEnabled && recorder().isRecording) {
@@ -3167,6 +4403,9 @@ int toggleActionHook(int command) {
   }
   if (command == g_toggleFollowCommand) {
     return g_followEnabled ? 1 : 0;
+  }
+  if (command == g_floatPreviewCommand) {
+    return recorder().floatingPreview ? 1 : 0;
   }
   return -1;
 }
@@ -3190,6 +4429,18 @@ bool registerActions(reaper_plugin_info_t *rec) {
       "Video Recorder: Show/Hide Preview",
       nullptr,
   };
+  custom_action_register_t floatPreviewAction = {
+      0,
+      "KLONG_VIDEO_RECORDER_FLOAT_PREVIEW",
+      "Video Recorder: Float/Dock Preview",
+      nullptr,
+  };
+  custom_action_register_t alignSelectedAction = {
+      0,
+      "KLONG_VIDEO_RECORDER_ALIGN_SELECTED",
+      "Video Recorder: Align Selected Video Item",
+      nullptr,
+  };
   custom_action_register_t toggleFollowAction = {
       0,
       "KLONG_VIDEO_RECORDER_TOGGLE_FOLLOW",
@@ -3199,9 +4450,12 @@ bool registerActions(reaper_plugin_info_t *rec) {
 
   g_videoEnabledCommand = rec->Register("custom_action", &videoEnabledAction);
   g_showPreviewCommand = rec->Register("custom_action", &showPreviewAction);
+  g_floatPreviewCommand = rec->Register("custom_action", &floatPreviewAction);
+  g_alignSelectedCommand = rec->Register("custom_action", &alignSelectedAction);
   g_toggleFollowCommand = rec->Register("custom_action", &toggleFollowAction);
 
-  return g_videoEnabledCommand != 0 && g_showPreviewCommand != 0 && g_toggleFollowCommand != 0 &&
+  return g_videoEnabledCommand != 0 && g_showPreviewCommand != 0 && g_floatPreviewCommand != 0 &&
+         g_alignSelectedCommand != 0 && g_toggleFollowCommand != 0 &&
          rec->Register("hookcommand2", reinterpret_cast<void *>(hookCommand2)) &&
          rec->Register("toggleaction", reinterpret_cast<void *>(toggleActionHook)) &&
          rec->Register("timer", reinterpret_cast<void *>(timerPoll)) &&
@@ -3222,6 +4476,10 @@ void loadSettings() {
   const char *follow = GetExtState(kExtStateSection, kFollowEnabledKey);
   if (follow && follow[0] != '\0') {
     g_followEnabled = std::string(follow) != "0";
+  }
+  const char *previewFloating = GetExtState(kExtStateSection, kPreviewFloatingKey);
+  if (previewFloating && previewFloating[0] != '\0') {
+    g_previewFloating = std::string(previewFloating) != "0";
   }
   const char *selectedDevice = GetExtState(kExtStateSection, kSelectedDeviceKey);
   if (selectedDevice && selectedDevice[0] != '\0') {

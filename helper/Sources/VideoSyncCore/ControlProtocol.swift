@@ -10,6 +10,7 @@ public enum CommandType: String, Codable, Sendable {
     case startRecording
     case stopRecording
     case transferComplete
+    case deleteRecording
     case startWebRTCPreview
     case addWebRTCIceCandidate
     case stopWebRTCPreview
@@ -22,6 +23,7 @@ public enum EventType: String, Codable, Sendable {
     case recordingStarted
     case recordingStopped
     case transferAcknowledged
+    case recordingDeleted
     case webRTCPreviewAnswer
     case webRTCIceCandidateAdded
     case webRTCPreviewStopped

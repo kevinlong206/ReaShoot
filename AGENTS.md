@@ -63,13 +63,17 @@ If DerivedData changes, compute the app path with `xcodebuild -showBuildSettings
 - Registers actions:
   - `Video Recorder: Enable/Disable video features`
   - `Video Recorder: Show/Hide Preview`
+  - `Video Recorder: Float/Dock Preview`
+  - `Video Recorder: Align Selected Video Item`
   - `Video Recorder: Enable/Disable Transport Follow`
 - The user has a main-toolbar button wired to `_KLONG_VIDEO_RECORDER_ENABLE` in `~/Library/Application Support/REAPER/reaper-menu.ini`.
-- Video features are off by default. Enabling video shows the docked preview and creates/reuses a `Video Recorder` track.
+- Video features are off by default. Enabling video shows the floating preview by default and creates/reuses a `Video Recorder` track.
 - The `Video Recorder` track is forced to REAPER record-disabled state: unarmed, no input, record mode `none`, monitoring off, item monitoring off, and auto-recarm off.
 - The preview has a camera selector, a format diagnostics dropdown, and a format/status area below the video. The diagnostics dropdown shows 4K30/1080p30 availability and every format AVFoundation exposes for the selected camera. The format label shows active resolution, FPS, codec/source format, and whether 4K30/1080p30/highest fallback was selected. Format/status text turns red while recording.
 - For `iPhone Video Sync`, REAPER controls the companion iPhone app over WebSocket port `8787`, downloads recordings over HTTP port `8788`, and uses authenticated preview endpoints/control messages.
 - The helper `stop --progress` command emits `progress bytes=... total=... percent=...` lines while downloading; REAPER parses these live and shows transfer progress in the dock status label.
+- REAPER's iPhone stop flow uses helper `stop-only`, prompts for Download vs Delete, then calls either `download-recording --progress` or confirmed `delete-recording`. Canceling delete confirmation downloads instead.
+- After the helper verifies checksum and sends `transferComplete`, the iPhone app deletes the transferred local `.mov` immediately.
 - iPhone preview attempts WebRTC first using `LiveKitWebRTC.framework` and a docked `LKRTCMTLVideoView`. If WebRTC fails, REAPER falls back to `/preview.bin` binary JPEG streaming, then snapshot fallback if needed.
 - WebRTC signaling uses the existing authenticated control WebSocket. REAPER sends a receive-only offer, the iPhone returns an answer, REAPER strips inline iPhone ICE candidates before `setRemoteDescription`, adds them separately, and trickles Mac ICE candidates back with `addWebRTCIceCandidate`.
 - The iPhone app UI has a `Preview` row showing `Idle`, `WebRTC`, or `WebRTC failed`.
@@ -77,7 +81,7 @@ If DerivedData changes, compute the app path with `xcodebuild -showBuildSettings
 - On session creation the extension prefers 4K30, falls back to stable 1080p30, then the highest available 30 fps device format. It reapplies the requested format after the session starts because some capture sessions can reset device timing.
 - AVFoundation records a single `.mov` with video and camera audio embedded. The extension inserts only one media item on the `Video Recorder` track.
 - The docked preview uses an `AVPlayerLayer` for video playback preview but mutes that internal player so audio is heard only through REAPER. Avoid aggressive per-timer exact seeking; the player should seek on source changes/playback start and only correct larger drift.
-- After inserting the movie item, the extension tries to auto-align it to other overlapping non-video REAPER audio items using low-resolution peak-envelope correlation.
+- After inserting the movie item, the extension tries to auto-align it to the first non-video track item that overlaps the video item using peak-envelope correlation.
 
 ## Design constraints and preferences
 
