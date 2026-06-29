@@ -15,6 +15,7 @@ public final class RecordingStore: ObservableObject {
         let baseDirectory = directory ?? fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         self.directory = baseDirectory.appendingPathComponent("Recordings", isDirectory: true)
         try fileManager.createDirectory(at: self.directory, withIntermediateDirectories: true)
+        recordings = loadExistingRecordings()
     }
 
     public func newRecordingURL(sessionID: String?) -> (id: String, url: URL) {
@@ -60,6 +61,32 @@ public final class RecordingStore: ObservableObject {
             try fileManager.removeItem(at: recording.url)
         }
         recordings.remove(at: index)
+    }
+
+    private func loadExistingRecordings() -> [RecordingFile] {
+        guard let files = try? fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+
+        return files.compactMap { url in
+            let fileExtension = url.pathExtension.lowercased()
+            guard ["mov", "mp4", "m4v"].contains(fileExtension) else {
+                return nil
+            }
+            let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+            return RecordingFile(
+                id: url.deletingPathExtension().lastPathComponent,
+                url: url,
+                createdAt: values?.contentModificationDate ?? Date(),
+                state: .pending,
+                byteCount: Int64(values?.fileSize ?? 0),
+                checksumSHA256: nil
+            )
+        }.sorted { $0.createdAt > $1.createdAt }
     }
 }
 #endif

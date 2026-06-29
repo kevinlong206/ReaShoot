@@ -171,6 +171,25 @@ public final class iPhoneVideoSyncService: ObservableObject {
                 downloadPath: "/recordings/\(recording.id)"
             )
             return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .recordingStopped, recording: descriptor, message: "Recording stopped"))
+        case .listRecordings:
+            guard pairingStore.validate(token: command.token) else {
+                return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .error, message: "Unauthorized"))
+            }
+            let descriptors = store.recordings.map { recording in
+                RecordingDescriptor(
+                    id: recording.id,
+                    filename: recording.url.lastPathComponent,
+                    byteCount: recording.byteCount,
+                    checksumSHA256: recording.checksumSHA256,
+                    downloadPath: "/recordings/\(recording.id)"
+                )
+            }
+            return try ProtocolCodec.encodeEvent(ControlEvent(
+                requestID: command.requestID,
+                type: .recordingsListed,
+                recordings: descriptors,
+                message: "\(descriptors.count) recording(s)"
+            ))
         case .transferComplete:
             guard pairingStore.validate(token: command.token), let id = command.recordingID else {
                 return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .error, message: "Unauthorized"))

@@ -122,6 +122,7 @@ int g_videoEnabledCommand = 0;
 int g_showPreviewCommand = 0;
 int g_floatPreviewCommand = 0;
 int g_alignSelectedCommand = 0;
+int g_restoreIPhoneCommand = 0;
 int g_toggleFollowCommand = 0;
 int g_previousPlayState = 0;
 bool g_videoEnabled = false;
@@ -136,6 +137,7 @@ std::string g_iPhoneHost;
 std::string g_iPhoneControlPort = "8787";
 std::string g_iPhoneHttpPort = "8788";
 std::string g_iPhoneToken;
+std::string g_iPhoneUSBHost;
 std::string g_iPhoneResolution = "4K";
 std::string g_iPhoneFPS = "30";
 std::string g_iPhoneOrientation = "portrait";
@@ -1675,16 +1677,80 @@ void setVideoEnabled(bool enabled);
 
 - (NSArray<NSString *> *)videoSyncArgumentsForCommand:(NSString *)command extraArguments:(NSArray<NSString *> *)extraArguments {
   NSMutableArray<NSString *> *arguments = [NSMutableArray arrayWithObject:command];
-  if (![command isEqualToString:@"discover"]) {
+  if (![command isEqualToString:@"discover"] && ![command isEqualToString:@"usb-host"]) {
+    [self refreshIPhoneUSBHostIfAvailable];
+    const std::string &host = g_iPhoneUSBHost.empty() ? g_iPhoneHost : g_iPhoneUSBHost;
     [arguments addObjectsFromArray:@[
       @"--host",
-      [NSString stringWithUTF8String:g_iPhoneHost.c_str()],
+      [NSString stringWithUTF8String:host.c_str()],
       @"--port",
       [NSString stringWithUTF8String:g_iPhoneControlPort.c_str()]
     ]];
   }
   [arguments addObjectsFromArray:extraArguments ?: @[]];
   return arguments;
+}
+
+- (void)refreshIPhoneUSBHostIfAvailable {
+  NSString *helperPath = [self videoSyncHelperPath];
+  if (![[NSFileManager defaultManager] isExecutableFileAtPath:helperPath]) {
+    g_iPhoneUSBHost.clear();
+    return;
+  }
+
+  NSTask *task = [[NSTask alloc] init];
+  task.executableURL = [NSURL fileURLWithPath:helperPath];
+  task.arguments = @[ @"usb-host" ];
+  NSPipe *pipe = [NSPipe pipe];
+  task.standardOutput = pipe;
+  task.standardError = pipe;
+
+  NSError *launchError = nil;
+  if (![task launchAndReturnError:&launchError]) {
+    g_iPhoneUSBHost.clear();
+    return;
+  }
+  [task waitUntilExit];
+  NSData *data = [pipe.fileHandleForReading readDataToEndOfFile];
+  if (task.terminationStatus != 0) {
+    g_iPhoneUSBHost.clear();
+    return;
+  }
+  NSString *output = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
+  for (NSString *line in [output componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
+    if (![line hasPrefix:@"usb\t"]) {
+      continue;
+    }
+    NSDictionary<NSString *, NSString *> *fields = [self fieldsFromHelperLine:line];
+    NSString *host = fields[@"host"];
+    NSString *controlPort = fields[@"controlPort"];
+    NSString *httpPort = fields[@"httpPort"];
+    if (host.length == 0) {
+      continue;
+    }
+    g_iPhoneUSBHost = host.UTF8String ?: "";
+    if (controlPort.length > 0) {
+      g_iPhoneControlPort = controlPort.UTF8String ?: "8787";
+    }
+    if (httpPort.length > 0) {
+      g_iPhoneHttpPort = httpPort.UTF8String ?: "8788";
+    }
+    return;
+  }
+  g_iPhoneUSBHost.clear();
+}
+
+- (NSString *)iPhoneTransportLabel {
+  return g_iPhoneUSBHost.empty() ? @"Wi-Fi" : @"USB";
+}
+
+- (NSString *)iPhoneStreamPreviewLabel {
+  NSString *transport = [self iPhoneTransportLabel];
+  NSString *look = [NSString stringWithUTF8String:g_iPhoneLook.c_str()];
+  if (![look isEqualToString:@"natural"]) {
+    return [NSString stringWithFormat:@"%@ filtered stream", transport];
+  }
+  return [NSString stringWithFormat:@"%@ stream", transport];
 }
 
 - (NSString *)runVideoSyncCommand:(NSString *)command
@@ -1911,6 +1977,16 @@ void setVideoEnabled(bool enabled);
   return nil;
 }
 
+- (NSArray<NSDictionary<NSString *, NSString *> *> *)recordingDescriptorsFromVideoSyncOutput:(NSString *)output {
+  NSMutableArray<NSDictionary<NSString *, NSString *> *> *recordings = [NSMutableArray array];
+  for (NSString *line in [output componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
+    if ([line hasPrefix:@"recording\t"]) {
+      [recordings addObject:[self fieldsFromHelperLine:line]];
+    }
+  }
+  return recordings;
+}
+
 - (void)handleVideoSyncProgressLine:(NSString *)line {
   if ([line hasPrefix:@"encode "]) {
     NSMutableDictionary<NSString *, NSString *> *fields = [NSMutableDictionary dictionary];
@@ -1961,7 +2037,9 @@ void setVideoEnabled(bool enabled);
   }
 }
 
-- (void)downloadStoppedIPhoneRecording:(NSDictionary<NSString *, NSString *> *)recording {
+- (void)downloadIPhoneRecording:(NSDictionary<NSString *, NSString *> *)recording
+                      directory:(NSString *)directory
+                     completion:(void (^)(NSString *path, NSError *error))completion {
   NSMutableArray<NSString *> *arguments = [NSMutableArray arrayWithObjects:
     @"--http-port",
     [NSString stringWithUTF8String:g_iPhoneHttpPort.c_str()],
@@ -1976,7 +2054,7 @@ void setVideoEnabled(bool enabled);
     @"--download-path",
     recording[@"downloadPath"] ?: @"",
     @"--download-dir",
-    self.activeRemoteDownloadDirectory ?: NSHomeDirectory(),
+    directory ?: NSHomeDirectory(),
     @"--progress",
     nil];
   NSString *checksum = recording[@"checksum"];
@@ -1989,7 +2067,7 @@ void setVideoEnabled(bool enabled);
   } completion:^(NSString *output, NSError *error) {
     if (error) {
       [self setStatus:@"iPhone download failed"];
-      [self finishIPhoneStopWithPath:nil error:error];
+      completion(nil, error);
       return;
     }
     NSString *path = [self downloadedPathFromVideoSyncOutput:output ?: @""];
@@ -1999,7 +2077,15 @@ void setVideoEnabled(bool enabled);
                                              code:23
                                          userInfo:@{NSLocalizedDescriptionKey: @"The iPhone recording downloaded, but video-sync-mac did not report a file path."}];
     }
-    [self finishIPhoneStopWithPath:path error:missingPathError];
+    completion(path, missingPathError);
+  }];
+}
+
+- (void)downloadStoppedIPhoneRecording:(NSDictionary<NSString *, NSString *> *)recording {
+  [self downloadIPhoneRecording:recording
+                      directory:self.activeRemoteDownloadDirectory ?: NSHomeDirectory()
+                     completion:^(NSString *path, NSError *error) {
+    [self finishIPhoneStopWithPath:path error:error];
   }];
 }
 
@@ -2028,6 +2114,92 @@ void setVideoEnabled(bool enabled);
     }
     [self setStatus:@"iPhone video deleted"];
     [self finishIPhoneStopWithPath:nil error:nil];
+  }];
+}
+
+- (NSDictionary<NSString *, NSString *> *)chooseIPhoneRecordingToRestore:(NSArray<NSDictionary<NSString *, NSString *> *> *)recordings {
+  if (recordings.count == 0) {
+    return nil;
+  }
+  if (recordings.count == 1) {
+    return recordings.firstObject;
+  }
+
+  NSAlert *alert = [[NSAlert alloc] init];
+  alert.messageText = @"Restore iPhone Recording";
+  alert.informativeText = @"Choose a pending iPhone recording to download and insert at the current edit cursor.";
+  [alert addButtonWithTitle:@"Restore"];
+  [alert addButtonWithTitle:@"Cancel"];
+
+  NSPopUpButton *popup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 420, 26) pullsDown:NO];
+  for (NSDictionary<NSString *, NSString *> *recording in recordings) {
+    NSString *filename = recording[@"filename"] ?: recording[@"id"] ?: @"recording.mov";
+    NSString *byteCount = recording[@"byteCount"] ?: @"0";
+    [popup addItemWithTitle:[NSString stringWithFormat:@"%@ (%@ bytes)", filename, byteCount]];
+    popup.lastItem.representedObject = recording;
+  }
+  alert.accessoryView = popup;
+  if ([alert runModal] != NSAlertFirstButtonReturn) {
+    return nil;
+  }
+  return popup.selectedItem.representedObject;
+}
+
+- (void)restoreIPhoneRecording {
+  [self persistIPhoneSettings];
+  if (g_iPhoneHost.empty() || g_iPhoneToken.empty()) {
+    [self setStatus:@"Set iPhone host and token before restore"];
+    return;
+  }
+
+  [self setStatus:@"Checking iPhone recordings"];
+  [self runVideoSyncCommandAsync:@"list-recordings"
+                  extraArguments:@[ @"--token", [NSString stringWithUTF8String:g_iPhoneToken.c_str()] ]
+                      completion:^(NSString *output, NSError *error) {
+    if (error) {
+      [self setStatus:@"iPhone recording list failed"];
+      showError(error.localizedDescription.UTF8String ?: "iPhone recording list failed.");
+      return;
+    }
+
+    NSArray<NSDictionary<NSString *, NSString *> *> *recordings = [self recordingDescriptorsFromVideoSyncOutput:output ?: @""];
+    if (recordings.count == 0) {
+      [self setStatus:@"No pending iPhone recordings"];
+      showError("No pending iPhone recordings were found on the phone.");
+      return;
+    }
+
+    NSDictionary<NSString *, NSString *> *recording = [self chooseIPhoneRecordingToRestore:recordings];
+    if (!recording) {
+      [self setStatus:@"Restore canceled"];
+      return;
+    }
+
+    std::string outputPath = captureOutputPath(currentProject());
+    NSString *directory = [[NSString stringWithUTF8String:outputPath.c_str()] stringByDeletingLastPathComponent];
+    [self downloadIPhoneRecording:recording directory:directory completion:^(NSString *path, NSError *downloadError) {
+      if (downloadError) {
+        [self setStatus:@"iPhone restore download failed"];
+        showError(downloadError.localizedDescription.UTF8String ?: "iPhone restore download failed.");
+        return;
+      }
+      if (path.length == 0) {
+        [self setStatus:@"iPhone restore failed"];
+        showError("The iPhone recording downloaded, but no file path was reported.");
+        return;
+      }
+
+      ReaProject *project = currentProject();
+      double position = GetCursorPositionEx ? GetCursorPositionEx(project) : 0.0;
+      std::string insertError;
+      if (insertRecordedMedia(path.UTF8String ?: "", position, true, insertError)) {
+        const char *status = g_lastAlignmentStatus.empty() ? "Restored iPhone recording to Video Recorder track" : g_lastAlignmentStatus.c_str();
+        [self setStatus:[NSString stringWithUTF8String:status]];
+      } else {
+        [self setStatus:@"iPhone restore import failed"];
+        showError(insertError);
+      }
+    }];
   }];
 }
 
@@ -2581,7 +2753,9 @@ void setVideoEnabled(bool enabled);
     return;
   }
   if (g_useIPhoneSource) {
-    self.formatLabel.stringValue = [NSString stringWithFormat:@"iPhone: %s %@ fps, %s, %s, %s lens, %sx, look %s + 640px preview",
+    [self refreshIPhoneUSBHostIfAvailable];
+    self.formatLabel.stringValue = [NSString stringWithFormat:@"iPhone %@: %s %@ fps, %s, %s, %s lens, %sx, look %s + 640px preview",
+                                                              [self iPhoneTransportLabel],
                                                               g_iPhoneResolution.c_str(),
                                                               [NSString stringWithUTF8String:g_iPhoneFPS.c_str()],
                                                               g_iPhoneOrientation.c_str(),
@@ -3358,11 +3532,17 @@ void setVideoEnabled(bool enabled);
 
 - (NSURL *)remotePreviewSnapshotURL {
   [self persistIPhoneSettings];
-  if (g_iPhoneHost.empty() || g_iPhoneToken.empty()) {
+  [self refreshIPhoneUSBHostIfAvailable];
+  const std::string &host = g_iPhoneUSBHost.empty() ? g_iPhoneHost : g_iPhoneUSBHost;
+  if (host.empty() || g_iPhoneToken.empty()) {
     return nil;
   }
+  NSString *hostString = [NSString stringWithUTF8String:host.c_str()];
+  if ([hostString containsString:@":"] && ![hostString hasPrefix:@"["]) {
+    hostString = [NSString stringWithFormat:@"[%@]", hostString];
+  }
   NSString *urlString = [NSString stringWithFormat:@"http://%s:%s/preview.jpg?token=%@",
-                                                   g_iPhoneHost.c_str(),
+                                                   hostString.UTF8String,
                                                    g_iPhoneHttpPort.c_str(),
                                                    [NSString stringWithUTF8String:g_iPhoneToken.c_str()]];
   return [NSURL URLWithString:urlString];
@@ -3474,6 +3654,13 @@ void setVideoEnabled(bool enabled);
     [self startBinaryRemotePreviewFallback];
     return;
   }
+  if (g_iPhoneLook != "natural") {
+    self.webRTCPreviewFailed = YES;
+    self.webRTCPreviewFallbackReason = @"styled look uses filtered stream";
+    [self setStatus:[NSString stringWithFormat:@"Preview: %@", [self iPhoneStreamPreviewLabel]]];
+    [self startBinaryRemotePreviewFallback];
+    return;
+  }
 
   self.webRTCPreviewStarting = YES;
   self.webRTCPreviewActive = NO;
@@ -3482,7 +3669,7 @@ void setVideoEnabled(bool enabled);
   self.webRTCIceGatheringSemaphore = dispatch_semaphore_create(0);
   self.webRTCPreviewView.hidden = NO;
   self.remotePreviewView.hidden = YES;
-  [self setStatus:@"Preview: WebRTC connecting"];
+  [self setStatus:[NSString stringWithFormat:@"Preview: WebRTC connecting (%@ signaling)", [self iPhoneTransportLabel]]];
 
   if (!self.webRTCPeerConnectionFactory) {
     self.webRTCPeerConnectionFactory = [[LKRTCPeerConnectionFactory alloc] init];
@@ -3499,7 +3686,7 @@ void setVideoEnabled(bool enabled);
     self.webRTCPreviewStarting = NO;
     self.webRTCPreviewFailed = YES;
     self.webRTCPreviewFallbackReason = @"WebRTC unavailable";
-    [self setStatus:@"Preview: WebRTC unavailable; using stream"];
+    [self setStatus:[NSString stringWithFormat:@"Preview: WebRTC unavailable; using %@", [self iPhoneStreamPreviewLabel]]];
     [self startBinaryRemotePreviewFallback];
     return;
   }
@@ -3517,7 +3704,7 @@ void setVideoEnabled(bool enabled);
         [strongSelf stopWebRTCPreview];
         strongSelf.webRTCPreviewFailed = YES;
         strongSelf.webRTCPreviewFallbackReason = @"WebRTC offer failed";
-        [strongSelf setStatus:@"Preview: WebRTC offer failed; using stream"];
+        [strongSelf setStatus:[NSString stringWithFormat:@"Preview: WebRTC offer failed; using %@", [strongSelf iPhoneStreamPreviewLabel]]];
         [strongSelf startBinaryRemotePreviewFallback];
       });
       return;
@@ -3533,7 +3720,7 @@ void setVideoEnabled(bool enabled);
           [strongSelf stopWebRTCPreview];
           strongSelf.webRTCPreviewFailed = YES;
           strongSelf.webRTCPreviewFallbackReason = @"WebRTC local setup failed";
-          [strongSelf setStatus:@"Preview: WebRTC local setup failed; using stream"];
+          [strongSelf setStatus:[NSString stringWithFormat:@"Preview: WebRTC local setup failed; using %@", [strongSelf iPhoneStreamPreviewLabel]]];
           [strongSelf startBinaryRemotePreviewFallback];
         });
         return;
@@ -3555,8 +3742,9 @@ void setVideoEnabled(bool enabled);
           dispatch_async(dispatch_get_main_queue(), ^{
             [strongSelf stopWebRTCPreview];
             strongSelf.webRTCPreviewFailed = YES;
-            strongSelf.webRTCPreviewFallbackReason = @"WebRTC signaling failed";
-            [strongSelf setStatus:@"Preview: WebRTC signaling failed; using stream"];
+            NSString *reason = answerError.localizedDescription.length > 0 ? answerError.localizedDescription : @"WebRTC signaling failed";
+            strongSelf.webRTCPreviewFallbackReason = reason;
+            [strongSelf setStatus:[NSString stringWithFormat:@"Preview: %@; using %@", reason, [strongSelf iPhoneStreamPreviewLabel]]];
             [strongSelf startBinaryRemotePreviewFallback];
           });
           return;
@@ -3571,7 +3759,7 @@ void setVideoEnabled(bool enabled);
               [strongSelf stopWebRTCPreview];
               strongSelf.webRTCPreviewFailed = YES;
               strongSelf.webRTCPreviewFallbackReason = @"WebRTC answer failed";
-              [strongSelf setStatus:@"Preview: WebRTC answer failed; using stream"];
+              [strongSelf setStatus:[NSString stringWithFormat:@"Preview: WebRTC answer failed; using %@", [strongSelf iPhoneStreamPreviewLabel]]];
               [strongSelf startBinaryRemotePreviewFallback];
               return;
             }
@@ -3581,7 +3769,7 @@ void setVideoEnabled(bool enabled);
             strongSelf.webRTCPreviewView.hidden = NO;
             strongSelf.remotePreviewView.hidden = YES;
             [strongSelf stopRemotePreviewStreamOnly];
-            [strongSelf setStatus:@"Preview: WebRTC"];
+            [strongSelf setStatus:[NSString stringWithFormat:@"Preview: WebRTC (%@ signaling)", [strongSelf iPhoneTransportLabel]]];
             [strongSelf addRemoteWebRTCIceCandidates:remoteCandidates toPeerConnection:strongPeerConnection];
             NSArray<LKRTCIceCandidate *> *candidates = [strongSelf.webRTCLocalIceCandidates copy];
             for (LKRTCIceCandidate *candidate in candidates) {
@@ -3618,11 +3806,17 @@ void setVideoEnabled(bool enabled);
 
 - (NSURL *)remotePreviewStreamURL {
   [self persistIPhoneSettings];
-  if (g_iPhoneHost.empty() || g_iPhoneToken.empty()) {
+  [self refreshIPhoneUSBHostIfAvailable];
+  const std::string &host = g_iPhoneUSBHost.empty() ? g_iPhoneHost : g_iPhoneUSBHost;
+  if (host.empty() || g_iPhoneToken.empty()) {
     return nil;
   }
+  NSString *hostString = [NSString stringWithUTF8String:host.c_str()];
+  if ([hostString containsString:@":"] && ![hostString hasPrefix:@"["]) {
+    hostString = [NSString stringWithFormat:@"[%@]", hostString];
+  }
   NSString *urlString = [NSString stringWithFormat:@"http://%s:%s/preview.bin?token=%@",
-                                                   g_iPhoneHost.c_str(),
+                                                   hostString.UTF8String,
                                                    g_iPhoneHttpPort.c_str(),
                                                    [NSString stringWithUTF8String:g_iPhoneToken.c_str()]];
   return [NSURL URLWithString:urlString];
@@ -3668,11 +3862,11 @@ void setVideoEnabled(bool enabled);
   self.remotePreviewSession = [NSURLSession sessionWithConfiguration:configuration delegate:self delegateQueue:self.remotePreviewQueue];
   self.remotePreviewTask = [self.remotePreviewSession dataTaskWithURL:url];
   [self.remotePreviewTask resume];
-  [self setStatus:@"Preview: binary stream connecting"];
+  [self setStatus:[NSString stringWithFormat:@"Preview: %@ connecting", [self iPhoneStreamPreviewLabel]]];
   dispatch_after(dispatch_time(DISPATCH_TIME_NOW, static_cast<int64_t>(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
     if (self.remotePreviewStreaming && self.remotePreviewFramesDisplayed == 0 && g_useIPhoneSource && !self.showingPlayback) {
       self.remotePreviewUsingSnapshotFallback = YES;
-      [self setStatus:@"Preview: snapshot fallback"];
+      [self setStatus:[NSString stringWithFormat:@"Preview: %@ snapshot fallback", [self iPhoneTransportLabel]]];
       [self refreshRemotePreviewSnapshotFallback];
     }
   });
@@ -3857,9 +4051,11 @@ void setVideoEnabled(bool enabled);
   self.remotePreviewFramesDisplayedAtLastUpdate = self.remotePreviewFramesDisplayed;
   self.remotePreviewLastStatusTime = now;
   NSString *safe = g_activeTransportRecording ? @" safe" : @"";
-  NSString *transport = self.webRTCPreviewFallbackReason.length > 0 ? [NSString stringWithFormat:@"stream fallback (%@)", self.webRTCPreviewFallbackReason] : @"stream";
-  [self setStatus:[NSString stringWithFormat:@"Preview: %@%@, %lu fps, dropped %lu",
+  NSString *transport = [self iPhoneStreamPreviewLabel];
+  NSString *fallback = self.webRTCPreviewFallbackReason.length > 0 ? [NSString stringWithFormat:@" (%@)", self.webRTCPreviewFallbackReason] : @"";
+  [self setStatus:[NSString stringWithFormat:@"Preview: %@%@%@, %lu fps, dropped %lu",
                                              transport,
+                                             fallback,
                                              safe,
                                              static_cast<unsigned long>(displayedDelta),
                                              static_cast<unsigned long>(self.remotePreviewFramesDropped)]];
@@ -3893,11 +4089,11 @@ void setVideoEnabled(bool enabled);
     switch (newState) {
       case LKRTCIceConnectionStateConnected:
       case LKRTCIceConnectionStateCompleted:
-        [self setStatus:@"Preview: WebRTC connected"];
+        [self setStatus:[NSString stringWithFormat:@"Preview: WebRTC connected (%@ signaling)", [self iPhoneTransportLabel]]];
         break;
       case LKRTCIceConnectionStateFailed:
       case LKRTCIceConnectionStateDisconnected:
-        [self setStatus:@"Preview: WebRTC disconnected"];
+        [self setStatus:[NSString stringWithFormat:@"Preview: WebRTC disconnected; using %@", [self iPhoneStreamPreviewLabel]]];
         break;
       default:
         break;
@@ -3951,7 +4147,7 @@ void setVideoEnabled(bool enabled);
     self.webRTCPreviewView.hidden = NO;
     self.remotePreviewView.hidden = YES;
     self.webRTCPreviewActive = YES;
-    [self setStatus:@"Preview: WebRTC video"];
+    [self setStatus:[NSString stringWithFormat:@"Preview: WebRTC video (%@ signaling)", [self iPhoneTransportLabel]]];
   });
 }
 
@@ -4475,6 +4671,11 @@ bool hookCommand2(KbdSectionInfo *section, int command, int val, int val2, int r
     return true;
   }
 
+  if (command == g_restoreIPhoneCommand) {
+    [recorder() restoreIPhoneRecording];
+    return true;
+  }
+
   if (command == g_toggleFollowCommand) {
     setFollowEnabled(!g_followEnabled);
     if (!g_followEnabled && recorder().isRecording) {
@@ -4530,6 +4731,12 @@ bool registerActions(reaper_plugin_info_t *rec) {
       "Video Recorder: Align Selected Video Item",
       nullptr,
   };
+  custom_action_register_t restoreIPhoneAction = {
+      0,
+      "KLONG_VIDEO_RECORDER_RESTORE_IPHONE",
+      "Video Recorder: Restore Pending iPhone Recording",
+      nullptr,
+  };
   custom_action_register_t toggleFollowAction = {
       0,
       "KLONG_VIDEO_RECORDER_TOGGLE_FOLLOW",
@@ -4541,10 +4748,11 @@ bool registerActions(reaper_plugin_info_t *rec) {
   g_showPreviewCommand = rec->Register("custom_action", &showPreviewAction);
   g_floatPreviewCommand = rec->Register("custom_action", &floatPreviewAction);
   g_alignSelectedCommand = rec->Register("custom_action", &alignSelectedAction);
+  g_restoreIPhoneCommand = rec->Register("custom_action", &restoreIPhoneAction);
   g_toggleFollowCommand = rec->Register("custom_action", &toggleFollowAction);
 
   return g_videoEnabledCommand != 0 && g_showPreviewCommand != 0 && g_floatPreviewCommand != 0 &&
-         g_alignSelectedCommand != 0 && g_toggleFollowCommand != 0 &&
+         g_alignSelectedCommand != 0 && g_restoreIPhoneCommand != 0 && g_toggleFollowCommand != 0 &&
          rec->Register("hookcommand2", reinterpret_cast<void *>(hookCommand2)) &&
          rec->Register("toggleaction", reinterpret_cast<void *>(toggleActionHook)) &&
          rec->Register("timer", reinterpret_cast<void *>(timerPoll)) &&

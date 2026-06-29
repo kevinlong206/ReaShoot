@@ -29,7 +29,7 @@ enum RecordingDownloader {
     ) async throws -> URL {
         var components = URLComponents()
         components.scheme = "http"
-        components.host = host
+        components.host = host.contains(":") && !host.hasPrefix("[") ? "[\(host)]" : host
         components.port = httpPort
         components.path = recording.downloadPath
         components.queryItems = [URLQueryItem(name: "token", value: token)]

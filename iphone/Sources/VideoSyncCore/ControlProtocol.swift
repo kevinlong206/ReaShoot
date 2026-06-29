@@ -9,6 +9,7 @@ public enum CommandType: String, Codable, Sendable {
     case configureCapture
     case startRecording
     case stopRecording
+    case listRecordings
     case transferComplete
     case deleteRecording
     case startWebRTCPreview
@@ -22,6 +23,7 @@ public enum EventType: String, Codable, Sendable {
     case captureConfigured
     case recordingStarted
     case recordingStopped
+    case recordingsListed
     case transferAcknowledged
     case recordingDeleted
     case webRTCPreviewAnswer
@@ -229,6 +231,7 @@ public struct ControlEvent: Codable, Equatable, Sendable {
     public var protocolVersion: Int
     public var token: String?
     public var recording: RecordingDescriptor?
+    public var recordings: [RecordingDescriptor]
     public var preview: PreviewDescriptor?
     public var captureProfile: CaptureProfile?
     public var captureStatus: String?
@@ -242,6 +245,7 @@ public struct ControlEvent: Codable, Equatable, Sendable {
         protocolVersion: Int = ProtocolVersion.current,
         token: String? = nil,
         recording: RecordingDescriptor? = nil,
+        recordings: [RecordingDescriptor] = [],
         preview: PreviewDescriptor? = nil,
         captureProfile: CaptureProfile? = nil,
         captureStatus: String? = nil,
@@ -254,6 +258,7 @@ public struct ControlEvent: Codable, Equatable, Sendable {
         self.protocolVersion = protocolVersion
         self.token = token
         self.recording = recording
+        self.recordings = recordings
         self.preview = preview
         self.captureProfile = captureProfile
         self.captureStatus = captureStatus

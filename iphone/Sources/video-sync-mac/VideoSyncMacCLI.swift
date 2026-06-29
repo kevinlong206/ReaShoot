@@ -22,6 +22,12 @@ struct VideoSyncMacCLI {
                 let http = device.httpPort.map(String.init) ?? "8788"
                 print("device\tname=\(device.name)\thost=\(device.host)\tcontrolPort=\(device.controlPort)\thttpPort=\(http)\tpaired=\(device.isPaired)")
             }
+        case "usb-host":
+            guard let device = USBDiscovery.discover().first else {
+                Foundation.exit(1)
+            }
+            let http = device.httpPort.map(String.init) ?? "8788"
+            print("usb\tname=\(device.name)\thost=\(device.host)\tcontrolPort=\(device.controlPort)\thttpPort=\(http)")
         case "pair":
             let event = try await send(args, type: .pair, tokenRequired: false) {
                 ControlCommand(type: .pair, pairingCode: required(args.value(after: "--code"), "--code"))
@@ -113,6 +119,16 @@ struct VideoSyncMacCLI {
                 ControlCommand(type: .transferComplete, token: token, recordingID: recording.id)
             }
             print("downloaded \(downloaded.path)")
+        case "list-recordings":
+            let event = try await send(args, type: .listRecordings) {
+                ControlCommand(type: .listRecordings, token: required(args.value(after: "--token"), "--token"))
+            }
+            guard event.type == .recordingsListed else {
+                throw ControlClientError.unexpectedEvent(event)
+            }
+            for recording in event.recordings {
+                printRecording(recording)
+            }
         case "delete-recording":
             let event = try await send(args, type: .deleteRecording) {
                 ControlCommand(type: .deleteRecording, token: required(args.value(after: "--token"), "--token"), recordingID: required(args.value(after: "--recording-id"), "--recording-id"))
@@ -191,12 +207,14 @@ struct VideoSyncMacCLI {
         print("""
         video-sync-mac commands:
           discover [--timeout 3]
+          usb-host
           pair --host HOST [--port 8787] --code CODE
           configure --host HOST [--port 8787] --token TOKEN [--resolution 4K] [--fps 30] [--orientation portrait] [--aspect 9:16] [--lens wide] [--zoom 1.0] [--look natural]
           start --host HOST [--port 8787] --token TOKEN [--session SESSION]
           stop --host HOST [--port 8787] [--http-port 8788] --token TOKEN [--download-dir DIR] [--progress]
           stop-only --host HOST [--port 8787] --token TOKEN [--progress]
           download-recording --host HOST [--port 8787] [--http-port 8788] --token TOKEN --recording-id ID --filename NAME --byte-count BYTES --download-path PATH [--checksum SHA256] [--download-dir DIR] [--progress]
+          list-recordings --host HOST [--port 8787] --token TOKEN
           delete-recording --host HOST [--port 8787] --token TOKEN --recording-id ID
           ping --host HOST [--port 8787] [--token TOKEN]
           webrtc-answer --host HOST [--port 8787] --token TOKEN --offer-file PATH
