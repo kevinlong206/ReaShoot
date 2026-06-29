@@ -84,6 +84,7 @@ public struct CaptureProfile: Codable, Equatable, Sendable {
     public var aspectRatio: String
     public var lens: String
     public var zoomFactor: Double
+    public var look: String
 
     private enum CodingKeys: String, CodingKey {
         case resolution
@@ -92,6 +93,7 @@ public struct CaptureProfile: Codable, Equatable, Sendable {
         case aspectRatio
         case lens
         case zoomFactor
+        case look
     }
 
     public init(
@@ -100,7 +102,8 @@ public struct CaptureProfile: Codable, Equatable, Sendable {
         orientation: String = "portrait",
         aspectRatio: String = "9:16",
         lens: String = "wide",
-        zoomFactor: Double = 1.0
+        zoomFactor: Double = 1.0,
+        look: String = "natural"
     ) {
         self.resolution = resolution
         self.fps = fps
@@ -108,6 +111,7 @@ public struct CaptureProfile: Codable, Equatable, Sendable {
         self.aspectRatio = aspectRatio
         self.lens = lens
         self.zoomFactor = zoomFactor
+        self.look = look
     }
 
     public init(from decoder: Decoder) throws {
@@ -118,11 +122,57 @@ public struct CaptureProfile: Codable, Equatable, Sendable {
         aspectRatio = try container.decodeIfPresent(String.self, forKey: .aspectRatio) ?? "9:16"
         lens = try container.decodeIfPresent(String.self, forKey: .lens) ?? "wide"
         zoomFactor = try container.decodeIfPresent(Double.self, forKey: .zoomFactor) ?? 1.0
+        look = try container.decodeIfPresent(String.self, forKey: .look) ?? "natural"
     }
 
     public var displayName: String {
         let zoom = String(format: "%.1fx", zoomFactor)
-        return "\(resolution) \(fps) fps, \(orientation), \(aspectRatio), \(lens), \(zoom)"
+        return "\(resolution) \(fps) fps, \(orientation), \(aspectRatio), \(lens), \(zoom), \(lookDisplayName)"
+    }
+
+    private var lookDisplayName: String {
+        switch look {
+        case "warmVintage":
+            return "Warm Vintage"
+        case "coolBlue":
+            return "Cool Blue"
+        case "highContrastBW":
+            return "High Contrast B&W"
+        case "fadedFilm":
+            return "Faded Film"
+        case "dreamGlow":
+            return "Dream Glow"
+        case "noir":
+            return "Noir"
+        case "saturatedPop":
+            return "Saturated Pop"
+        case "bleachBypass":
+            return "Bleach Bypass"
+        case "sepia":
+            return "Sepia"
+        case "instantPhoto":
+            return "Instant Photo"
+        case "chrome":
+            return "Chrome"
+        case "tonal":
+            return "Tonal"
+        case "silvertone":
+            return "Silvertone"
+        case "dramaticWarm":
+            return "Dramatic Warm"
+        case "dramaticCool":
+            return "Dramatic Cool"
+        case "softMatte":
+            return "Soft Matte"
+        case "comicBook":
+            return "Comic Book"
+        case "vhs":
+            return "VHS"
+        case "musicVideoPop":
+            return "Music Video Pop"
+        default:
+            return "Natural"
+        }
     }
 }
 
@@ -181,6 +231,8 @@ public struct ControlEvent: Codable, Equatable, Sendable {
     public var recording: RecordingDescriptor?
     public var preview: PreviewDescriptor?
     public var captureProfile: CaptureProfile?
+    public var captureStatus: String?
+    public var captureProgress: Double?
     public var webRTCAnswerSDP: String?
     public var message: String?
 
@@ -192,6 +244,8 @@ public struct ControlEvent: Codable, Equatable, Sendable {
         recording: RecordingDescriptor? = nil,
         preview: PreviewDescriptor? = nil,
         captureProfile: CaptureProfile? = nil,
+        captureStatus: String? = nil,
+        captureProgress: Double? = nil,
         webRTCAnswerSDP: String? = nil,
         message: String? = nil
     ) {
@@ -202,6 +256,8 @@ public struct ControlEvent: Codable, Equatable, Sendable {
         self.recording = recording
         self.preview = preview
         self.captureProfile = captureProfile
+        self.captureStatus = captureStatus
+        self.captureProgress = captureProgress
         self.webRTCAnswerSDP = webRTCAnswerSDP
         self.message = message
     }

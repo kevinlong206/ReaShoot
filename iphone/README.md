@@ -42,7 +42,7 @@ Then run:
 
 ```sh
 swift run video-sync-mac ping --host kevin-long-iphone.local --port 8787
-swift run video-sync-mac configure --host kevin-long-iphone.local --port 8787 --token "$VIDEO_SYNC_TOKEN" --lens ultrawide --zoom 0.5
+swift run video-sync-mac configure --host kevin-long-iphone.local --port 8787 --token "$VIDEO_SYNC_TOKEN" --lens ultrawide --zoom 0.5 --look warmVintage
 swift run video-sync-mac start --host kevin-long-iphone.local --port 8787 --token "$VIDEO_SYNC_TOKEN" --session smoke-test
 sleep 3
 swift run video-sync-mac stop --host kevin-long-iphone.local --port 8787 --http-port 8788 --token "$VIDEO_SYNC_TOKEN" --download-dir test-downloads
@@ -64,7 +64,7 @@ http://HOST:8788/preview.bin?token=TOKEN
 
 The control WebSocket also supports an experimental authenticated WebRTC preview offer/answer flow. REAPER sends a receive-only SDP offer with `startWebRTCPreview`; the iPhone app answers with a low-resolution video track fed from the same preview capture output. The HTTP preview endpoints remain available as fallback/debugging paths.
 
-Capture configuration supports hardware-dependent lens selection (`wide`, `ultrawide`, `telephoto`, `auto`) and zoom. Zoom is applied through AVFoundation and clamped to the selected camera's supported range.
+Capture configuration supports hardware-dependent lens selection (`wide`, `ultrawide`, `telephoto`, `auto`), zoom, and baked-in artistic looks (`natural`, `warmVintage`, `coolBlue`, `highContrastBW`, `fadedFilm`, `dreamGlow`, `noir`, `saturatedPop`, `bleachBypass`, `sepia`, `instantPhoto`, `chrome`, `tonal`, `silvertone`, `dramaticWarm`, `dramaticCool`, `softMatte`, `comicBook`, `vhs`, `musicVideoPop`). Zoom is applied through AVFoundation and clamped to the selected camera's supported range. Non-natural looks are previewed through the HTTP preview stream and applied as a post-record Core Image export so the reliable movie recording path and embedded camera audio are preserved. The helper can report encoding progress during `stop`/`stop-only` with `--progress`.
 
 ## iOS background note
 

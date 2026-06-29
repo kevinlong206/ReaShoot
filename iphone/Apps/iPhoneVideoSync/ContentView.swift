@@ -16,7 +16,7 @@ struct ContentView: View {
                     LabeledContent("Paired", value: service.pairingStore.isPaired ? "Yes" : "No")
                     LabeledContent("Keep awake", value: service.keepsScreenAwake ? "Yes" : "No")
                     LabeledContent("Preview", value: service.previewStatus)
-                    LabeledContent("Recording", value: service.capture.isRecording ? "Yes" : "No")
+                    LabeledContent("Recording", value: recordingStatus)
                     LabeledContent("Profile", value: service.capture.currentProfile.displayName)
                     Button("Reset pairing") {
                         service.resetPairing()
@@ -47,6 +47,16 @@ struct ContentView: View {
             }
             .navigationTitle("Video Sync")
         }
+    }
+
+    private var recordingStatus: String {
+        if service.capture.isApplyingLook {
+            if let progress = service.capture.lookExportProgress {
+                return "Encoding \(Int(progress * 100.0))%"
+            }
+            return "Encoding"
+        }
+        return service.capture.isRecording ? "Yes" : "No"
     }
 }
 #endif

@@ -37,7 +37,8 @@ struct VideoSyncMacCLI {
                 orientation: args.value(after: "--orientation") ?? "portrait",
                 aspectRatio: args.value(after: "--aspect") ?? "9:16",
                 lens: args.value(after: "--lens") ?? "wide",
-                zoomFactor: args.double(after: "--zoom", default: 1.0)
+                zoomFactor: args.double(after: "--zoom", default: 1.0),
+                look: args.value(after: "--look") ?? "natural"
             )
             let event = try await send(args, type: .configureCapture) {
                 ControlCommand(type: .configureCapture, token: required(args.value(after: "--token"), "--token"), captureProfile: profile)
@@ -58,14 +59,16 @@ struct VideoSyncMacCLI {
             let host = required(args.value(after: "--host"), "--host")
             let httpPort = args.int(after: "--http-port", default: 8788)
             let token = required(args.value(after: "--token"), "--token")
+            let showProgress = args.hasFlag("--progress")
+            let encodingProgressTask = showProgress ? pollEncodingProgress(args, token: token) : nil
             let event = try await send(args, type: .stopRecording) {
                 ControlCommand(type: .stopRecording, token: token)
             }
+            encodingProgressTask?.cancel()
             guard let recording = event.recording else {
                 throw ControlClientError.unexpectedEvent(event)
             }
             let directory = URL(fileURLWithPath: args.value(after: "--download-dir") ?? FileManager.default.currentDirectoryPath)
-            let showProgress = args.hasFlag("--progress")
             let downloaded = try await RecordingDownloader.download(recording: recording, host: host, httpPort: httpPort, token: token, destinationDirectory: directory) { bytes, expected in
                 guard showProgress else {
                     return
@@ -78,9 +81,11 @@ struct VideoSyncMacCLI {
             print("downloaded \(downloaded.path)")
         case "stop-only":
             let token = required(args.value(after: "--token"), "--token")
+            let encodingProgressTask = args.hasFlag("--progress") ? pollEncodingProgress(args, token: token) : nil
             let event = try await send(args, type: .stopRecording) {
                 ControlCommand(type: .stopRecording, token: token)
             }
+            encodingProgressTask?.cancel()
             guard let recording = event.recording else {
                 throw ControlClientError.unexpectedEvent(event)
             }
@@ -187,10 +192,10 @@ struct VideoSyncMacCLI {
         video-sync-mac commands:
           discover [--timeout 3]
           pair --host HOST [--port 8787] --code CODE
-          configure --host HOST [--port 8787] --token TOKEN [--resolution 4K] [--fps 30] [--orientation portrait] [--aspect 9:16] [--lens wide] [--zoom 1.0]
+          configure --host HOST [--port 8787] --token TOKEN [--resolution 4K] [--fps 30] [--orientation portrait] [--aspect 9:16] [--lens wide] [--zoom 1.0] [--look natural]
           start --host HOST [--port 8787] --token TOKEN [--session SESSION]
           stop --host HOST [--port 8787] [--http-port 8788] --token TOKEN [--download-dir DIR] [--progress]
-          stop-only --host HOST [--port 8787] --token TOKEN
+          stop-only --host HOST [--port 8787] --token TOKEN [--progress]
           download-recording --host HOST [--port 8787] [--http-port 8788] --token TOKEN --recording-id ID --filename NAME --byte-count BYTES --download-path PATH [--checksum SHA256] [--download-dir DIR] [--progress]
           delete-recording --host HOST [--port 8787] --token TOKEN --recording-id ID
           ping --host HOST [--port 8787] [--token TOKEN]
@@ -204,6 +209,34 @@ struct VideoSyncMacCLI {
         let total = max(expected, 0)
         let percent = total > 0 ? min(100.0, (Double(bytes) / Double(total)) * 100.0) : 0.0
         let line = "progress bytes=\(bytes) total=\(total) percent=\(String(format: "%.1f", percent))\n"
+        FileHandle.standardError.write(Data(line.utf8))
+    }
+
+    private static func pollEncodingProgress(_ args: CLIArguments, token: String) -> Task<Void, Never> {
+        Task {
+            var lastPrintedPercent = -1
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                guard !Task.isCancelled,
+                      let event = try? await send(args, type: .ping, tokenRequired: false, makeCommand: {
+                          ControlCommand(type: .ping, token: token)
+                      }),
+                      event.captureStatus == "encoding" else {
+                    continue
+                }
+                let percent = Int(((event.captureProgress ?? 0.0) * 100.0).rounded())
+                guard percent != lastPrintedPercent else {
+                    continue
+                }
+                lastPrintedPercent = percent
+                printEncodingProgress(percent: percent)
+            }
+        }
+    }
+
+    private static func printEncodingProgress(percent: Int) {
+        let clamped = min(100, max(0, percent))
+        let line = "encode percent=\(clamped)\n"
         FileHandle.standardError.write(Data(line.utf8))
     }
 

@@ -130,7 +130,15 @@ public final class iPhoneVideoSyncService: ObservableObject {
             updateBonjourTXTRecord()
             return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .paired, token: token, preview: previewDescriptor, message: "Paired"))
         case .ping:
-            return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .pong, preview: previewDescriptor, captureProfile: capture.currentProfile, message: "OK"))
+            return try ProtocolCodec.encodeEvent(ControlEvent(
+                requestID: command.requestID,
+                type: .pong,
+                preview: previewDescriptor,
+                captureProfile: capture.currentProfile,
+                captureStatus: capture.isApplyingLook ? "encoding" : (capture.isRecording ? "recording" : "idle"),
+                captureProgress: capture.lookExportProgress,
+                message: "OK"
+            ))
         case .configureCapture:
             guard pairingStore.validate(token: command.token), let profile = command.captureProfile else {
                 return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .error, message: "Unauthorized"))
@@ -179,6 +187,10 @@ public final class iPhoneVideoSyncService: ObservableObject {
         case .startWebRTCPreview:
             guard pairingStore.validate(token: command.token), let offer = command.webRTCOfferSDP else {
                 return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .error, message: "Unauthorized"))
+            }
+            guard capture.currentProfile.look == "natural" else {
+                previewStatus = "Styled HTTP"
+                return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .error, message: "Styled preview uses the HTTP preview stream."))
             }
             capture.setPreviewSampleBufferConsumer(nil)
             webRTCPreviewSession?.stop()

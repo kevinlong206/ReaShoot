@@ -99,6 +99,7 @@ constexpr const char *kIPhoneOrientationKey = "iphone_orientation";
 constexpr const char *kIPhoneAspectKey = "iphone_aspect";
 constexpr const char *kIPhoneLensKey = "iphone_lens";
 constexpr const char *kIPhoneZoomKey = "iphone_zoom";
+constexpr const char *kIPhoneLookKey = "iphone_look";
 constexpr const char *kDockIdent = "klong_reaper_video_recorder_preview";
 constexpr const char *kVideoTrackName = "Video Recorder";
 constexpr const char *kRepoHelperPath = "/Users/klong/reaper_video_recorder/build/video-sync-mac";
@@ -141,6 +142,7 @@ std::string g_iPhoneOrientation = "portrait";
 std::string g_iPhoneAspect = "9:16";
 std::string g_iPhoneLens = "wide";
 std::string g_iPhoneZoom = "1.0";
+std::string g_iPhoneLook = "natural";
 std::string g_pendingInsertPath;
 std::string g_lastAlignmentStatus;
 double g_pendingInsertPosition = 0.0;
@@ -1542,6 +1544,7 @@ void setVideoEnabled(bool enabled);
 @property(nonatomic, strong) NSPopUpButton *iPhoneAspectPopup;
 @property(nonatomic, strong) NSPopUpButton *iPhoneLensPopup;
 @property(nonatomic, strong) NSPopUpButton *iPhoneZoomPopup;
+@property(nonatomic, strong) NSPopUpButton *iPhoneLookPopup;
 @property(nonatomic, strong) NSTextField *formatLabel;
 @property(nonatomic, strong) NSTextField *statusLabel;
 @property(nonatomic, strong) NSImageView *remotePreviewView;
@@ -1848,7 +1851,9 @@ void setVideoEnabled(bool enabled);
     @"--lens",
     [NSString stringWithUTF8String:g_iPhoneLens.c_str()],
     @"--zoom",
-    [NSString stringWithUTF8String:g_iPhoneZoom.c_str()]
+    [NSString stringWithUTF8String:g_iPhoneZoom.c_str()],
+    @"--look",
+    [NSString stringWithUTF8String:g_iPhoneLook.c_str()]
   ];
   if (![self runVideoSyncCommand:@"configure" extraArguments:configureArguments error:error]) {
     return NO;
@@ -1907,6 +1912,25 @@ void setVideoEnabled(bool enabled);
 }
 
 - (void)handleVideoSyncProgressLine:(NSString *)line {
+  if ([line hasPrefix:@"encode "]) {
+    NSMutableDictionary<NSString *, NSString *> *fields = [NSMutableDictionary dictionary];
+    for (NSString *part in [line componentsSeparatedByString:@" "]) {
+      NSRange equals = [part rangeOfString:@"="];
+      if (equals.location == NSNotFound || equals.location == 0) {
+        continue;
+      }
+      NSString *key = [part substringToIndex:equals.location];
+      NSString *value = [part substringFromIndex:equals.location + 1];
+      fields[key] = value;
+    }
+    NSString *percent = fields[@"percent"];
+    if (percent.length > 0) {
+      [self setStatus:[NSString stringWithFormat:@"Encoding iPhone look: %@%%", percent]];
+    } else {
+      [self setStatus:@"Encoding iPhone look"];
+    }
+    return;
+  }
   if (![line hasPrefix:@"progress "]) {
     return;
   }
@@ -2105,9 +2129,12 @@ void setVideoEnabled(bool enabled);
     [self setStatus:@"Stopping iPhone recording"];
     NSArray<NSString *> *arguments = @[
       @"--token",
-      [NSString stringWithUTF8String:g_iPhoneToken.c_str()]
+      [NSString stringWithUTF8String:g_iPhoneToken.c_str()],
+      @"--progress"
     ];
-    [self runVideoSyncCommandAsync:@"stop-only" extraArguments:arguments completion:^(NSString *output, NSError *error) {
+    [self runVideoSyncCommandAsync:@"stop-only" extraArguments:arguments outputHandler:^(NSString *line) {
+      [self handleVideoSyncProgressLine:line];
+    } completion:^(NSString *output, NSError *error) {
       self.remoteRecording = NO;
       [self setRecordingVisualState:NO];
       if (error) {
@@ -2554,13 +2581,14 @@ void setVideoEnabled(bool enabled);
     return;
   }
   if (g_useIPhoneSource) {
-    self.formatLabel.stringValue = [NSString stringWithFormat:@"iPhone: %s %@ fps, %s, %s, %s lens, %sx + 640px preview",
+    self.formatLabel.stringValue = [NSString stringWithFormat:@"iPhone: %s %@ fps, %s, %s, %s lens, %sx, look %s + 640px preview",
                                                               g_iPhoneResolution.c_str(),
                                                               [NSString stringWithUTF8String:g_iPhoneFPS.c_str()],
                                                               g_iPhoneOrientation.c_str(),
                                                               g_iPhoneAspect.c_str(),
                                                               g_iPhoneLens.c_str(),
-                                                              g_iPhoneZoom.c_str()];
+                                                              g_iPhoneZoom.c_str(),
+                                                              g_iPhoneLook.c_str()];
     [self updateRecordingTextColor];
     return;
   }
@@ -2711,6 +2739,10 @@ void setVideoEnabled(bool enabled);
     NSString *zoom = self.iPhoneZoomPopup.selectedItem.representedObject;
     g_iPhoneZoom = zoom.UTF8String ?: "1.0";
   }
+  if (self.iPhoneLookPopup.selectedItem.representedObject) {
+    NSString *look = self.iPhoneLookPopup.selectedItem.representedObject;
+    g_iPhoneLook = look.UTF8String ?: "natural";
+  }
   if (SetExtState) {
     SetExtState(kExtStateSection, kIPhoneHostKey, g_iPhoneHost.c_str(), true);
     SetExtState(kExtStateSection, kIPhoneTokenKey, g_iPhoneToken.c_str(), true);
@@ -2722,6 +2754,7 @@ void setVideoEnabled(bool enabled);
     SetExtState(kExtStateSection, kIPhoneAspectKey, g_iPhoneAspect.c_str(), true);
     SetExtState(kExtStateSection, kIPhoneLensKey, g_iPhoneLens.c_str(), true);
     SetExtState(kExtStateSection, kIPhoneZoomKey, g_iPhoneZoom.c_str(), true);
+    SetExtState(kExtStateSection, kIPhoneLookKey, g_iPhoneLook.c_str(), true);
   }
 }
 
@@ -2746,7 +2779,9 @@ void setVideoEnabled(bool enabled);
     @"--lens",
     [NSString stringWithUTF8String:g_iPhoneLens.c_str()],
     @"--zoom",
-    [NSString stringWithUTF8String:g_iPhoneZoom.c_str()]
+    [NSString stringWithUTF8String:g_iPhoneZoom.c_str()],
+    @"--look",
+    [NSString stringWithUTF8String:g_iPhoneLook.c_str()]
   ];
   [self setStatus:@"Configuring iPhone profile"];
   [self runVideoSyncCommandAsync:@"configure" extraArguments:arguments completion:^(NSString *output, NSError *error) {
@@ -2777,7 +2812,9 @@ void setVideoEnabled(bool enabled);
     @"--lens",
     [NSString stringWithUTF8String:g_iPhoneLens.c_str()],
     @"--zoom",
-    [NSString stringWithUTF8String:g_iPhoneZoom.c_str()]
+    [NSString stringWithUTF8String:g_iPhoneZoom.c_str()],
+    @"--look",
+    [NSString stringWithUTF8String:g_iPhoneLook.c_str()]
   ];
 }
 
@@ -2909,6 +2946,7 @@ void setVideoEnabled(bool enabled);
   self.devicePopup.enabled = !g_useIPhoneSource;
   self.devicePopup.hidden = g_useIPhoneSource;
   self.formatDiagnosticPopup.enabled = !g_useIPhoneSource;
+  self.formatDiagnosticPopup.hidden = g_useIPhoneSource;
   self.iPhoneSetupButton.hidden = !g_useIPhoneSource;
   self.iPhoneHostField.hidden = YES;
   self.iPhoneTokenField.hidden = YES;
@@ -2922,6 +2960,7 @@ void setVideoEnabled(bool enabled);
   self.iPhoneAspectPopup.hidden = !g_useIPhoneSource;
   self.iPhoneLensPopup.hidden = !g_useIPhoneSource;
   self.iPhoneZoomPopup.hidden = !g_useIPhoneSource;
+  self.iPhoneLookPopup.hidden = !g_useIPhoneSource;
   [self refreshFormatDiagnosticMenu];
   [self updateCaptureFormatLabel];
 }
@@ -3231,12 +3270,62 @@ void setVideoEnabled(bool enabled);
     self.iPhoneZoomPopup.action = @selector(profileSelectionChanged:);
     [self.dockView addSubview:self.iPhoneZoomPopup];
 
+    self.iPhoneLookPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(12, 49, frame.size.width - 24, 24) pullsDown:NO];
+    [self.iPhoneLookPopup addItemWithTitle:@"Natural"];
+    self.iPhoneLookPopup.lastItem.representedObject = @"natural";
+    [self.iPhoneLookPopup addItemWithTitle:@"Warm Vintage"];
+    self.iPhoneLookPopup.lastItem.representedObject = @"warmVintage";
+    [self.iPhoneLookPopup addItemWithTitle:@"Cool Blue"];
+    self.iPhoneLookPopup.lastItem.representedObject = @"coolBlue";
+    [self.iPhoneLookPopup addItemWithTitle:@"High Contrast B&W"];
+    self.iPhoneLookPopup.lastItem.representedObject = @"highContrastBW";
+    [self.iPhoneLookPopup addItemWithTitle:@"Faded Film"];
+    self.iPhoneLookPopup.lastItem.representedObject = @"fadedFilm";
+    [self.iPhoneLookPopup addItemWithTitle:@"Dream Glow"];
+    self.iPhoneLookPopup.lastItem.representedObject = @"dreamGlow";
+    [self.iPhoneLookPopup addItemWithTitle:@"Noir"];
+    self.iPhoneLookPopup.lastItem.representedObject = @"noir";
+    [self.iPhoneLookPopup addItemWithTitle:@"Saturated Pop"];
+    self.iPhoneLookPopup.lastItem.representedObject = @"saturatedPop";
+    [self.iPhoneLookPopup addItemWithTitle:@"Bleach Bypass"];
+    self.iPhoneLookPopup.lastItem.representedObject = @"bleachBypass";
+    [self.iPhoneLookPopup addItemWithTitle:@"Sepia"];
+    self.iPhoneLookPopup.lastItem.representedObject = @"sepia";
+    [self.iPhoneLookPopup addItemWithTitle:@"Instant Photo"];
+    self.iPhoneLookPopup.lastItem.representedObject = @"instantPhoto";
+    [self.iPhoneLookPopup addItemWithTitle:@"Chrome"];
+    self.iPhoneLookPopup.lastItem.representedObject = @"chrome";
+    [self.iPhoneLookPopup addItemWithTitle:@"Tonal"];
+    self.iPhoneLookPopup.lastItem.representedObject = @"tonal";
+    [self.iPhoneLookPopup addItemWithTitle:@"Silvertone"];
+    self.iPhoneLookPopup.lastItem.representedObject = @"silvertone";
+    [self.iPhoneLookPopup addItemWithTitle:@"Dramatic Warm"];
+    self.iPhoneLookPopup.lastItem.representedObject = @"dramaticWarm";
+    [self.iPhoneLookPopup addItemWithTitle:@"Dramatic Cool"];
+    self.iPhoneLookPopup.lastItem.representedObject = @"dramaticCool";
+    [self.iPhoneLookPopup addItemWithTitle:@"Soft Matte"];
+    self.iPhoneLookPopup.lastItem.representedObject = @"softMatte";
+    [self.iPhoneLookPopup addItemWithTitle:@"Comic Book"];
+    self.iPhoneLookPopup.lastItem.representedObject = @"comicBook";
+    [self.iPhoneLookPopup addItemWithTitle:@"VHS"];
+    self.iPhoneLookPopup.lastItem.representedObject = @"vhs";
+    [self.iPhoneLookPopup addItemWithTitle:@"Music Video Pop"];
+    self.iPhoneLookPopup.lastItem.representedObject = @"musicVideoPop";
+    NSInteger lookIndex = [self.iPhoneLookPopup indexOfItemWithRepresentedObject:[NSString stringWithUTF8String:g_iPhoneLook.c_str()]];
+    if (lookIndex >= 0) {
+      [self.iPhoneLookPopup selectItemAtIndex:lookIndex];
+    }
+    self.iPhoneLookPopup.target = self;
+    self.iPhoneLookPopup.action = @selector(profileSelectionChanged:);
+    [self.dockView addSubview:self.iPhoneLookPopup];
+
     self.iPhoneResolutionPopup.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
     self.iPhoneFPSPopup.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
     self.iPhoneOrientationPopup.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
     self.iPhoneAspectPopup.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
     self.iPhoneLensPopup.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
     self.iPhoneZoomPopup.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
+    self.iPhoneLookPopup.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
 
     self.formatDiagnosticPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(12, 49, frame.size.width - 24, 24) pullsDown:NO];
     self.formatDiagnosticPopup.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
@@ -4528,6 +4617,10 @@ void loadSettings() {
   const char *iPhoneZoom = GetExtState(kExtStateSection, kIPhoneZoomKey);
   if (iPhoneZoom && iPhoneZoom[0] != '\0') {
     g_iPhoneZoom = iPhoneZoom;
+  }
+  const char *iPhoneLook = GetExtState(kExtStateSection, kIPhoneLookKey);
+  if (iPhoneLook && iPhoneLook[0] != '\0') {
+    g_iPhoneLook = iPhoneLook;
   }
 }
 
