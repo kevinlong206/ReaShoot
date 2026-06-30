@@ -24,7 +24,6 @@ public final class iPhoneVideoSyncService: ObservableObject {
     private var httpServer: HTTPRecordingServer?
     private var webRTCPreviewSession: WebRTCPreviewSession?
     private var netService: NetService?
-    private let previewDescriptor = PreviewDescriptor()
     private var cancellables: Set<AnyCancellable> = []
 
     public init(controlPort: UInt16 = 8787, httpPort: UInt16 = 8788) throws {
@@ -67,10 +66,7 @@ public final class iPhoneVideoSyncService: ObservableObject {
             let httpServer = HTTPRecordingServer(
                 port: httpPort,
                 store: store,
-                pairingStore: pairingStore,
-                previewFrameProvider: { [capture] in
-                    capture.latestPreviewJPEG()
-                }
+                pairingStore: pairingStore
             )
             try httpServer.start()
             self.httpServer = httpServer
@@ -128,12 +124,11 @@ public final class iPhoneVideoSyncService: ObservableObject {
         case .pair:
             let token = try pairingStore.pair(code: command.pairingCode ?? "")
             updateBonjourTXTRecord()
-            return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .paired, token: token, preview: previewDescriptor, message: "Paired"))
+            return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .paired, token: token, message: "Paired"))
         case .ping:
             return try ProtocolCodec.encodeEvent(ControlEvent(
                 requestID: command.requestID,
                 type: .pong,
-                preview: previewDescriptor,
                 captureProfile: capture.currentProfile,
                 captureStatus: capture.isApplyingLook ? "encoding" : (capture.isRecording ? "recording" : "idle"),
                 captureProgress: capture.lookExportProgress,
@@ -148,7 +143,6 @@ public final class iPhoneVideoSyncService: ObservableObject {
             return try ProtocolCodec.encodeEvent(ControlEvent(
                 requestID: command.requestID,
                 type: .captureConfigured,
-                preview: previewDescriptor,
                 captureProfile: capture.currentProfile,
                 message: "Configured \(capture.currentProfile.displayName)"
             ))
@@ -207,16 +201,12 @@ public final class iPhoneVideoSyncService: ObservableObject {
             guard pairingStore.validate(token: command.token), let offer = command.webRTCOfferSDP else {
                 return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .error, message: "Unauthorized"))
             }
-            guard capture.currentProfile.look == "natural" else {
-                previewStatus = "Styled HTTP"
-                return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .error, message: "Styled preview uses the HTTP preview stream."))
-            }
             capture.setPreviewSampleBufferConsumer(nil)
             webRTCPreviewSession?.stop()
             let session = WebRTCPreviewSession()
             webRTCPreviewSession = session
-            capture.setPreviewSampleBufferConsumer { [weak session] sampleBuffer in
-                session?.consume(sampleBuffer: sampleBuffer)
+            capture.setPreviewSampleBufferConsumer { [weak session] pixelBuffer, timestamp in
+                session?.consume(pixelBuffer: pixelBuffer, timestamp: timestamp)
             }
             do {
                 let answer = try await session.start(offerSDP: offer)
@@ -263,8 +253,6 @@ public final class iPhoneVideoSyncService: ObservableObject {
         let txtValues = [
             "version": "\(ProtocolVersion.current)",
             "httpPort": "\(httpPort)",
-            "previewSnapshotPath": previewDescriptor.snapshotPath,
-            "previewStreamPath": previewDescriptor.streamPath,
             "paired": pairingStore.isPaired ? "true" : "false"
         ].mapValues { Data($0.utf8) }
         let txt = NetService.data(fromTXTRecord: txtValues)
@@ -277,8 +265,6 @@ public final class iPhoneVideoSyncService: ObservableObject {
         let txtValues = [
             "version": "\(ProtocolVersion.current)",
             "httpPort": "\(httpPort)",
-            "previewSnapshotPath": previewDescriptor.snapshotPath,
-            "previewStreamPath": previewDescriptor.streamPath,
             "paired": pairingStore.isPaired ? "true" : "false"
         ].mapValues { Data($0.utf8) }
         netService?.setTXTRecord(NetService.data(fromTXTRecord: txtValues))

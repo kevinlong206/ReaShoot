@@ -9,6 +9,8 @@ final class WebRTCPreviewSession: NSObject {
     private var peerConnection: LKRTCPeerConnection?
     private var videoSource: LKRTCVideoSource?
     private var capturer: LKRTCVideoCapturer?
+    private var adaptedWidth = 0
+    private var adaptedHeight = 0
 
     func start(offerSDP: String) async throws -> String {
         stop()
@@ -22,7 +24,9 @@ final class WebRTCPreviewSession: NSObject {
             throw WebRTCPreviewError.connectionFailed
         }
         let source = factory.videoSource()
-        source.adaptOutputFormat(toWidth: 640, height: 360, fps: 15)
+        source.adaptOutputFormat(toWidth: 640, height: 360, fps: 10)
+        adaptedWidth = 640
+        adaptedHeight = 360
         let track = factory.videoTrack(with: source, trackId: "iphone-preview-video")
         _ = peerConnection.add(track, streamIds: ["iphone-preview"])
 
@@ -43,6 +47,8 @@ final class WebRTCPreviewSession: NSObject {
         peerConnection = nil
         videoSource = nil
         capturer = nil
+        adaptedWidth = 0
+        adaptedHeight = 0
     }
 
     func addIceCandidate(sdp: String, sdpMid: String?, sdpMLineIndex: Int32) {
@@ -53,17 +59,25 @@ final class WebRTCPreviewSession: NSObject {
         peerConnection.add(candidate) { _ in }
     }
 
-    func consume(sampleBuffer: CMSampleBuffer) {
+    func consume(pixelBuffer: CVPixelBuffer, timestamp: CMTime) {
         guard let source = videoSource,
-              let capturer = capturer,
-              let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+              let capturer = capturer else {
             return
         }
-        let timestamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-        let timestampNs = timestamp.isValid ? Int64(CMTimeGetSeconds(timestamp) * 1_000_000_000) : Int64(Date().timeIntervalSince1970 * 1_000_000_000)
-        let buffer = LKRTCCVPixelBuffer(pixelBuffer: pixelBuffer)
-        let frame = LKRTCVideoFrame(buffer: buffer, rotation: ._0, timeStampNs: timestampNs)
-        queue.async {
+        let width = CVPixelBufferGetWidth(pixelBuffer)
+        let height = CVPixelBufferGetHeight(pixelBuffer)
+        queue.async { [weak self] in
+            guard let self else {
+                return
+            }
+            if width > 0, height > 0, width != self.adaptedWidth || height != self.adaptedHeight {
+                source.adaptOutputFormat(toWidth: Int32(width), height: Int32(height), fps: 10)
+                self.adaptedWidth = width
+                self.adaptedHeight = height
+            }
+            let timestampNs = timestamp.isValid ? Int64(CMTimeGetSeconds(timestamp) * 1_000_000_000) : Int64(Date().timeIntervalSince1970 * 1_000_000_000)
+            let buffer = LKRTCCVPixelBuffer(pixelBuffer: pixelBuffer)
+            let frame = LKRTCVideoFrame(buffer: buffer, rotation: ._0, timeStampNs: timestampNs)
             source.capturer(capturer, didCapture: frame)
         }
     }

@@ -2,7 +2,6 @@
 @preconcurrency import AVFoundation
 import CoreImage
 import Foundation
-import ImageIO
 import UIKit
 #if canImport(VideoSyncCore)
 import VideoSyncCore
@@ -377,22 +376,12 @@ private final class PreviewFrameStore: NSObject, AVCaptureVideoDataOutputSampleB
 
     private let context = CIContext()
     private let lock = NSLock()
-    private var latestJPEG: Data?
-    private var sampleBufferConsumer: ((CMSampleBuffer) -> Void)?
+    private var sampleBufferConsumer: ((CVPixelBuffer, CMTime) -> Void)?
     private var lastFrameTime = Date.distantPast
     private var minimumFrameInterval: TimeInterval = 1.0 / 12.0
     private var look = "natural"
     private var orientation = "portrait"
     private let maximumDimension: CGFloat = 640
-    private let jpegQuality = 0.6
-
-    func latestFrame() -> Data? {
-        lock.lock()
-        defer {
-            lock.unlock()
-        }
-        return latestJPEG
-    }
 
     func setTargetFPS(_ fps: Double) {
         lock.lock()
@@ -403,18 +392,16 @@ private final class PreviewFrameStore: NSObject, AVCaptureVideoDataOutputSampleB
     func setLook(_ look: String) {
         lock.lock()
         self.look = VideoLook.normalized(look)
-        latestJPEG = nil
         lock.unlock()
     }
 
     func setOrientation(_ orientation: String) {
         lock.lock()
         self.orientation = orientation
-        latestJPEG = nil
         lock.unlock()
     }
 
-    func setSampleBufferConsumer(_ consumer: ((CMSampleBuffer) -> Void)?) {
+    func setSampleBufferConsumer(_ consumer: ((CVPixelBuffer, CMTime) -> Void)?) {
         lock.lock()
         sampleBufferConsumer = consumer
         lock.unlock()
@@ -436,24 +423,41 @@ private final class PreviewFrameStore: NSObject, AVCaptureVideoDataOutputSampleB
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
             return
         }
-        consumer?(sampleBuffer)
+        guard let consumer else {
+            return
+        }
 
         let image = normalizedImage(VideoLook.apply(look, to: CIImage(cvPixelBuffer: pixelBuffer)), orientation: orientation)
         let width = image.extent.width
         let height = image.extent.height
         let scale = min(1.0, maximumDimension / max(width, height))
         let outputImage = scale < 1.0 ? image.transformed(by: CGAffineTransform(scaleX: scale, y: scale)) : image
-        let options: [CIImageRepresentationOption: Any] = [
-            CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String): jpegQuality
+        let outputExtent = outputImage.extent
+        let outputWidth = max(1, Int(outputExtent.width.rounded(.up)))
+        let outputHeight = max(1, Int(outputExtent.height.rounded(.up)))
+        let attributes: [String: Any] = [
+            kCVPixelBufferCGImageCompatibilityKey as String: true,
+            kCVPixelBufferCGBitmapContextCompatibilityKey as String: true,
+            kCVPixelBufferMetalCompatibilityKey as String: true
         ]
-
-        guard let jpeg = context.jpegRepresentation(of: outputImage, colorSpace: CGColorSpaceCreateDeviceRGB(), options: options) else {
-            return
+        var renderedPixelBuffer: CVPixelBuffer?
+        let status = CVPixelBufferCreate(
+            kCFAllocatorDefault,
+            outputWidth,
+            outputHeight,
+            kCVPixelFormatType_32BGRA,
+            attributes as CFDictionary,
+            &renderedPixelBuffer
+        )
+        if status == kCVReturnSuccess, let renderedPixelBuffer {
+            context.render(
+                outputImage,
+                to: renderedPixelBuffer,
+                bounds: CGRect(origin: .zero, size: CGSize(width: outputWidth, height: outputHeight)),
+                colorSpace: CGColorSpaceCreateDeviceRGB()
+            )
+            consumer(renderedPixelBuffer, CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
         }
-
-        lock.lock()
-        latestJPEG = jpeg
-        lock.unlock()
     }
 
     private func normalizedImage(_ image: CIImage, orientation: String) -> CIImage {
@@ -533,11 +537,7 @@ public final class CaptureRecordingEngine: NSObject, ObservableObject {
         isConfigured = true
     }
 
-    public nonisolated func latestPreviewJPEG() -> Data? {
-        previewFrameStore.latestFrame()
-    }
-
-    public nonisolated func setPreviewSampleBufferConsumer(_ consumer: ((CMSampleBuffer) -> Void)?) {
+    public nonisolated func setPreviewSampleBufferConsumer(_ consumer: ((CVPixelBuffer, CMTime) -> Void)?) {
         previewFrameStore.setSampleBufferConsumer(consumer)
     }
 

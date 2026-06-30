@@ -77,12 +77,12 @@ rm -rf iphone/Package.resolved iphone/.build helper/.build
 - Video features are off by default. Enabling video shows the floating preview by default and creates/reuses a `Video Recorder` track.
 - The `Video Recorder` track is forced to REAPER record-disabled state: unarmed, no input, record mode `none`, monitoring off, item monitoring off, and auto-recarm off.
 - The extension is iPhone-only. The preview has iPhone setup/profile controls and a format/status area below the video. The format label shows USB/Wi-Fi transport, resolution, FPS, orientation, aspect, lens, zoom, selected look, and preview size. The look row has `Prev`/`Next` buttons for quick auditioning. Format/status text turns red while recording.
-- For `iPhone Video Sync`, REAPER controls the companion iPhone app over WebSocket port `8787`, downloads recordings over HTTP port `8788`, and uses authenticated preview endpoints/control messages. REAPER refreshes the USB host via helper `usb-host` before control/preview/download calls; if no USB host is available, it uses the saved host from setup/discovery.
+- For `iPhone Video Sync`, REAPER controls the companion iPhone app over WebSocket port `8787`, downloads recordings over HTTP port `8788`, and uses authenticated WebRTC control messages for preview. REAPER refreshes the USB host via helper `usb-host` before control/preview/download calls; if no USB host is available, it uses the saved host from setup/discovery.
 - The helper `stop --progress` command emits `progress bytes=... total=... percent=...` lines while downloading; REAPER parses these live and shows transfer progress in the dock status label.
 - REAPER's iPhone stop flow uses helper `stop-only`, prompts for Download vs Delete, then calls either `download-recording --progress` or confirmed `delete-recording`. Canceling delete confirmation downloads instead.
 - Failed/canceled downloads remain pending on the phone because the Mac only sends transfer acknowledgement after verifying the downloaded file. `Video Recorder: Restore Pending iPhone Recording` calls helper `list-recordings`, prompts for a clip, then uses `download-recording --progress` and inserts at the current edit cursor.
 - After the helper verifies checksum and sends `transferComplete`, the iPhone app deletes the transferred local `.mov` immediately.
-- iPhone preview attempts WebRTC first using `LiveKitWebRTC.framework` and a docked `LKRTCMTLVideoView`. If WebRTC fails, REAPER falls back to `/preview.bin` binary JPEG streaming, then snapshot fallback if needed.
+- iPhone preview uses WebRTC only with `LiveKitWebRTC.framework` and a docked `LKRTCMTLVideoView`; there is no HTTP preview fallback.
 - WebRTC signaling uses the existing authenticated control WebSocket. REAPER sends a receive-only offer, the iPhone returns an answer, REAPER strips inline iPhone ICE candidates before `setRemoteDescription`, adds them separately, and trickles Mac ICE candidates back with `addWebRTCIceCandidate`.
 - The iPhone app UI has a `Preview` row showing `Idle`, `WebRTC`, or `WebRTC failed`.
 - The iPhone capture profile includes resolution, FPS, orientation, aspect, lens, zoom, and look. The look picker keeps custom looks plus a curated raw Core Image subset, not the full Core Image catalog. Lens availability is hardware-dependent; zoom is clamped by AVFoundation on iPhone and is not guaranteed optical for every value.
@@ -112,19 +112,14 @@ TOKEN="$(awk -F= '/^iphone_token=/{print $2}' "$HOME/Library/Application Support
   ping --host kevin-long-iphone.local --port 8787 --token "$TOKEN"
 ```
 
-Preview endpoint check:
+Preview control check:
 
 ```sh
-curl -sS --max-time 2 "http://kevin-long-iphone.local:8788/preview.bin?token=$TOKEN" -o /tmp/preview.bin || true
-python3 - <<'PY'
-from pathlib import Path
-data = Path('/tmp/preview.bin').read_bytes()
-print(len(data), int.from_bytes(data[:4], 'big') if len(data) >= 4 else None, data[4:6].hex() if len(data) >= 6 else '')
-PY
-rm -f /tmp/preview.bin
+"$HOME/Library/Application Support/REAPER/UserPlugins/video-sync-mac" \
+  ping --host kevin-long-iphone.local --port 8787 --token "$TOKEN"
 ```
 
-Expected binary preview output includes a nonzero byte count and JPEG magic `ffd8`.
+Expected output is `OK`; WebRTC preview itself is negotiated by REAPER through the control channel.
 
 USB tunnel check:
 
@@ -137,7 +132,7 @@ Expected output is a tunnel IP/host string when the iPhone is connected, unlocke
 ## Known follow-up areas
 
 - Automatic audio alignment is a first pass. It searches +/-5 seconds around expected placement and requires enough shared sound between the camera audio and a reference REAPER audio item. If alignment is unreliable, improve reference-track selection and correlation diagnostics before changing placement heuristics.
-- WebRTC preview currently works on the tested LAN setup, but keep `/preview.bin` fallback intact. If WebRTC regresses, inspect offer/answer and ICE handling before changing capture settings.
+- WebRTC is the only preview path. If preview regresses, inspect offer/answer, ICE handling, and iPhone-side Core Image rendering before changing capture settings.
 - USB control/download depends on Apple's device tunnel availability. If REAPER unexpectedly shows Wi-Fi, check `video-sync-mac usb-host`, `xcrun devicectl list devices`, trust/unlock state, and the USB cable before changing app networking logic.
 - A recorded file at `~/Desktop/ReaperMedia/Video Recordings/unsaved_project_20260627_162649.mov` inspected with `ffprobe` was healthy: `1920x1080` H.264 Main, ~29.99/30 fps, steady decoded 33.34 ms frame cadence, ~23.7 Mbps video, and AAC mono 48 kHz audio. If playback looks jumpy in the extension but fine in VLC, suspect docked preview playback/resync behavior before changing capture settings.
 - The preview `AVPlayer` should remain muted and should not exact-seek every timer tick. Current behavior seeks on source changes/playback start, disables stalling waits, and corrects only large drift.
