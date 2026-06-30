@@ -4,17 +4,18 @@ Guidance for future agents working in this project.
 
 ## Project status
 
-This is the consolidated companion iPhone app for `reaper_video_recorder`. It controls iPhone video recording from REAPER over local Wi-Fi.
+This is the consolidated companion iPhone app for `reaper_video_recorder`. It controls iPhone video recording from REAPER over USB when available, falling back to local Wi-Fi/Bonjour.
 
 This directory is the source of truth for the iPhone app. Do not use the old `~/iphone_reapervideosync` directory.
 
 The current implementation has been installed and tested on a physical iPhone in foreground mode. The tested flow is:
 
 1. iPhone app advertises `_iphone-video-sync._tcp` with Bonjour.
-2. Mac sends WebSocket control commands on port `8787`.
-3. REAPER attempts WebRTC preview first; `/preview.bin`, `/preview.mjpg`, and `/preview.jpg` remain fallback/debug paths.
-4. iPhone records video with AVFoundation.
-5. Mac sends stop, receives a recording descriptor, downloads the `.mov` over HTTP on port `8788`, verifies checksum, and acknowledges transfer.
+2. Mac prefers the USB tunnel discovered by `video-sync-mac usb-host`; otherwise it uses Bonjour/Wi-Fi.
+3. Mac sends WebSocket control commands on port `8787`.
+4. REAPER attempts WebRTC preview first; `/preview.bin`, `/preview.mjpg`, and `/preview.jpg` remain fallback/debug paths.
+5. iPhone records video with AVFoundation.
+6. Mac sends stop, receives a recording descriptor, downloads the `.mov` over HTTP on port `8788`, verifies checksum, and acknowledges transfer.
 
 The app disables the idle timer while ready/listening so foreground preview does not sleep on a tripod. Do not assume locked-screen or background recording works; iOS may still suspend ordinary apps when backgrounded or locked.
 
@@ -42,6 +43,12 @@ Show CLI help:
 
 ```sh
 swift run video-sync-mac --help
+```
+
+Check the current USB tunnel host:
+
+```sh
+swift run video-sync-mac usb-host
 ```
 
 When SwiftPM touches the LiveKit WebRTC package, prefix commands with:
@@ -99,6 +106,12 @@ Prerequisites for device testing:
 
 Do not write pairing tokens into docs or source. Tokens are credentials for controlling the phone.
 
+Remove local build artifacts before wrapping up unless a dependency change intentionally requires them:
+
+```sh
+rm -rf .build Package.resolved ../helper/.build
+```
+
 ## Manual end-to-end test
 
 Keep the iPhone unlocked with the Video Sync app open in the foreground, then run:
@@ -111,7 +124,8 @@ swift run video-sync-mac configure \
   --port 8787 \
   --token "$VIDEO_SYNC_TOKEN" \
   --lens ultrawide \
-  --zoom 0.5
+  --zoom 0.5 \
+  --look ci:CIThermal
 
 swift run video-sync-mac start \
   --host kevin-long-iphone.local \
@@ -133,7 +147,7 @@ Expected result: a `.mov` appears in `test-downloads`, and the CLI prints `downl
 
 Add `--progress` to `swift run video-sync-mac stop ...` when testing transfer progress. It emits `progress bytes=... total=... percent=...` lines during the HTTP download.
 
-For the REAPER prompted stop flow, use `stop-only` to get recording metadata, then either `download-recording --progress` or `delete-recording`.
+For the REAPER prompted stop flow, use `stop-only` to get recording metadata, then either `download-recording --progress` or `delete-recording`. If a download fails before acknowledgement, the recording remains pending on the phone; use `list-recordings` and `download-recording --progress` to restore it.
 
 ## WebRTC preview notes
 
@@ -144,6 +158,7 @@ For the REAPER prompted stop flow, use `stop-only` to get recording metadata, th
 - The iPhone app status UI exposes a `Preview` row so agents/users can see whether WebRTC is active.
 - Keep the HTTP preview endpoints working as fallback while iterating on WebRTC.
 - Lens selection uses AVFoundation rear camera discovery. Not every iPhone exposes `ultrawide` or `telephoto`; unavailable lens requests should fail clearly instead of silently pretending they worked.
+- Looks include custom names plus a curated raw Core Image subset accepted as `ci:<filterName>`. Keep `VideoLook.rawFilterIDs` aligned with the REAPER dropdown list in `../src/reaper_video_recorder.mm`.
 
 ## Known issues and next work
 
@@ -156,6 +171,7 @@ dns-sd -L iPhone _iphone-video-sync._tcp local
 
 - Background/locked recording is not validated and may not be permitted by iOS.
 - The WebSocket and HTTP servers are intentionally minimal. Harden them before relying on unattended long sessions.
+- USB discovery depends on Apple device tunnel availability. If `usb-host` is empty, check `xcrun devicectl list devices`, trust/unlock state, and the cable before changing app networking logic.
 - Add range/resume support for large interrupted downloads.
-- Add persistent recording metadata so recordings survive app relaunch with transfer state intact.
+- Pending recordings can be restored while the app is still running; fully persistent recording metadata across app relaunch remains a future hardening area.
 - Avoid broad rewrites of the manually generated Xcode project unless replacing it with a more maintainable project-generation workflow.

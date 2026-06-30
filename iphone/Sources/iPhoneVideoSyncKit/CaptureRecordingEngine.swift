@@ -9,7 +9,21 @@ import VideoSyncCore
 #endif
 
 private enum VideoLook {
+    static let rawFilterPrefix = "ci:"
+    static let rawFilterIDs: [String] = [
+        "CIThermal", "CIXRay", "CIFalseColor", "CIColorInvert", "CIColorPosterize",
+        "CIColorThreshold", "CIColorThresholdOtsu", "CIVibrance", "CIHueAdjust", "CITemperatureAndTint",
+        "CIGloom", "CISobelGradients", "CIGaborGradients", "CIMorphologyGradient", "CIEdges",
+        "CIEdgeWork", "CILineOverlay", "CICannyEdgeDetector", "CICrystallize", "CIHexagonalPixellate",
+        "CIPixellate", "CIPointillize", "CIDotScreen", "CICircularScreen", "CILineScreen",
+        "CIHatchedScreen", "CICMYKHalftone", "CIKaleidoscope", "CITriangleKaleidoscope", "CITwirlDistortion",
+        "CIVortexDistortion", "CILightTunnel", "CIGlassDistortion", "CIDisplacementDistortion"
+    ]
+
     static func normalized(_ look: String) -> String {
+        if let rawFilterID = rawFilterID(for: look) {
+            return rawFilterPrefix + rawFilterID
+        }
         switch look.lowercased().replacingOccurrences(of: "-", with: "").replacingOccurrences(of: "_", with: "").replacingOccurrences(of: " ", with: "") {
         case "warmvintage", "vintage", "warm":
             return "warmVintage"
@@ -55,7 +69,11 @@ private enum VideoLook {
     }
 
     static func displayName(for look: String) -> String {
-        switch normalized(look) {
+        let normalizedLook = normalized(look)
+        if let rawFilterID = rawFilterID(for: normalizedLook) {
+            return displayName(forRawFilterID: rawFilterID)
+        }
+        switch normalizedLook {
         case "warmVintage":
             return "Warm Vintage"
         case "coolBlue":
@@ -100,7 +118,11 @@ private enum VideoLook {
     }
 
     static func apply(_ look: String, to image: CIImage) -> CIImage {
-        switch normalized(look) {
+        let normalizedLook = normalized(look)
+        if let rawFilterID = rawFilterID(for: normalizedLook) {
+            return applyRawFilter(rawFilterID, to: image)
+        }
+        switch normalizedLook {
         case "warmVintage":
             return image
                 .applyingFilter("CIPhotoEffectProcess")
@@ -265,6 +287,57 @@ private enum VideoLook {
             return image
         }
     }
+
+    private static func rawFilterID(for look: String) -> String? {
+        let trimmed = look.trimmingCharacters(in: .whitespacesAndNewlines)
+        let candidate = trimmed.hasPrefix(rawFilterPrefix) ? String(trimmed.dropFirst(rawFilterPrefix.count)) : trimmed
+        return rawFilterIDs.first { $0.caseInsensitiveCompare(candidate) == .orderedSame }
+    }
+
+    private static func displayName(forRawFilterID filterID: String) -> String {
+        var name = String(filterID.dropFirst(filterID.hasPrefix("CI") ? 2 : 0))
+        name = name.replacingOccurrences(of: #"(?<=[a-z])(?=[A-Z])"#, with: " ", options: .regularExpression)
+        name = name.replacingOccurrences(of: #"(?<=[A-Za-z])(?=\d)"#, with: " ", options: .regularExpression)
+        name = name.replacingOccurrences(of: #"(?<=\d)(?=[A-Za-z])"#, with: " ", options: .regularExpression)
+        return "CI: \(name)"
+    }
+
+    private static func applyRawFilter(_ filterID: String, to image: CIImage) -> CIImage {
+        guard let filter = CIFilter(name: filterID) else {
+            return image
+        }
+        filter.setDefaults()
+        let keys = Set(filter.inputKeys)
+        if keys.contains(kCIInputImageKey) {
+            filter.setValue(image, forKey: kCIInputImageKey)
+        }
+        for key in ["inputBackgroundImage", "inputTargetImage", "inputMaskImage", "inputShadingImage", "inputMatteImage"] where keys.contains(key) {
+            filter.setValue(image, forKey: key)
+        }
+        if keys.contains(kCIInputExtentKey) {
+            filter.setValue(CIVector(cgRect: image.extent), forKey: kCIInputExtentKey)
+        }
+        if keys.contains(kCIInputCenterKey) {
+            filter.setValue(CIVector(x: image.extent.midX, y: image.extent.midY), forKey: kCIInputCenterKey)
+        }
+        if keys.contains(kCIInputRadiusKey), filter.value(forKey: kCIInputRadiusKey) == nil {
+            filter.setValue(min(image.extent.width, image.extent.height) * 0.08, forKey: kCIInputRadiusKey)
+        }
+        if keys.contains(kCIInputTimeKey) {
+            filter.setValue(0.5, forKey: kCIInputTimeKey)
+        }
+        guard let output = filter.outputImage else {
+            return image
+        }
+        let extent = output.extent
+        if !extent.origin.x.isFinite || !extent.origin.y.isFinite || !extent.width.isFinite || !extent.height.isFinite {
+            return output.cropped(to: image.extent)
+        }
+        if extent.contains(image.extent) {
+            return output.cropped(to: image.extent)
+        }
+        return output
+    }
 }
 
 public enum CaptureError: Error, LocalizedError {
@@ -309,6 +382,7 @@ private final class PreviewFrameStore: NSObject, AVCaptureVideoDataOutputSampleB
     private var lastFrameTime = Date.distantPast
     private var minimumFrameInterval: TimeInterval = 1.0 / 12.0
     private var look = "natural"
+    private var orientation = "portrait"
     private let maximumDimension: CGFloat = 640
     private let jpegQuality = 0.6
 
@@ -333,6 +407,13 @@ private final class PreviewFrameStore: NSObject, AVCaptureVideoDataOutputSampleB
         lock.unlock()
     }
 
+    func setOrientation(_ orientation: String) {
+        lock.lock()
+        self.orientation = orientation
+        latestJPEG = nil
+        lock.unlock()
+    }
+
     func setSampleBufferConsumer(_ consumer: ((CMSampleBuffer) -> Void)?) {
         lock.lock()
         sampleBufferConsumer = consumer
@@ -345,6 +426,7 @@ private final class PreviewFrameStore: NSObject, AVCaptureVideoDataOutputSampleB
         let interval = minimumFrameInterval
         let consumer = sampleBufferConsumer
         let look = look
+        let orientation = orientation
         lock.unlock()
         guard now.timeIntervalSince(lastFrameTime) >= interval else {
             return
@@ -356,7 +438,7 @@ private final class PreviewFrameStore: NSObject, AVCaptureVideoDataOutputSampleB
         }
         consumer?(sampleBuffer)
 
-        let image = VideoLook.apply(look, to: CIImage(cvPixelBuffer: pixelBuffer))
+        let image = normalizedImage(VideoLook.apply(look, to: CIImage(cvPixelBuffer: pixelBuffer)), orientation: orientation)
         let width = image.extent.width
         let height = image.extent.height
         let scale = min(1.0, maximumDimension / max(width, height))
@@ -372,6 +454,23 @@ private final class PreviewFrameStore: NSObject, AVCaptureVideoDataOutputSampleB
         lock.lock()
         latestJPEG = jpeg
         lock.unlock()
+    }
+
+    private func normalizedImage(_ image: CIImage, orientation: String) -> CIImage {
+        let propertyOrientation: CGImagePropertyOrientation
+        switch orientation.lowercased() {
+        case "landscapeleft":
+            propertyOrientation = .down
+        case "landscaperight", "landscape":
+            propertyOrientation = .up
+        case "portraitupsidedown":
+            propertyOrientation = .left
+        default:
+            propertyOrientation = .right
+        }
+        let oriented = image.oriented(propertyOrientation)
+        let extent = oriented.extent
+        return oriented.transformed(by: CGAffineTransform(translationX: -extent.origin.x, y: -extent.origin.y))
     }
 }
 
@@ -464,6 +563,7 @@ public final class CaptureRecordingEngine: NSObject, ObservableObject {
         normalizedProfile.lens = normalizedLens(profile.lens)
         normalizedProfile.look = normalizedLook(profile.look)
         previewFrameStore.setLook(normalizedProfile.look)
+        previewFrameStore.setOrientation(normalizedProfile.orientation)
         guard isConfigured else {
             currentProfile = normalizedProfile
             return
@@ -717,10 +817,7 @@ public final class CaptureRecordingEngine: NSObject, ObservableObject {
 
     private func applyOrientation() {
         let angle = rotationAngle(for: currentProfile.orientation)
-        for output in [movieOutput, previewOutput] {
-            guard let connection = output.connection(with: .video), connection.isVideoRotationAngleSupported(angle) else {
-                continue
-            }
+        if let connection = movieOutput.connection(with: .video), connection.isVideoRotationAngleSupported(angle) {
             connection.videoRotationAngle = angle
         }
     }

@@ -87,8 +87,6 @@ namespace {
 constexpr const char *kExtStateSection = "klong_reaper_video_recorder";
 constexpr const char *kFollowEnabledKey = "follow_enabled";
 constexpr const char *kPreviewFloatingKey = "preview_floating";
-constexpr const char *kSelectedDeviceKey = "selected_device_unique_id";
-constexpr const char *kSourceKindKey = "source_kind";
 constexpr const char *kIPhoneHostKey = "iphone_host";
 constexpr const char *kIPhoneControlPortKey = "iphone_control_port";
 constexpr const char *kIPhoneHttpPortKey = "iphone_http_port";
@@ -131,8 +129,6 @@ bool g_previewFloating = true;
 bool g_activeTransportRecording = false;
 bool g_pendingInsert = false;
 bool g_pendingAlignment = false;
-bool g_useIPhoneSource = false;
-std::string g_selectedDeviceUniqueID;
 std::string g_iPhoneHost;
 std::string g_iPhoneControlPort = "8787";
 std::string g_iPhoneHttpPort = "8788";
@@ -1512,10 +1508,7 @@ void setVideoEnabled(bool enabled);
 
 } // namespace
 
-@interface KlongVideoRecorder : NSObject <AVCaptureFileOutputRecordingDelegate, NSURLSessionDataDelegate, LKRTCPeerConnectionDelegate>
-@property(nonatomic, strong) AVCaptureSession *session;
-@property(nonatomic, strong) AVCaptureMovieFileOutput *movieOutput;
-@property(nonatomic, strong) AVCaptureVideoPreviewLayer *previewLayer;
+@interface KlongVideoRecorder : NSObject <NSURLSessionDataDelegate, LKRTCPeerConnectionDelegate>
 @property(nonatomic, strong) AVPlayer *player;
 @property(nonatomic, strong) AVPlayerLayer *playerLayer;
 @property(nonatomic, copy) NSString *activePlaybackPath;
@@ -1523,9 +1516,6 @@ void setVideoEnabled(bool enabled);
 @property(nonatomic, strong) NSView *dockView;
 @property(nonatomic, strong) NSView *previewView;
 @property(nonatomic, strong) NSWindow *floatingPreviewWindow;
-@property(nonatomic, strong) NSPopUpButton *sourcePopup;
-@property(nonatomic, strong) NSPopUpButton *devicePopup;
-@property(nonatomic, strong) NSPopUpButton *formatDiagnosticPopup;
 @property(nonatomic, strong) NSButton *iPhoneSetupButton;
 @property(nonatomic, strong) NSWindow *iPhoneSetupWindow;
 @property(nonatomic, strong) NSTextField *iPhoneHostField;
@@ -1547,6 +1537,8 @@ void setVideoEnabled(bool enabled);
 @property(nonatomic, strong) NSPopUpButton *iPhoneLensPopup;
 @property(nonatomic, strong) NSPopUpButton *iPhoneZoomPopup;
 @property(nonatomic, strong) NSPopUpButton *iPhoneLookPopup;
+@property(nonatomic, strong) NSButton *iPhonePreviousLookButton;
+@property(nonatomic, strong) NSButton *iPhoneNextLookButton;
 @property(nonatomic, strong) NSTextField *formatLabel;
 @property(nonatomic, strong) NSTextField *statusLabel;
 @property(nonatomic, strong) NSImageView *remotePreviewView;
@@ -1574,18 +1566,62 @@ void setVideoEnabled(bool enabled);
 @property(nonatomic, assign) BOOL webRTCPreviewFailed;
 @property(nonatomic, copy) NSString *webRTCPreviewFallbackReason;
 @property(nonatomic, strong) dispatch_semaphore_t webRTCIceGatheringSemaphore;
-@property(nonatomic, copy) void (^startCompletion)(void);
 @property(nonatomic, copy) void (^stopCompletion)(NSString *path, NSError *error);
-@property(nonatomic, copy) NSString *activeOutputPath;
 @property(nonatomic, copy) NSString *activeRemoteDownloadDirectory;
-@property(nonatomic, copy) NSString *audioDeviceName;
-@property(nonatomic, copy) NSString *captureQualityLabel;
 @property(nonatomic, assign) BOOL docked;
 @property(nonatomic, assign) BOOL floatingPreview;
-@property(nonatomic, assign) BOOL hasAudioInput;
 @property(nonatomic, assign) BOOL recordingVisualState;
 @property(nonatomic, assign) BOOL showingPlayback;
 @property(nonatomic, assign) BOOL remoteRecording;
+- (void)ensureDockView;
+- (void)showLivePreview;
+- (void)showFloatingPreview;
+- (void)showDockedPreview;
+- (void)hideFloatingPreview;
+- (void)hideDockedPreview;
+- (void)setStatus:(NSString *)status;
+- (void)setRecordingVisualState:(BOOL)recording;
+- (void)updateCaptureFormatLabel;
+- (void)persistIPhoneSettings;
+- (void)selectRelativeIPhoneLook:(NSInteger)offset;
+- (NSDictionary<NSString *, NSString *> *)fieldsFromHelperLine:(NSString *)line;
+- (NSArray<NSString *> *)iPhoneConfigureArguments;
+- (void)startRemotePreview;
+- (void)stopRemotePreview;
+- (void)startWebRTCPreviewIfNeeded;
+- (void)startBinaryRemotePreviewFallback;
+- (void)startRemotePreviewStream;
+- (void)refreshRemotePreviewSnapshotFallback;
+- (void)stopWebRTCPreview;
+- (void)stopRemotePreviewStreamOnly;
+- (void)processRemotePreviewBuffer;
+- (void)handleRemotePreviewFrame:(NSData *)frameData;
+- (void)updateRemotePreviewStatusIfNeeded;
+- (NSURL *)remotePreviewSnapshotURL;
+- (NSURL *)remotePreviewStreamURL;
+- (NSString *)iPhoneTransportLabel;
+- (NSString *)iPhoneStreamPreviewLabel;
+- (NSString *)answerForWebRTCOffer:(NSString *)offer error:(NSError **)error;
+- (void)sendWebRTCIceCandidateToIPhone:(LKRTCIceCandidate *)candidate;
+- (NSString *)webRTCAnswerSDPByRemovingInlineCandidates:(NSString *)answerSDP
+                                             candidates:(NSArray<LKRTCIceCandidate *> **)candidates;
+- (void)addRemoteWebRTCIceCandidates:(NSArray<LKRTCIceCandidate *> *)candidates
+                      toPeerConnection:(LKRTCPeerConnection *)peerConnection;
+- (NSString *)runVideoSyncCommand:(NSString *)command
+                   extraArguments:(NSArray<NSString *> *)extraArguments
+                            error:(NSError **)error;
+- (void)runVideoSyncCommandAsync:(NSString *)command
+                  extraArguments:(NSArray<NSString *> *)extraArguments
+                      completion:(void (^)(NSString *output, NSError *error))completion;
+- (void)runVideoSyncCommandAsync:(NSString *)command
+                  extraArguments:(NSArray<NSString *> *)extraArguments
+                   outputHandler:(void (^)(NSString *line))outputHandler
+                      completion:(void (^)(NSString *output, NSError *error))completion;
+- (void)handleVideoSyncProgressLine:(NSString *)line;
+- (NSDictionary<NSString *, NSString *> *)recordingDescriptorFromVideoSyncOutput:(NSString *)output;
+- (NSArray<NSDictionary<NSString *, NSString *> *> *)recordingDescriptorsFromVideoSyncOutput:(NSString *)output;
+- (void)promptForStoppedIPhoneRecording:(NSDictionary<NSString *, NSString *> *)recording;
+- (void)finishIPhoneStopWithPath:(NSString *)path error:(NSError *)error;
 @end
 
 @implementation KlongVideoRecorder
@@ -1600,31 +1636,14 @@ void setVideoEnabled(bool enabled);
 
 - (void)showPreview {
   dispatch_async(dispatch_get_main_queue(), ^{
-    if (g_useIPhoneSource) {
-      [self ensureDockView];
-      [self showLivePreview];
-      if (self.floatingPreview) {
-        [self showFloatingPreview];
-      } else {
-        [self showDockedPreview];
-      }
-      [self setStatus:[NSString stringWithUTF8String:followStatusText().c_str()]];
-      return;
+    [self ensureDockView];
+    [self showLivePreview];
+    if (self.floatingPreview) {
+      [self showFloatingPreview];
+    } else {
+      [self showDockedPreview];
     }
-    [self ensureCaptureAccessThenRun:^{
-      NSError *error = nil;
-      if (![self ensureSession:&error]) {
-        showError(error.localizedDescription.UTF8String ?: "Unable to initialize camera session.");
-        return;
-      }
-      [self ensureDockView];
-      if (self.floatingPreview) {
-        [self showFloatingPreview];
-      } else {
-        [self showDockedPreview];
-      }
-      [self setStatus:[NSString stringWithUTF8String:followStatusText().c_str()]];
-    }];
+    [self setStatus:[NSString stringWithUTF8String:followStatusText().c_str()]];
   });
 }
 
@@ -1657,10 +1676,7 @@ void setVideoEnabled(bool enabled);
 }
 
 - (BOOL)isRecording {
-  if (g_useIPhoneSource) {
-    return self.remoteRecording;
-  }
-  return self.movieOutput.isRecording;
+  return self.remoteRecording;
 }
 
 - (NSString *)videoSyncHelperPath {
@@ -2232,651 +2248,61 @@ void setVideoEnabled(bool enabled);
 - (BOOL)startRecordingToPath:(const std::string &)path
              startCompletion:(void (^)(void))startCompletion
                         error:(NSError **)error {
-  if (g_useIPhoneSource) {
-    return [self startIPhoneRecordingWithSuggestedPath:path startCompletion:startCompletion error:error];
-  }
-  if (![self ensureSession:error]) {
-    return NO;
-  }
-  if (!self.hasAudioInput) {
-    if (error) {
-      NSString *message = @"No microphone/camera audio input is available for the selected camera. Grant microphone permission to REAPER and make sure the camera microphone is available in macOS.";
-      *error = [NSError errorWithDomain:@"KlongVideoRecorder"
-                                   code:6
-                               userInfo:@{NSLocalizedDescriptionKey: message}];
-    }
-    return NO;
-  }
-  if (self.movieOutput.isRecording) {
-    if (error) {
-      *error = [NSError errorWithDomain:@"KlongVideoRecorder"
-                                   code:1
-                               userInfo:@{NSLocalizedDescriptionKey: @"Video recording is already active."}];
-    }
-    return NO;
-  }
-
-  NSString *outputPath = [NSString stringWithUTF8String:path.c_str()];
-  NSString *directory = [outputPath stringByDeletingLastPathComponent];
-  NSError *directoryError = nil;
-  if (![[NSFileManager defaultManager] createDirectoryAtPath:directory
-                                 withIntermediateDirectories:YES
-                                                  attributes:nil
-                                                       error:&directoryError]) {
-    if (error) {
-      *error = directoryError;
-    }
-    return NO;
-  }
-
-  if ([[NSFileManager defaultManager] fileExistsAtPath:outputPath]) {
-    [[NSFileManager defaultManager] removeItemAtPath:outputPath error:nil];
-  }
-
-  self.activeOutputPath = outputPath;
-  self.startCompletion = startCompletion;
-  [self showLivePreview];
-  [self ensureDockView];
-  if (self.floatingPreview) {
-    [self showFloatingPreview];
-  } else {
-    [self showDockedPreview];
-  }
-  [self setStatus:@"Starting recording"];
-  [self.movieOutput startRecordingToOutputFileURL:[NSURL fileURLWithPath:outputPath]
-                                recordingDelegate:self];
-  return YES;
+  return [self startIPhoneRecordingWithSuggestedPath:path startCompletion:startCompletion error:error];
 }
 
 - (void)stopRecordingWithCompletion:(void (^)(NSString *path, NSError *error))completion {
-  if (g_useIPhoneSource) {
-    self.stopCompletion = completion;
-    if (!self.remoteRecording) {
-      if (self.stopCompletion) {
-        self.stopCompletion(nil, nil);
-        self.stopCompletion = nil;
-      }
-      return;
-    }
-    [self setStatus:@"Stopping iPhone recording"];
-    NSArray<NSString *> *arguments = @[
-      @"--token",
-      [NSString stringWithUTF8String:g_iPhoneToken.c_str()],
-      @"--progress"
-    ];
-    [self runVideoSyncCommandAsync:@"stop-only" extraArguments:arguments outputHandler:^(NSString *line) {
-      [self handleVideoSyncProgressLine:line];
-    } completion:^(NSString *output, NSError *error) {
-      self.remoteRecording = NO;
-      [self setRecordingVisualState:NO];
-      if (error) {
-        [self setStatus:@"iPhone stop failed"];
-        [self finishIPhoneStopWithPath:nil error:error];
-        return;
-      }
-      NSDictionary<NSString *, NSString *> *recording = [self recordingDescriptorFromVideoSyncOutput:output ?: @""];
-      if (!recording) {
-        NSError *descriptorError = [NSError errorWithDomain:@"KlongVideoRecorder"
-                                                       code:25
-                                                   userInfo:@{NSLocalizedDescriptionKey: @"The iPhone recording stopped, but video-sync-mac did not report recording details."}];
-        [self finishIPhoneStopWithPath:nil error:descriptorError];
-        return;
-      }
-      [self promptForStoppedIPhoneRecording:recording];
-    }];
-    return;
-  }
   self.stopCompletion = completion;
-  if (!self.movieOutput.isRecording) {
+  if (!self.remoteRecording) {
     if (self.stopCompletion) {
-      self.stopCompletion(self.activeOutputPath, nil);
+      self.stopCompletion(nil, nil);
       self.stopCompletion = nil;
     }
     return;
   }
-  [self setStatus:@"Finalizing"];
-  [self.movieOutput stopRecording];
-}
-
-- (void)ensureCaptureAccessThenRun:(dispatch_block_t)block {
-  AVAuthorizationStatus status = [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeVideo];
-  if (status == AVAuthorizationStatusAuthorized) {
-    [self ensureAudioAccessThenRun:block];
-    return;
-  }
-  if (status == AVAuthorizationStatusNotDetermined) {
-    [AVCaptureDevice requestAccessForMediaType:AVMediaTypeVideo completionHandler:^(BOOL granted) {
-      dispatch_async(dispatch_get_main_queue(), ^{
-        if (granted) {
-          [self ensureAudioAccessThenRun:block];
-        } else {
-          showError("Camera permission was denied. Enable camera access for REAPER in macOS System Settings.");
-        }
-      });
-    }];
-    return;
-  }
-  showError("Camera permission is not available. Enable camera access for REAPER in macOS System Settings.");
-}
-
-- (void)ensureAudioAccessThenRun:(dispatch_block_t)block {
-  AVAuthorizationStatus status = [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeAudio];
-  if (status == AVAuthorizationStatusAuthorized) {
-    block();
-    return;
-  }
-  if (status == AVAuthorizationStatusNotDetermined) {
-    [AVCaptureDevice requestAccessForMediaType:AVMediaTypeAudio completionHandler:^(BOOL granted) {
-      dispatch_async(dispatch_get_main_queue(), ^{
-        if (!granted) {
-          [self setStatus:@"Microphone denied; recording video only"];
-        }
-        block();
-      });
-    }];
-    return;
-  }
-
-  [self setStatus:@"Microphone unavailable; recording video only"];
-  block();
-}
-
-- (BOOL)format:(AVCaptureDeviceFormat *)format supportsFPS:(double)fps {
-  for (AVFrameRateRange *range in format.videoSupportedFrameRateRanges) {
-    if (range.minFrameRate <= fps && fps <= range.maxFrameRate) {
-      return YES;
-    }
-  }
-  return NO;
-}
-
-- (double)bestFPSForFormat:(AVCaptureDeviceFormat *)format preferredFPS:(double)preferredFPS {
-  for (AVFrameRateRange *range in format.videoSupportedFrameRateRanges) {
-    if (range.minFrameRate <= preferredFPS && preferredFPS <= range.maxFrameRate) {
-      return preferredFPS;
-    }
-  }
-
-  double bestFPS = 0.0;
-  for (AVFrameRateRange *range in format.videoSupportedFrameRateRanges) {
-    if (range.maxFrameRate > bestFPS) {
-      bestFPS = range.maxFrameRate;
-    }
-  }
-  return bestFPS;
-}
-
-- (AVCaptureDeviceFormat *)formatForDevice:(AVCaptureDevice *)device
-                                     width:(int)width
-                                    height:(int)height
-                                       fps:(double)fps {
-  AVCaptureDeviceFormat *bestFormat = nil;
-  for (AVCaptureDeviceFormat *format in device.formats) {
-    CMVideoDimensions dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription);
-    if (dimensions.width == width && dimensions.height == height && [self format:format supportsFPS:fps]) {
-      bestFormat = format;
-      break;
-    }
-  }
-  return bestFormat;
-}
-
-- (AVCaptureDeviceFormat *)highestAvailableFormatForDevice:(AVCaptureDevice *)device
-                                              preferredFPS:(double)preferredFPS
-                                                 targetFPS:(double *)targetFPS
-                                              qualityLabel:(NSString **)qualityLabel {
-  AVCaptureDeviceFormat *bestFormat = nil;
-  int bestArea = 0;
-  double bestFPS = 0.0;
-
-  for (AVCaptureDeviceFormat *format in device.formats) {
-    CMVideoDimensions dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription);
-    const int area = dimensions.width * dimensions.height;
-    const double fps = [self bestFPSForFormat:format preferredFPS:preferredFPS];
-    if (area > bestArea || (area == bestArea && fps > bestFPS)) {
-      bestFormat = format;
-      bestArea = area;
-      bestFPS = fps;
-    }
-  }
-
-  if (targetFPS) {
-    *targetFPS = bestFPS > 0.0 ? bestFPS : 30.0;
-  }
-  if (qualityLabel && bestFormat) {
-    CMVideoDimensions dimensions = CMVideoFormatDescriptionGetDimensions(bestFormat.formatDescription);
-    *qualityLabel = [NSString stringWithFormat:@"Highest available %dx%d %.2f fps",
-                                               dimensions.width,
-                                               dimensions.height,
-                                               bestFPS];
-  }
-  return bestFormat;
-}
-
-- (void)applyPreferredCaptureFormatForDevice:(AVCaptureDevice *)device {
-  AVCaptureDeviceFormat *format = [self formatForDevice:device width:3840 height:2160 fps:30.0];
-  double targetFPS = 30.0;
-  NSString *qualityLabel = @"Requested 4K30";
-
-  if (!format) {
-    format = [self formatForDevice:device width:1920 height:1080 fps:30.0];
-    qualityLabel = @"4K30 unavailable; using stable 1080p30";
-  }
-  if (!format) {
-    targetFPS = 30.0;
-    format = [self highestAvailableFormatForDevice:device
-                                      preferredFPS:30.0
-                                         targetFPS:&targetFPS
-                                      qualityLabel:&qualityLabel];
-    if (format) {
-      qualityLabel = [@"4K30/1080p30 unavailable; using " stringByAppendingString:qualityLabel];
-    }
-  }
-  if (!format) {
-    self.captureQualityLabel = @"Using device default format";
-    return;
-  }
-
-  NSError *lockError = nil;
-  if (![device lockForConfiguration:&lockError]) {
-    self.captureQualityLabel = [NSString stringWithFormat:@"Could not set 4K format: %@",
-                                                          lockError.localizedDescription ?: @"lock failed"];
-    return;
-  }
-
-  device.activeFormat = format;
-  CMTime frameDuration = CMTimeMake(1000, static_cast<int32_t>(std::llround(targetFPS * 1000.0)));
-  device.activeVideoMinFrameDuration = frameDuration;
-  device.activeVideoMaxFrameDuration = frameDuration;
-  [device unlockForConfiguration];
-
-  self.captureQualityLabel = qualityLabel;
-}
-
-- (BOOL)ensureSession:(NSError **)error {
-  AVAuthorizationStatus status = [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeVideo];
-  if (status != AVAuthorizationStatusAuthorized) {
+  [self setStatus:@"Stopping iPhone recording"];
+  NSArray<NSString *> *arguments = @[
+    @"--token",
+    [NSString stringWithUTF8String:g_iPhoneToken.c_str()],
+    @"--progress"
+  ];
+  [self runVideoSyncCommandAsync:@"stop-only" extraArguments:arguments outputHandler:^(NSString *line) {
+    [self handleVideoSyncProgressLine:line];
+  } completion:^(NSString *output, NSError *error) {
+    self.remoteRecording = NO;
+    [self setRecordingVisualState:NO];
     if (error) {
-      *error = [NSError errorWithDomain:@"KlongVideoRecorder"
-                                   code:2
-                               userInfo:@{NSLocalizedDescriptionKey: @"Camera permission is not granted. Open the preview once and allow camera access before recording."}];
+      [self setStatus:@"iPhone stop failed"];
+      [self finishIPhoneStopWithPath:nil error:error];
+      return;
     }
-    return NO;
-  }
-
-  if (self.session) {
-    return YES;
-  }
-
-  AVCaptureDevice *device = [self selectedVideoDevice];
-  if (!device) {
-    if (error) {
-      *error = [NSError errorWithDomain:@"KlongVideoRecorder"
-                                   code:3
-                               userInfo:@{NSLocalizedDescriptionKey: @"No macOS camera device was found."}];
+    NSDictionary<NSString *, NSString *> *recording = [self recordingDescriptorFromVideoSyncOutput:output ?: @""];
+    if (!recording) {
+      NSError *descriptorError = [NSError errorWithDomain:@"KlongVideoRecorder"
+                                                     code:25
+                                                 userInfo:@{NSLocalizedDescriptionKey: @"The iPhone recording stopped, but video-sync-mac did not report recording details."}];
+      [self finishIPhoneStopWithPath:nil error:descriptorError];
+      return;
     }
-    return NO;
-  }
-
-  NSError *inputError = nil;
-  AVCaptureDeviceInput *input = [AVCaptureDeviceInput deviceInputWithDevice:device error:&inputError];
-  if (!input) {
-    if (error) {
-      *error = inputError;
-    }
-    return NO;
-  }
-
-  AVCaptureSession *session = [[AVCaptureSession alloc] init];
-  session.sessionPreset = AVCaptureSessionPresetHigh;
-  if (![session canAddInput:input]) {
-    if (error) {
-      *error = [NSError errorWithDomain:@"KlongVideoRecorder"
-                                   code:4
-                               userInfo:@{NSLocalizedDescriptionKey: @"The selected camera cannot be added to the capture session."}];
-    }
-    return NO;
-  }
-  [session addInput:input];
-  [self applyPreferredCaptureFormatForDevice:device];
-
-  self.hasAudioInput = NO;
-  self.audioDeviceName = nil;
-  AVCaptureDevice *audioDevice = [self audioDeviceForVideoDevice:device];
-  AVCaptureDeviceInput *audioInput = nil;
-  if (audioDevice) {
-    NSError *audioInputError = nil;
-    audioInput = [AVCaptureDeviceInput deviceInputWithDevice:audioDevice error:&audioInputError];
-    if (audioInput && [session canAddInput:audioInput]) {
-      [session addInput:audioInput];
-      self.audioDeviceName = audioDevice.localizedName ?: @"Camera audio";
-    } else {
-      [self setStatus:@"Camera audio unavailable; recording video only"];
-    }
-  } else {
-    [self setStatus:@"No camera audio input found"];
-  }
-
-  AVCaptureMovieFileOutput *movieOutput = [[AVCaptureMovieFileOutput alloc] init];
-  if (![session canAddOutput:movieOutput]) {
-    if (error) {
-      *error = [NSError errorWithDomain:@"KlongVideoRecorder"
-                                   code:5
-                               userInfo:@{NSLocalizedDescriptionKey: @"The movie recorder cannot be added to the capture session."}];
-    }
-    return NO;
-  }
-  [session addOutput:movieOutput];
-  if (audioInput) {
-    AVCaptureConnection *audioConnection = [movieOutput connectionWithMediaType:AVMediaTypeAudio];
-    self.hasAudioInput = audioConnection != nil;
-    audioConnection.enabled = self.hasAudioInput;
-    if (!self.hasAudioInput) {
-      self.audioDeviceName = nil;
-      [self setStatus:@"Movie recorder has no audio connection"];
-    }
-  }
-
-  self.session = session;
-  self.movieOutput = movieOutput;
-  [session startRunning];
-  [self applyPreferredCaptureFormatForDevice:device];
-  [self updateCaptureFormatLabel];
-  return YES;
-}
-
-- (NSArray<AVCaptureDevice *> *)availableAudioDevices {
-  if (@available(macOS 14.0, *)) {
-    AVCaptureDeviceDiscoverySession *session =
-        [AVCaptureDeviceDiscoverySession discoverySessionWithDeviceTypes:@[ AVCaptureDeviceTypeMicrophone ]
-                                                               mediaType:AVMediaTypeAudio
-                                                                position:AVCaptureDevicePositionUnspecified];
-    if (session.devices.count > 0) {
-      return session.devices;
-    }
-  }
-
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-  NSArray<AVCaptureDevice *> *devices = [AVCaptureDevice devicesWithMediaType:AVMediaTypeAudio];
-#pragma clang diagnostic pop
-  AVCaptureDevice *fallback = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeAudio];
-  if (devices.count > 0) {
-    return devices;
-  }
-  return fallback ? @[ fallback ] : @[];
-}
-
-- (NSString *)normalizedDeviceMatchName:(NSString *)name {
-  NSMutableString *normalized = [[name ?: @"" lowercaseString] mutableCopy];
-  NSArray<NSString *> *noiseWords = @[ @"camera", @"microphone", @"mic", @"continuity" ];
-  for (NSString *word in noiseWords) {
-    [normalized replaceOccurrencesOfString:word
-                                withString:@""
-                                   options:NSCaseInsensitiveSearch
-                                     range:NSMakeRange(0, normalized.length)];
-  }
-  while ([normalized containsString:@"  "]) {
-    [normalized replaceOccurrencesOfString:@"  "
-                                withString:@" "
-                                   options:0
-                                     range:NSMakeRange(0, normalized.length)];
-  }
-  return [normalized stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-}
-
-- (AVCaptureDevice *)audioDeviceForVideoDevice:(AVCaptureDevice *)videoDevice {
-  NSArray<AVCaptureDevice *> *audioDevices = [self availableAudioDevices];
-  if (audioDevices.count == 0) {
-    return nil;
-  }
-
-  NSString *videoName = videoDevice.localizedName ?: @"";
-  NSString *normalizedVideoName = [self normalizedDeviceMatchName:videoName];
-  for (AVCaptureDevice *audioDevice in audioDevices) {
-    NSString *audioName = audioDevice.localizedName ?: @"";
-    NSString *normalizedAudioName = [self normalizedDeviceMatchName:audioName];
-    if ([audioName isEqualToString:videoName] ||
-        (videoName.length > 0 && [audioName localizedCaseInsensitiveContainsString:videoName]) ||
-        (audioName.length > 0 && [videoName localizedCaseInsensitiveContainsString:audioName]) ||
-        (normalizedVideoName.length > 0 && [normalizedAudioName isEqualToString:normalizedVideoName]) ||
-        (normalizedVideoName.length > 0 && [normalizedAudioName localizedCaseInsensitiveContainsString:normalizedVideoName]) ||
-        (normalizedAudioName.length > 0 && [normalizedVideoName localizedCaseInsensitiveContainsString:normalizedAudioName])) {
-      return audioDevice;
-    }
-  }
-
-  return [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeAudio] ?: audioDevices.firstObject;
-}
-
-- (NSArray<AVCaptureDevice *> *)availableVideoDevices {
-  NSMutableArray<AVCaptureDeviceType> *deviceTypes = [NSMutableArray arrayWithObjects:
-      AVCaptureDeviceTypeBuiltInWideAngleCamera,
-      nil];
-  if (@available(macOS 14.0, *)) {
-    [deviceTypes addObject:AVCaptureDeviceTypeExternal];
-    [deviceTypes addObject:AVCaptureDeviceTypeContinuityCamera];
-  } else {
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-    [deviceTypes addObject:AVCaptureDeviceTypeExternalUnknown];
-#pragma clang diagnostic pop
-  }
-
-  AVCaptureDeviceDiscoverySession *session =
-      [AVCaptureDeviceDiscoverySession discoverySessionWithDeviceTypes:deviceTypes
-                                                             mediaType:AVMediaTypeVideo
-                                                              position:AVCaptureDevicePositionUnspecified];
-  NSArray<AVCaptureDevice *> *devices = session.devices;
-  if (devices.count > 0) {
-    return devices;
-  }
-
-  AVCaptureDevice *fallback = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo];
-  return fallback ? @[ fallback ] : @[];
-}
-
-- (AVCaptureDevice *)selectedVideoDevice {
-  NSArray<AVCaptureDevice *> *devices = [self availableVideoDevices];
-  NSString *selectedID = g_selectedDeviceUniqueID.empty() ? nil : [NSString stringWithUTF8String:g_selectedDeviceUniqueID.c_str()];
-  if (selectedID.length > 0) {
-    for (AVCaptureDevice *device in devices) {
-      if ([device.uniqueID isEqualToString:selectedID]) {
-        return device;
-      }
-    }
-  }
-  return devices.firstObject;
-}
-
-- (NSString *)fourCharacterCodeString:(FourCharCode)code {
-  char chars[5] = {
-      static_cast<char>((code >> 24) & 0xff),
-      static_cast<char>((code >> 16) & 0xff),
-      static_cast<char>((code >> 8) & 0xff),
-      static_cast<char>(code & 0xff),
-      '\0',
-  };
-  for (int i = 0; i < 4; ++i) {
-    if (chars[i] < 32 || chars[i] > 126) {
-      return [NSString stringWithFormat:@"0x%08x", code];
-    }
-  }
-  return [NSString stringWithUTF8String:chars];
-}
-
-- (NSString *)captureFormatDescription {
-  AVCaptureDevice *device = [self selectedVideoDevice];
-  AVCaptureDeviceFormat *format = device.activeFormat;
-  if (!device || !format) {
-    return @"Format: unavailable";
-  }
-
-  CMVideoDimensions dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription);
-  double fps = 0.0;
-  if (CMTIME_IS_NUMERIC(device.activeVideoMinFrameDuration) &&
-      device.activeVideoMinFrameDuration.value != 0) {
-    fps = static_cast<double>(device.activeVideoMinFrameDuration.timescale) /
-          static_cast<double>(device.activeVideoMinFrameDuration.value);
-  }
-  if (fps <= 0.0 && format.videoSupportedFrameRateRanges.count > 0) {
-    fps = format.videoSupportedFrameRateRanges.firstObject.maxFrameRate;
-  }
-
-  NSString *codec = nil;
-  if (self.movieOutput) {
-    AVCaptureConnection *videoConnection = [self.movieOutput connectionWithMediaType:AVMediaTypeVideo];
-    if (videoConnection) {
-      NSDictionary<NSString *, id> *settings = [self.movieOutput outputSettingsForConnection:videoConnection];
-      id codecValue = settings[AVVideoCodecKey];
-      if ([codecValue isKindOfClass:NSString.class]) {
-        codec = codecValue;
-      }
-    }
-  }
-  if (codec.length == 0) {
-    codec = [self fourCharacterCodeString:CMFormatDescriptionGetMediaSubType(format.formatDescription)];
-  }
-
-  NSString *fpsText = fps > 0.0 ? [NSString stringWithFormat:@"%.2f fps", fps] : @"fps unknown";
-  NSString *quality = self.captureQualityLabel.length > 0 ? self.captureQualityLabel : @"Auto";
-  return [NSString stringWithFormat:@"Format: %dx%d, %@, codec/source: %@ (%@)",
-                                    dimensions.width,
-                                    dimensions.height,
-                                    fpsText,
-                                    codec,
-                                    quality];
+    [self promptForStoppedIPhoneRecording:recording];
+  }];
 }
 
 - (void)updateCaptureFormatLabel {
   if (!self.formatLabel) {
     return;
   }
-  if (g_useIPhoneSource) {
-    [self refreshIPhoneUSBHostIfAvailable];
-    self.formatLabel.stringValue = [NSString stringWithFormat:@"iPhone %@: %s %@ fps, %s, %s, %s lens, %sx, look %s + 640px preview",
-                                                              [self iPhoneTransportLabel],
-                                                              g_iPhoneResolution.c_str(),
-                                                              [NSString stringWithUTF8String:g_iPhoneFPS.c_str()],
-                                                              g_iPhoneOrientation.c_str(),
-                                                              g_iPhoneAspect.c_str(),
-                                                              g_iPhoneLens.c_str(),
-                                                              g_iPhoneZoom.c_str(),
-                                                              g_iPhoneLook.c_str()];
-    [self updateRecordingTextColor];
-    return;
-  }
-  self.formatLabel.stringValue = [self captureFormatDescription];
+  [self refreshIPhoneUSBHostIfAvailable];
+  self.formatLabel.stringValue = [NSString stringWithFormat:@"iPhone %@: %s %@ fps, %s, %s, %s lens, %sx, look %s + 640px preview",
+                                                            [self iPhoneTransportLabel],
+                                                            g_iPhoneResolution.c_str(),
+                                                            [NSString stringWithUTF8String:g_iPhoneFPS.c_str()],
+                                                            g_iPhoneOrientation.c_str(),
+                                                            g_iPhoneAspect.c_str(),
+                                                            g_iPhoneLens.c_str(),
+                                                            g_iPhoneZoom.c_str(),
+                                                            g_iPhoneLook.c_str()];
   [self updateRecordingTextColor];
-}
-
-- (NSString *)formatDiagnosticTitleForFormat:(AVCaptureDeviceFormat *)format {
-  CMVideoDimensions dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription);
-  NSString *codec = [self fourCharacterCodeString:CMFormatDescriptionGetMediaSubType(format.formatDescription)];
-  double minFPS = 0.0;
-  double maxFPS = 0.0;
-  for (AVFrameRateRange *range in format.videoSupportedFrameRateRanges) {
-    if (minFPS == 0.0 || range.minFrameRate < minFPS) {
-      minFPS = range.minFrameRate;
-    }
-    if (range.maxFrameRate > maxFPS) {
-      maxFPS = range.maxFrameRate;
-    }
-  }
-  NSString *fpsText = minFPS > 0.0 && std::fabs(minFPS - maxFPS) > 0.01
-                          ? [NSString stringWithFormat:@"%.2f-%.2f fps", minFPS, maxFPS]
-                          : [NSString stringWithFormat:@"%.2f fps", maxFPS];
-  return [NSString stringWithFormat:@"%dx%d, %@, %@", dimensions.width, dimensions.height, fpsText, codec];
-}
-
-- (void)refreshFormatDiagnosticMenu {
-  if (!self.formatDiagnosticPopup) {
-    return;
-  }
-
-  [self.formatDiagnosticPopup removeAllItems];
-  if (g_useIPhoneSource) {
-    [self.formatDiagnosticPopup addItemWithTitle:@"Preview: WebRTC first; /preview.bin fallback"];
-    [self.formatDiagnosticPopup addItemWithTitle:[NSString stringWithFormat:@"Transport: %@",
-                                                    self.webRTCPreviewActive ? @"WebRTC" :
-                                                    (self.remotePreviewTask ? @"binary stream fallback" : @"not connected")]];
-    [self.formatDiagnosticPopup addItemWithTitle:@"Recording: full-resolution iPhone .mov"];
-    [self.formatDiagnosticPopup selectItemAtIndex:0];
-    return;
-  }
-  AVCaptureDevice *device = [self selectedVideoDevice];
-  if (!device) {
-    [self.formatDiagnosticPopup addItemWithTitle:@"Formats: no camera selected"];
-    return;
-  }
-
-  BOOL has4K30 = [self formatForDevice:device width:3840 height:2160 fps:30.0] != nil;
-  BOOL has1080p30 = [self formatForDevice:device width:1920 height:1080 fps:30.0] != nil;
-  BOOL has1080p60 = [self formatForDevice:device width:1920 height:1080 fps:60.0] != nil;
-  [self.formatDiagnosticPopup addItemWithTitle:[NSString stringWithFormat:@"4K30: %@", has4K30 ? @"available" : @"unavailable"]];
-  [self.formatDiagnosticPopup addItemWithTitle:[NSString stringWithFormat:@"1080p30: %@", has1080p30 ? @"available" : @"unavailable"]];
-  [self.formatDiagnosticPopup addItemWithTitle:[NSString stringWithFormat:@"1080p60: %@", has1080p60 ? @"available" : @"unavailable"]];
-
-  NSMutableSet<NSString *> *seen = [NSMutableSet set];
-  NSMutableArray<NSString *> *formats = [NSMutableArray array];
-  for (AVCaptureDeviceFormat *format in device.formats) {
-    NSString *title = [self formatDiagnosticTitleForFormat:format];
-    if (![seen containsObject:title]) {
-      [seen addObject:title];
-      [formats addObject:title];
-    }
-  }
-  [formats sortUsingSelector:@selector(localizedStandardCompare:)];
-  for (NSString *formatTitle in formats) {
-    [self.formatDiagnosticPopup addItemWithTitle:[@"Format: " stringByAppendingString:formatTitle]];
-  }
-  if (self.formatDiagnosticPopup.numberOfItems > 0) {
-    [self.formatDiagnosticPopup selectItemAtIndex:0];
-  }
-}
-
-- (void)refreshDeviceMenu {
-  if (!self.devicePopup) {
-    return;
-  }
-
-  [self.devicePopup removeAllItems];
-  NSArray<AVCaptureDevice *> *devices = [self availableVideoDevices];
-  for (AVCaptureDevice *device in devices) {
-    NSString *title = device.localizedName ?: @"Camera";
-    [self.devicePopup addItemWithTitle:title];
-    self.devicePopup.lastItem.representedObject = device.uniqueID;
-  }
-
-  NSString *selectedID = g_selectedDeviceUniqueID.empty() ? nil : [NSString stringWithUTF8String:g_selectedDeviceUniqueID.c_str()];
-  if (selectedID.length > 0) {
-    NSInteger index = [self.devicePopup indexOfItemWithRepresentedObject:selectedID];
-    if (index >= 0) {
-      [self.devicePopup selectItemAtIndex:index];
-      [self refreshFormatDiagnosticMenu];
-      return;
-    }
-  }
-  if (self.devicePopup.numberOfItems > 0) {
-    [self.devicePopup selectItemAtIndex:0];
-    NSString *uniqueID = self.devicePopup.selectedItem.representedObject;
-    if (uniqueID.length > 0 && g_selectedDeviceUniqueID.empty()) {
-      g_selectedDeviceUniqueID = uniqueID.UTF8String;
-    }
-  }
-  [self refreshFormatDiagnosticMenu];
-}
-
-- (void)refreshSourceMenu {
-  if (!self.sourcePopup) {
-    return;
-  }
-  [self.sourcePopup removeAllItems];
-  [self.sourcePopup addItemWithTitle:@"Mac camera"];
-  self.sourcePopup.lastItem.representedObject = @"mac";
-  [self.sourcePopup addItemWithTitle:@"iPhone Video Sync"];
-  self.sourcePopup.lastItem.representedObject = @"iphone";
-  [self.sourcePopup selectItemWithTitle:g_useIPhoneSource ? @"iPhone Video Sync" : @"Mac camera"];
 }
 
 - (void)persistIPhoneSettings {
@@ -2936,7 +2362,7 @@ void setVideoEnabled(bool enabled);
   (void)sender;
   [self persistIPhoneSettings];
   [self updateCaptureFormatLabel];
-  if (!g_useIPhoneSource || g_iPhoneHost.empty() || g_iPhoneToken.empty()) {
+  if (g_iPhoneHost.empty() || g_iPhoneToken.empty()) {
     return;
   }
   NSArray<NSString *> *arguments = @[
@@ -3116,73 +2542,11 @@ void setVideoEnabled(bool enabled);
   }];
 }
 
-- (void)updateSourceControls {
-  self.devicePopup.enabled = !g_useIPhoneSource;
-  self.devicePopup.hidden = g_useIPhoneSource;
-  self.formatDiagnosticPopup.enabled = !g_useIPhoneSource;
-  self.formatDiagnosticPopup.hidden = g_useIPhoneSource;
-  self.iPhoneSetupButton.hidden = !g_useIPhoneSource;
-  self.iPhoneHostField.hidden = YES;
-  self.iPhoneTokenField.hidden = YES;
-  self.iPhonePairingCodeField.hidden = YES;
-  self.iPhoneDiscoverButton.hidden = YES;
-  self.iPhonePairButton.hidden = YES;
-  self.iPhoneTestButton.hidden = YES;
-  self.iPhoneResolutionPopup.hidden = !g_useIPhoneSource;
-  self.iPhoneFPSPopup.hidden = !g_useIPhoneSource;
-  self.iPhoneOrientationPopup.hidden = !g_useIPhoneSource;
-  self.iPhoneAspectPopup.hidden = !g_useIPhoneSource;
-  self.iPhoneLensPopup.hidden = !g_useIPhoneSource;
-  self.iPhoneZoomPopup.hidden = !g_useIPhoneSource;
-  self.iPhoneLookPopup.hidden = !g_useIPhoneSource;
-  [self refreshFormatDiagnosticMenu];
-  [self updateCaptureFormatLabel];
-}
-
-- (void)sourceSelectionChanged:(id)sender {
-  (void)sender;
-  const BOOL nextUseIPhoneSource = [self.sourcePopup.selectedItem.representedObject isEqual:@"iphone"];
-  if (nextUseIPhoneSource == g_useIPhoneSource) {
-    return;
-  }
-  if (self.isRecording) {
-    [self refreshSourceMenu];
-    [self setStatus:@"Cannot switch source while recording"];
-    return;
-  }
-
-  g_useIPhoneSource = nextUseIPhoneSource;
-  if (SetExtState) {
-    SetExtState(kExtStateSection, kSourceKindKey, g_useIPhoneSource ? "iphone" : "mac", true);
-  }
-  [self stopRemotePreview];
-  if (g_useIPhoneSource) {
-    [self.session stopRunning];
-    self.session = nil;
-    self.movieOutput = nil;
-    [self.previewLayer removeFromSuperlayer];
-    self.previewLayer = nil;
-  } else {
-    NSError *error = nil;
-    if (![self ensureSession:&error]) {
-      showError(error.localizedDescription.UTF8String ?: "Unable to initialize camera session.");
-      [self refreshSourceMenu];
-      return;
-    }
-    [self ensureDockView];
-  }
-  [self updateSourceControls];
-  [self showLivePreview];
-  [self setStatus:g_useIPhoneSource ? @"iPhone source selected" : @"Mac camera source selected"];
-}
-
 - (void)iPhoneSettingsChanged:(id)sender {
   (void)sender;
   [self persistIPhoneSettings];
   [self stopRemotePreview];
-  if (g_useIPhoneSource) {
-    [self startRemotePreview];
-  }
+  [self startRemotePreview];
 }
 
 - (void)showIPhoneSetup:(id)sender {
@@ -3244,40 +2608,70 @@ void setVideoEnabled(bool enabled);
   [self.iPhoneSetupWindow makeKeyAndOrderFront:nil];
 }
 
-- (void)deviceSelectionChanged:(id)sender {
+- (NSString *)displayTitleForRawFilterID:(NSString *)filterID {
+  NSString *name = [filterID hasPrefix:@"CI"] ? [filterID substringFromIndex:2] : filterID;
+  NSMutableString *title = [NSMutableString stringWithString:@"CI: "];
+  for (NSUInteger index = 0; index < name.length; ++index) {
+    unichar character = [name characterAtIndex:index];
+    if (index > 0) {
+      unichar previous = [name characterAtIndex:index - 1];
+      const BOOL previousIsLower = previous >= 'a' && previous <= 'z';
+      const BOOL previousIsDigit = previous >= '0' && previous <= '9';
+      const BOOL currentIsUpper = character >= 'A' && character <= 'Z';
+      const BOOL currentIsDigit = character >= '0' && character <= '9';
+      const BOOL currentIsLetter = (character >= 'A' && character <= 'Z') || (character >= 'a' && character <= 'z');
+      if ((previousIsLower && currentIsUpper) ||
+          (!previousIsDigit && currentIsDigit) ||
+          (previousIsDigit && currentIsLetter)) {
+        [title appendString:@" "];
+      }
+    }
+    [title appendFormat:@"%C", character];
+  }
+  return title;
+}
+
+- (void)addRawCoreImageLookItems {
+  NSArray<NSString *> *rawFilterIDs = @[
+    @"CIThermal", @"CIXRay", @"CIFalseColor", @"CIColorInvert", @"CIColorPosterize",
+    @"CIColorThreshold", @"CIColorThresholdOtsu", @"CIVibrance", @"CIHueAdjust", @"CITemperatureAndTint",
+    @"CIGloom", @"CISobelGradients", @"CIGaborGradients", @"CIMorphologyGradient", @"CIEdges",
+    @"CIEdgeWork", @"CILineOverlay", @"CICannyEdgeDetector", @"CICrystallize", @"CIHexagonalPixellate",
+    @"CIPixellate", @"CIPointillize", @"CIDotScreen", @"CICircularScreen", @"CILineScreen",
+    @"CIHatchedScreen", @"CICMYKHalftone", @"CIKaleidoscope", @"CITriangleKaleidoscope", @"CITwirlDistortion",
+    @"CIVortexDistortion", @"CILightTunnel", @"CIGlassDistortion", @"CIDisplacementDistortion"
+  ];
+  for (NSString *filterID in rawFilterIDs) {
+    [self.iPhoneLookPopup addItemWithTitle:[self displayTitleForRawFilterID:filterID]];
+    self.iPhoneLookPopup.lastItem.representedObject = [@"ci:" stringByAppendingString:filterID];
+  }
+}
+
+- (void)selectRelativeIPhoneLook:(NSInteger)offset {
+  const NSInteger itemCount = self.iPhoneLookPopup.numberOfItems;
+  if (itemCount <= 0) {
+    return;
+  }
+  NSInteger selectedIndex = self.iPhoneLookPopup.indexOfSelectedItem;
+  if (selectedIndex < 0) {
+    selectedIndex = 0;
+  }
+  NSInteger nextIndex = (selectedIndex + offset) % itemCount;
+  if (nextIndex < 0) {
+    nextIndex += itemCount;
+  }
+  [self.iPhoneLookPopup selectItemAtIndex:nextIndex];
+  [self profileSelectionChanged:self.iPhoneLookPopup];
+}
+
+- (void)previousIPhoneLook:(id)sender {
   (void)sender;
-  if (self.movieOutput.isRecording) {
-    [self refreshDeviceMenu];
-    [self setStatus:@"Cannot switch camera while recording"];
-    return;
-  }
+  [self selectRelativeIPhoneLook:-1];
+}
 
-  NSString *uniqueID = self.devicePopup.selectedItem.representedObject;
-  if (uniqueID.length == 0) {
-    return;
-  }
-
-  g_selectedDeviceUniqueID = uniqueID.UTF8String;
-  if (SetExtState) {
-    SetExtState(kExtStateSection, kSelectedDeviceKey, g_selectedDeviceUniqueID.c_str(), true);
-  }
-
-  [self.session stopRunning];
-  self.session = nil;
-  self.movieOutput = nil;
-  [self.previewLayer removeFromSuperlayer];
-  self.previewLayer = nil;
-
-  NSError *error = nil;
-  if (![self ensureSession:&error]) {
-    showError(error.localizedDescription.UTF8String ?: "Unable to switch camera.");
-    return;
-  }
-  [self ensureDockView];
-  [self showLivePreview];
-  [self refreshFormatDiagnosticMenu];
-  [self updateCaptureFormatLabel];
-  [self setStatus:[NSString stringWithFormat:@"Camera: %@", self.devicePopup.selectedItem.title]];
+- (void)nextIPhoneLook:(id)sender {
+  (void)sender;
+  [self selectRelativeIPhoneLook:1];
 }
 
 - (void)ensureDockView {
@@ -3303,12 +2697,6 @@ void setVideoEnabled(bool enabled);
     self.webRTCPreviewView.hidden = YES;
     [self.previewView addSubview:self.webRTCPreviewView positioned:NSWindowBelow relativeTo:self.remotePreviewView];
 
-    self.sourcePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(12, 101, frame.size.width - 132, 24) pullsDown:NO];
-    self.sourcePopup.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
-    self.sourcePopup.target = self;
-    self.sourcePopup.action = @selector(sourceSelectionChanged:);
-    [self.dockView addSubview:self.sourcePopup];
-
     self.iPhoneSetupButton = [[NSButton alloc] initWithFrame:NSMakeRect(frame.size.width - 112, 101, 100, 24)];
     self.iPhoneSetupButton.title = @"iPhone Setup";
     self.iPhoneSetupButton.bezelStyle = NSBezelStyleRounded;
@@ -3317,18 +2705,13 @@ void setVideoEnabled(bool enabled);
     self.iPhoneSetupButton.action = @selector(showIPhoneSetup:);
     [self.dockView addSubview:self.iPhoneSetupButton];
 
-    self.devicePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(12, 75, frame.size.width - 24, 24) pullsDown:NO];
-    self.devicePopup.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
-    self.devicePopup.target = self;
-    self.devicePopup.action = @selector(deviceSelectionChanged:);
-    [self.dockView addSubview:self.devicePopup];
-
     self.iPhoneHostField = [[NSTextField alloc] initWithFrame:NSMakeRect(12, 127, (frame.size.width - 36) / 2.0, 22)];
     self.iPhoneHostField.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
     self.iPhoneHostField.placeholderString = @"iPhone host, e.g. kevin-long-iphone.local";
     self.iPhoneHostField.stringValue = [NSString stringWithUTF8String:g_iPhoneHost.c_str()];
     self.iPhoneHostField.target = self;
     self.iPhoneHostField.action = @selector(iPhoneSettingsChanged:);
+    self.iPhoneHostField.hidden = YES;
     [self.dockView addSubview:self.iPhoneHostField];
 
     self.iPhoneTokenField = [[NSTextField alloc] initWithFrame:NSMakeRect(NSMaxX(self.iPhoneHostField.frame) + 12, 127, (frame.size.width - 36) / 2.0, 22)];
@@ -3337,12 +2720,14 @@ void setVideoEnabled(bool enabled);
     self.iPhoneTokenField.stringValue = [NSString stringWithUTF8String:g_iPhoneToken.c_str()];
     self.iPhoneTokenField.target = self;
     self.iPhoneTokenField.action = @selector(iPhoneSettingsChanged:);
+    self.iPhoneTokenField.hidden = YES;
     [self.dockView addSubview:self.iPhoneTokenField];
 
     const CGFloat buttonWidth = 88.0;
     self.iPhonePairingCodeField = [[NSTextField alloc] initWithFrame:NSMakeRect(12, 101, frame.size.width - 24 - (buttonWidth * 3.0) - 18.0, 22)];
     self.iPhonePairingCodeField.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
     self.iPhonePairingCodeField.placeholderString = @"Pairing code from iPhone";
+    self.iPhonePairingCodeField.hidden = YES;
     [self.dockView addSubview:self.iPhonePairingCodeField];
 
     CGFloat buttonX = NSMaxX(self.iPhonePairingCodeField.frame) + 6.0;
@@ -3351,6 +2736,7 @@ void setVideoEnabled(bool enabled);
     self.iPhoneDiscoverButton.bezelStyle = NSBezelStyleRounded;
     self.iPhoneDiscoverButton.target = self;
     self.iPhoneDiscoverButton.action = @selector(discoverIPhone:);
+    self.iPhoneDiscoverButton.hidden = YES;
     [self.dockView addSubview:self.iPhoneDiscoverButton];
 
     buttonX += buttonWidth + 6.0;
@@ -3359,6 +2745,7 @@ void setVideoEnabled(bool enabled);
     self.iPhonePairButton.bezelStyle = NSBezelStyleRounded;
     self.iPhonePairButton.target = self;
     self.iPhonePairButton.action = @selector(pairIPhone:);
+    self.iPhonePairButton.hidden = YES;
     [self.dockView addSubview:self.iPhonePairButton];
 
     buttonX += buttonWidth + 6.0;
@@ -3367,6 +2754,7 @@ void setVideoEnabled(bool enabled);
     self.iPhoneTestButton.bezelStyle = NSBezelStyleRounded;
     self.iPhoneTestButton.target = self;
     self.iPhoneTestButton.action = @selector(testIPhoneConnection:);
+    self.iPhoneTestButton.hidden = YES;
     [self.dockView addSubview:self.iPhoneTestButton];
 
     self.iPhoneDiscoverButton.autoresizingMask = NSViewMinXMargin | NSViewMaxYMargin;
@@ -3444,7 +2832,14 @@ void setVideoEnabled(bool enabled);
     self.iPhoneZoomPopup.action = @selector(profileSelectionChanged:);
     [self.dockView addSubview:self.iPhoneZoomPopup];
 
-    self.iPhoneLookPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(12, 49, frame.size.width - 24, 24) pullsDown:NO];
+    self.iPhonePreviousLookButton = [[NSButton alloc] initWithFrame:NSMakeRect(12, 49, 52, 24)];
+    self.iPhonePreviousLookButton.title = @"Prev";
+    self.iPhonePreviousLookButton.bezelStyle = NSBezelStyleRounded;
+    self.iPhonePreviousLookButton.target = self;
+    self.iPhonePreviousLookButton.action = @selector(previousIPhoneLook:);
+    [self.dockView addSubview:self.iPhonePreviousLookButton];
+
+    self.iPhoneLookPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(70, 49, frame.size.width - 140, 24) pullsDown:NO];
     [self.iPhoneLookPopup addItemWithTitle:@"Natural"];
     self.iPhoneLookPopup.lastItem.representedObject = @"natural";
     [self.iPhoneLookPopup addItemWithTitle:@"Warm Vintage"];
@@ -3485,13 +2880,24 @@ void setVideoEnabled(bool enabled);
     self.iPhoneLookPopup.lastItem.representedObject = @"vhs";
     [self.iPhoneLookPopup addItemWithTitle:@"Music Video Pop"];
     self.iPhoneLookPopup.lastItem.representedObject = @"musicVideoPop";
+    [self addRawCoreImageLookItems];
     NSInteger lookIndex = [self.iPhoneLookPopup indexOfItemWithRepresentedObject:[NSString stringWithUTF8String:g_iPhoneLook.c_str()]];
     if (lookIndex >= 0) {
       [self.iPhoneLookPopup selectItemAtIndex:lookIndex];
+    } else {
+      [self.iPhoneLookPopup selectItemAtIndex:0];
+      g_iPhoneLook = "natural";
     }
     self.iPhoneLookPopup.target = self;
     self.iPhoneLookPopup.action = @selector(profileSelectionChanged:);
     [self.dockView addSubview:self.iPhoneLookPopup];
+
+    self.iPhoneNextLookButton = [[NSButton alloc] initWithFrame:NSMakeRect(frame.size.width - 64, 49, 52, 24)];
+    self.iPhoneNextLookButton.title = @"Next";
+    self.iPhoneNextLookButton.bezelStyle = NSBezelStyleRounded;
+    self.iPhoneNextLookButton.target = self;
+    self.iPhoneNextLookButton.action = @selector(nextIPhoneLook:);
+    [self.dockView addSubview:self.iPhoneNextLookButton];
 
     self.iPhoneResolutionPopup.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
     self.iPhoneFPSPopup.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
@@ -3500,10 +2906,8 @@ void setVideoEnabled(bool enabled);
     self.iPhoneLensPopup.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
     self.iPhoneZoomPopup.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
     self.iPhoneLookPopup.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
-
-    self.formatDiagnosticPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(12, 49, frame.size.width - 24, 24) pullsDown:NO];
-    self.formatDiagnosticPopup.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
-    [self.dockView addSubview:self.formatDiagnosticPopup];
+    self.iPhonePreviousLookButton.autoresizingMask = NSViewMaxXMargin | NSViewMaxYMargin;
+    self.iPhoneNextLookButton.autoresizingMask = NSViewMinXMargin | NSViewMaxYMargin;
 
     self.formatLabel = [NSTextField labelWithString:@"Format: unavailable"];
     self.formatLabel.frame = NSMakeRect(12, 29, frame.size.width - 24, 18);
@@ -3514,19 +2918,7 @@ void setVideoEnabled(bool enabled);
     self.statusLabel.frame = NSMakeRect(12, 9, frame.size.width - 24, 18);
     self.statusLabel.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
     [self.dockView addSubview:self.statusLabel];
-    [self refreshSourceMenu];
-    [self refreshDeviceMenu];
-    [self refreshFormatDiagnosticMenu];
     [self updateCaptureFormatLabel];
-    [self updateSourceControls];
-  }
-
-  if (!g_useIPhoneSource && !self.previewLayer && self.session) {
-    self.previewLayer = [AVCaptureVideoPreviewLayer layerWithSession:self.session];
-    self.previewLayer.videoGravity = AVLayerVideoGravityResizeAspect;
-    self.previewLayer.frame = self.previewView.bounds;
-    self.previewLayer.autoresizingMask = kCALayerWidthSizable | kCALayerHeightSizable;
-    [self.previewView.layer addSublayer:self.previewLayer];
   }
 }
 
@@ -3568,7 +2960,7 @@ void setVideoEnabled(bool enabled);
 }
 
 - (void)startBinaryRemotePreviewFallback {
-  if (!g_useIPhoneSource || self.showingPlayback || self.remotePreviewTask) {
+  if (self.showingPlayback || self.remotePreviewTask) {
     return;
   }
   self.remotePreviewView.hidden = NO;
@@ -3590,7 +2982,7 @@ void setVideoEnabled(bool enabled);
   }
   [self runVideoSyncCommandAsync:@"webrtc-candidate" extraArguments:arguments completion:^(NSString *output, NSError *error) {
     (void)output;
-    if (error && g_useIPhoneSource && !self.showingPlayback && !self.recordingVisualState) {
+    if (error && !self.showingPlayback && !self.recordingVisualState) {
       [self setStatus:@"Preview: WebRTC ICE candidate failed"];
     }
   }];
@@ -3638,7 +3030,7 @@ void setVideoEnabled(bool enabled);
                     toPeerConnection:(LKRTCPeerConnection *)peerConnection {
   for (LKRTCIceCandidate *candidate in candidates) {
     [peerConnection addIceCandidate:candidate completionHandler:^(NSError *error) {
-      if (error && g_useIPhoneSource && !self.showingPlayback && !self.recordingVisualState) {
+      if (error && !self.showingPlayback && !self.recordingVisualState) {
         [self setStatus:@"Preview: WebRTC remote ICE failed"];
       }
     }];
@@ -3646,7 +3038,7 @@ void setVideoEnabled(bool enabled);
 }
 
 - (void)startWebRTCPreviewIfNeeded {
-  if (!g_useIPhoneSource || self.showingPlayback || self.webRTCPeerConnection || self.webRTCPreviewStarting || self.webRTCPreviewFailed) {
+  if (self.showingPlayback || self.webRTCPeerConnection || self.webRTCPreviewStarting || self.webRTCPreviewFailed) {
     return;
   }
   [self persistIPhoneSettings];
@@ -3654,13 +3046,11 @@ void setVideoEnabled(bool enabled);
     [self startBinaryRemotePreviewFallback];
     return;
   }
-  if (g_iPhoneLook != "natural") {
-    self.webRTCPreviewFailed = YES;
-    self.webRTCPreviewFallbackReason = @"styled look uses filtered stream";
-    [self setStatus:[NSString stringWithFormat:@"Preview: %@", [self iPhoneStreamPreviewLabel]]];
-    [self startBinaryRemotePreviewFallback];
-    return;
-  }
+  self.webRTCPreviewFailed = YES;
+  self.webRTCPreviewFallbackReason = g_iPhoneLook != "natural" ? @"styled look uses filtered stream" : @"fitted stream";
+  [self setStatus:[NSString stringWithFormat:@"Preview: %@", [self iPhoneStreamPreviewLabel]]];
+  [self startBinaryRemotePreviewFallback];
+  return;
 
   self.webRTCPreviewStarting = YES;
   self.webRTCPreviewActive = NO;
@@ -3731,7 +3121,7 @@ void setVideoEnabled(bool enabled);
         NSString *localSDP = strongPeerConnection.localDescription.sdp ?: offer.sdp;
         const NSUInteger localCandidateCount = strongSelf.webRTCLocalIceCandidates.count;
         dispatch_async(dispatch_get_main_queue(), ^{
-          if (g_useIPhoneSource && !strongSelf.showingPlayback && !strongSelf.recordingVisualState) {
+          if (!strongSelf.showingPlayback && !strongSelf.recordingVisualState) {
             [strongSelf setStatus:[NSString stringWithFormat:@"Preview: WebRTC signaling (%lu local ICE)",
                                                              static_cast<unsigned long>(localCandidateCount)]];
           }
@@ -3831,11 +3221,10 @@ void setVideoEnabled(bool enabled);
   self.remotePreviewBuffer = nil;
   self.remotePreviewDecoding = NO;
   self.remotePreviewUsingSnapshotFallback = NO;
-  [self refreshFormatDiagnosticMenu];
 }
 
 - (void)startRemotePreviewStream {
-  if (self.remotePreviewTask || !g_useIPhoneSource) {
+  if (self.remotePreviewTask) {
     return;
   }
   NSURL *url = [self remotePreviewStreamURL];
@@ -3864,7 +3253,7 @@ void setVideoEnabled(bool enabled);
   [self.remotePreviewTask resume];
   [self setStatus:[NSString stringWithFormat:@"Preview: %@ connecting", [self iPhoneStreamPreviewLabel]]];
   dispatch_after(dispatch_time(DISPATCH_TIME_NOW, static_cast<int64_t>(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-    if (self.remotePreviewStreaming && self.remotePreviewFramesDisplayed == 0 && g_useIPhoneSource && !self.showingPlayback) {
+    if (self.remotePreviewStreaming && self.remotePreviewFramesDisplayed == 0 && !self.showingPlayback) {
       self.remotePreviewUsingSnapshotFallback = YES;
       [self setStatus:[NSString stringWithFormat:@"Preview: %@ snapshot fallback", [self iPhoneTransportLabel]]];
       [self refreshRemotePreviewSnapshotFallback];
@@ -3873,7 +3262,7 @@ void setVideoEnabled(bool enabled);
 }
 
 - (void)refreshRemotePreviewSnapshotFallback {
-  if (!self.remotePreviewUsingSnapshotFallback || !g_useIPhoneSource || self.showingPlayback) {
+  if (!self.remotePreviewUsingSnapshotFallback || self.showingPlayback) {
     return;
   }
   NSURL *url = [self remotePreviewSnapshotURL];
@@ -3888,7 +3277,7 @@ void setVideoEnabled(bool enabled);
       image = [[NSImage alloc] initWithData:data];
     }
     dispatch_async(dispatch_get_main_queue(), ^{
-      if (image && self.remotePreviewUsingSnapshotFallback && g_useIPhoneSource && !self.showingPlayback) {
+      if (image && self.remotePreviewUsingSnapshotFallback && !self.showingPlayback) {
         self.remotePreviewView.image = image;
       }
       dispatch_after(dispatch_time(DISPATCH_TIME_NOW, static_cast<int64_t>(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
@@ -3900,15 +3289,11 @@ void setVideoEnabled(bool enabled);
 }
 
 - (void)startRemotePreview {
-  if (!g_useIPhoneSource) {
-    return;
-  }
   [self persistIPhoneSettings];
   if (!self.remotePreviewTask && !self.webRTCPeerConnection && !self.webRTCPreviewStarting) {
     self.webRTCPreviewFailed = NO;
     self.webRTCPreviewFallbackReason = nil;
   }
-  self.previewLayer.hidden = YES;
   if (self.iPhonePreviewProfileConfiguring) {
     return;
   }
@@ -3927,7 +3312,7 @@ void setVideoEnabled(bool enabled);
       }
       [self startWebRTCPreviewIfNeeded];
       dispatch_after(dispatch_time(DISPATCH_TIME_NOW, static_cast<int64_t>(4.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        if (g_useIPhoneSource && !self.showingPlayback && self.webRTCPreviewFailed && !self.webRTCPeerConnection && !self.webRTCPreviewStarting && !self.remotePreviewTask) {
+        if (!self.showingPlayback && self.webRTCPreviewFailed && !self.webRTCPeerConnection && !self.webRTCPreviewStarting && !self.remotePreviewTask) {
           [self startBinaryRemotePreviewFallback];
         }
       });
@@ -3936,7 +3321,7 @@ void setVideoEnabled(bool enabled);
   }
   [self startWebRTCPreviewIfNeeded];
   dispatch_after(dispatch_time(DISPATCH_TIME_NOW, static_cast<int64_t>(4.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-    if (g_useIPhoneSource && !self.showingPlayback && self.webRTCPreviewFailed && !self.webRTCPeerConnection && !self.webRTCPreviewStarting && !self.remotePreviewTask) {
+    if (!self.showingPlayback && self.webRTCPreviewFailed && !self.webRTCPeerConnection && !self.webRTCPreviewStarting && !self.remotePreviewTask) {
       [self startBinaryRemotePreviewFallback];
     }
   });
@@ -3948,7 +3333,6 @@ void setVideoEnabled(bool enabled);
   self.webRTCPreviewFailed = NO;
   self.webRTCPreviewFallbackReason = nil;
   self.remotePreviewView.hidden = YES;
-  [self refreshFormatDiagnosticMenu];
 }
 
 - (void)URLSession:(NSURLSession *)session dataTask:(NSURLSessionDataTask *)dataTask didReceiveData:(NSData *)data {
@@ -3967,10 +3351,10 @@ void setVideoEnabled(bool enabled);
   dispatch_async(dispatch_get_main_queue(), ^{
     self.remotePreviewTask = nil;
     self.remotePreviewSession = nil;
-    if (self.remotePreviewStreaming && g_useIPhoneSource && !self.showingPlayback) {
+    if (self.remotePreviewStreaming && !self.showingPlayback) {
       [self setStatus:error ? @"Preview: reconnecting" : @"Preview: reconnecting"];
       dispatch_after(dispatch_time(DISPATCH_TIME_NOW, static_cast<int64_t>(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        if (self.remotePreviewStreaming && !self.remotePreviewTask && g_useIPhoneSource && !self.showingPlayback) {
+        if (self.remotePreviewStreaming && !self.remotePreviewTask && !self.showingPlayback) {
           [self startRemotePreviewStream];
         }
       });
@@ -4026,7 +3410,7 @@ void setVideoEnabled(bool enabled);
         return;
       }
       strongSelf.remotePreviewDecoding = NO;
-      if (cgImage && g_useIPhoneSource && !strongSelf.showingPlayback) {
+      if (cgImage && !strongSelf.showingPlayback) {
         NSImage *image = [[NSImage alloc] initWithCGImage:cgImage size:NSZeroSize];
         strongSelf.remotePreviewView.image = image;
         strongSelf.remotePreviewFramesDisplayed += 1;
@@ -4083,7 +3467,7 @@ void setVideoEnabled(bool enabled);
 - (void)peerConnection:(LKRTCPeerConnection *)peerConnection didChangeIceConnectionState:(LKRTCIceConnectionState)newState {
   (void)peerConnection;
   dispatch_async(dispatch_get_main_queue(), ^{
-    if (!g_useIPhoneSource || self.recordingVisualState) {
+    if (self.recordingVisualState) {
       return;
     }
     switch (newState) {
@@ -4160,13 +3544,7 @@ void setVideoEnabled(bool enabled);
   self.showingPlayback = NO;
   [self.player pause];
   self.playerLayer.hidden = YES;
-  if (g_useIPhoneSource) {
-    self.previewLayer.hidden = YES;
-    [self startRemotePreview];
-  } else {
-    [self stopRemotePreview];
-    self.previewLayer.hidden = NO;
-  }
+  [self startRemotePreview];
 }
 
 - (void)updatePlaybackWithPath:(const std::string &)path
@@ -4196,7 +3574,6 @@ void setVideoEnabled(bool enabled);
 
   self.showingPlayback = YES;
   [self stopRemotePreview];
-  self.previewLayer.hidden = YES;
   self.playerLayer.hidden = NO;
 
   const double sourceTime = projectPosition - itemStart + sourceOffset;
@@ -4292,46 +3669,6 @@ void setVideoEnabled(bool enabled);
   NSColor *color = _recordingVisualState ? NSColor.systemRedColor : NSColor.labelColor;
   self.statusLabel.textColor = color;
   self.formatLabel.textColor = color;
-}
-
-- (void)captureOutput:(AVCaptureFileOutput *)captureOutput
-didStartRecordingToOutputFileAtURL:(NSURL *)fileURL
-      fromConnections:(NSArray<AVCaptureConnection *> *)connections {
-  (void)captureOutput;
-  (void)fileURL;
-  (void)connections;
-  dispatch_async(dispatch_get_main_queue(), ^{
-    [self setRecordingVisualState:YES];
-    [self updateCaptureFormatLabel];
-    if (self.hasAudioInput) {
-      NSString *audioName = self.audioDeviceName.length > 0 ? self.audioDeviceName : @"camera audio";
-      [self setStatus:[NSString stringWithFormat:@"Recording video + %@", audioName]];
-    } else {
-      [self setStatus:@"Recording video only"];
-    }
-    if (self.startCompletion) {
-      self.startCompletion();
-      self.startCompletion = nil;
-    }
-  });
-}
-
-- (void)captureOutput:(AVCaptureFileOutput *)captureOutput
-didFinishRecordingToOutputFileAtURL:(NSURL *)outputFileURL
-      fromConnections:(NSArray<AVCaptureConnection *> *)connections
-                error:(NSError *)error {
-  (void)captureOutput;
-  (void)connections;
-  dispatch_async(dispatch_get_main_queue(), ^{
-    [self setRecordingVisualState:NO];
-    [self updateCaptureFormatLabel];
-    [self setStatus:error ? @"Error" : @"Finalizing"];
-    NSString *path = outputFileURL.path ?: self.activeOutputPath;
-    if (self.stopCompletion) {
-      self.stopCompletion(path, error);
-      self.stopCompletion = nil;
-    }
-  });
 }
 
 @end
@@ -4445,12 +3782,11 @@ void processPendingInsert() {
   }
   const std::string path = g_pendingInsertPath;
   const double position = g_pendingInsertPosition;
-  const bool fromIPhone = g_useIPhoneSource;
   g_pendingInsert = false;
   g_pendingInsertPath.clear();
 
   std::string error;
-  if (insertRecordedMedia(path, position, fromIPhone, error)) {
+  if (insertRecordedMedia(path, position, true, error)) {
     const char *status = g_lastAlignmentStatus.empty() ? "Recorded to Video Recorder track" : g_lastAlignmentStatus.c_str();
     [recorder() setStatus:[NSString stringWithUTF8String:status]];
   } else {
@@ -4777,14 +4113,6 @@ void loadSettings() {
   const char *previewFloating = GetExtState(kExtStateSection, kPreviewFloatingKey);
   if (previewFloating && previewFloating[0] != '\0') {
     g_previewFloating = std::string(previewFloating) != "0";
-  }
-  const char *selectedDevice = GetExtState(kExtStateSection, kSelectedDeviceKey);
-  if (selectedDevice && selectedDevice[0] != '\0') {
-    g_selectedDeviceUniqueID = selectedDevice;
-  }
-  const char *sourceKind = GetExtState(kExtStateSection, kSourceKindKey);
-  if (sourceKind && sourceKind[0] != '\0') {
-    g_useIPhoneSource = std::string(sourceKind) == "iphone";
   }
   const char *iPhoneHost = GetExtState(kExtStateSection, kIPhoneHostKey);
   if (iPhoneHost && iPhoneHost[0] != '\0') {

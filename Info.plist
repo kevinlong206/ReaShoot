@@ -8,13 +8,5 @@
   <string>REAPER Video Recorder</string>
   <key>CFBundleVersion</key>
   <string>0.1.0</string>
-  <key>NSCameraUsageDescription</key>
-  <string>REAPER Video Recorder needs camera access to record webcam video into REAPER projects.</string>
-  <key>NSCameraUseContinuityCameraDeviceType</key>
-  <true/>
-  <key>NSCameraUseExternalDeviceType</key>
-  <true/>
-  <key>NSMicrophoneUsageDescription</key>
-  <string>REAPER Video Recorder needs microphone access to record camera audio as a sync reference.</string>
 </dict>
 </plist>

@@ -1,6 +1,6 @@
 # REAPER Video Recorder
 
-macOS-only REAPER extension MVP for recording one webcam/video source in sync with REAPER transport.
+macOS-only REAPER extension for controlling the companion iPhone Video Sync app from REAPER, recording full-quality iPhone video, and inserting the downloaded movie in sync with the REAPER transport.
 
 ## MVP behavior
 
@@ -9,14 +9,13 @@ macOS-only REAPER extension MVP for recording one webcam/video source in sync wi
   - `Video Recorder: Show/Hide Preview`
   - `Video Recorder: Float/Dock Preview`
   - `Video Recorder: Align Selected Video Item`
+  - `Video Recorder: Restore Pending iPhone Recording`
   - `Video Recorder: Enable/Disable Transport Follow`
 - Adds a main-toolbar toggle button for enabling/disabling all video behavior.
-- Shows a native macOS live preview window using AVFoundation.
-- Shows the active capture format below the preview, including resolution, frame rate, and codec/source format, and turns the status text red while recording.
-- Provides a camera selector for available macOS video inputs, including Continuity Camera when macOS exposes it.
-- Provides a format diagnostics dropdown showing whether 4K30 and 1080p30 are available plus every format AVFoundation exposes for the selected camera.
-- Automatically requests a stable capture format, preferring 4K30, then 1080p30, then the highest exposed 30 fps camera format.
-- Records camera audio into the `.mov` alongside video so the inserted item contains an alignment reference.
+- Shows the iPhone live preview in a native macOS preview window.
+- Shows the active iPhone transport/profile below the preview, including USB/Wi-Fi, resolution, frame rate, orientation, aspect, lens, zoom, and look; status text turns red while recording.
+- Controls the companion iPhone app for full-resolution iPhone capture. The REAPER extension no longer records directly from macOS webcams or Continuity Camera.
+- Records iPhone camera audio into the `.mov` alongside video so the inserted item contains an alignment reference.
 - Starts video recording when REAPER enters record.
 - Stops video recording when REAPER leaves record.
 - Keeps video behavior disabled by default until the toolbar/action toggle is enabled.
@@ -31,13 +30,15 @@ macOS-only REAPER extension MVP for recording one webcam/video source in sync wi
 - After insertion, compares the movie's embedded camera audio against the first non-video track item that overlaps the video item and shifts the video item to the strongest correlation match on that reference.
 - Can manually re-run alignment for an existing project with `Video Recorder: Align Selected Video Item`; select the item on the `Video Recorder` track first, or it falls back to that track's latest item. If a REAPER time selection is active, only that region is analyzed.
 - Shows load/record/finalize/import state in the preview status label instead of console chatter.
-- Places recorded video using AVFoundation's actual recording-start callback to compensate for capture startup latency.
-- Can select an `iPhone Video Sync` source that controls the companion iPhone app for 4K recording, low-resolution Wi-Fi preview, download, and timeline insertion.
-- The iPhone source first attempts an experimental low-latency WebRTC preview using the bundled `LiveKitWebRTC.framework`. If that fails, it falls back to the persistent low-resolution binary JPEG preview stream, which decodes frames off the main thread, drops stale frames, and lowers preview rate while REAPER records. MJPEG and snapshot endpoints remain available as fallbacks/debugging aids.
-- For the iPhone source, the dock includes capture profile controls for resolution, FPS, orientation, social aspect ratio, lens, zoom, and baked-in artistic look. Changing a profile control sends the new profile to the iPhone immediately when paired.
+- Places downloaded iPhone video at the REAPER record-start timeline position.
+- Controls the companion iPhone app for 4K recording, low-resolution USB/Wi-Fi preview, download/restore, and timeline insertion. When a trusted USB connection is available, the extension prefers the iPhone USB tunnel and falls back to the configured Wi-Fi/Bonjour host.
+- The iPhone preview first attempts an experimental low-latency WebRTC preview using the bundled `LiveKitWebRTC.framework`. If that fails, it falls back to the persistent low-resolution binary JPEG preview stream, which decodes frames off the main thread, drops stale frames, and lowers preview rate while REAPER records. MJPEG and snapshot endpoints remain available as fallbacks/debugging aids.
+- The dock includes capture profile controls for resolution, FPS, orientation, social aspect ratio, lens, zoom, and baked-in artistic look. Changing a profile control sends the new profile to the iPhone immediately when paired.
+- The look picker keeps the custom looks plus a curated Core Image subset for music-video use, including thermal/X-ray, gradients/edges, crystallize/pixel/halftone, and a few kaleidoscope/distortion looks. `Prev` and `Next` buttons beside the picker make it quick to audition looks.
 - During iPhone recording stop, the dock status shows video transfer progress while the full-resolution movie downloads.
 - If a non-natural iPhone look is selected, the dock status shows on-phone look encoding progress before the download prompt appears.
 - When an iPhone recording stops, REAPER prompts to either download the video or delete it from the iPhone. Delete requires a second confirmation; canceling that confirmation downloads instead.
+- If a download fails or is canceled before transfer acknowledgement, the iPhone keeps the pending recording. Use `Video Recorder: Restore Pending iPhone Recording` to list pending clips on the phone, download one, insert it at the current edit cursor, and acknowledge transfer so the phone deletes its local copy.
 - After the Mac verifies the downloaded movie and acknowledges transfer, the iPhone app deletes its local copy immediately.
 - The iPhone app disables the idle timer while it is ready/listening so the phone does not sleep and interrupt preview on a tripod.
 - The iPhone app status screen shows `Keep awake: Yes` when the idle timer is disabled.
@@ -61,10 +62,24 @@ cd iphone
 xcodebuild -project iPhoneVideoSync.xcodeproj -scheme iPhoneVideoSync -destination 'generic/platform=iOS' build
 ```
 
+For local device iteration, this tested device command is usually more useful:
+
+```sh
+GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=all \
+  xcodebuild -project iphone/iPhoneVideoSync.xcodeproj \
+  -scheme iPhoneVideoSync \
+  -destination 'platform=iOS,id=797DC5E5-610E-5972-9FD3-B0045CA5745F' \
+  build
+```
+
 ## Install
 
 ```sh
 make install
+codesign --force --sign - "$HOME/Library/Application Support/REAPER/UserPlugins/reaper_video_recorder.dylib"
+codesign --force --sign - "$HOME/Library/Application Support/REAPER/UserPlugins/LiveKitWebRTC.framework"
+codesign --verify "$HOME/Library/Application Support/REAPER/UserPlugins/reaper_video_recorder.dylib"
+codesign --verify "$HOME/Library/Application Support/REAPER/UserPlugins/LiveKitWebRTC.framework"
 ```
 
 Restart REAPER, then open the Action List and search for `Video Recorder`.
@@ -78,16 +93,22 @@ codesign --force --sign - "$HOME/Library/Application Support/REAPER/UserPlugins/
 
 ## Notes
 
-- REAPER remains responsible for production audio recording and mixing; camera audio is captured as a sync/alignment reference.
-- Camera and microphone permission are requested the first time the preview/session is opened.
-- Selected camera input is persisted in REAPER ext state.
+- REAPER remains responsible for production audio recording and mixing; iPhone camera audio is captured as a sync/alignment reference.
+- macOS camera and microphone permission are not required because capture happens in the iPhone app.
 - The companion iPhone app sources live in `iphone/`; `~/iphone_reapervideosync` was the original development copy and should no longer be treated as the source of truth.
-- The iPhone source builds and installs a bundled `video-sync-mac` helper and `LiveKitWebRTC.framework` next to the REAPER extension dylib.
-- To use the iPhone source, launch the iPhone app, select `iPhone Video Sync` in the REAPER dock, click `iPhone Setup`, click `Discover`, enter the pairing code shown on the iPhone, click `Pair`, then click `Test` to verify preview/control before recording.
-- The iPhone app shows the currently configured capture profile. Aspect ratio is currently metadata/framing intent; resolution, FPS, orientation, lens, and zoom are applied on the iPhone capture session. Non-natural looks are applied after recording stops and are baked into the downloaded movie while preserving the camera audio track.
+- The extension builds and installs a bundled `video-sync-mac` helper and `LiveKitWebRTC.framework` next to the REAPER extension dylib.
+- `video-sync-mac usb-host` reports the current USB tunnel host when the phone is connected, unlocked/trusted, and visible to `devicectl`; REAPER uses this automatically when possible.
+- To use the extension, launch the iPhone app, click `iPhone Setup` in the REAPER dock, click `Discover`, enter the pairing code shown on the iPhone, click `Pair`, then click `Test` to verify preview/control before recording.
+- The iPhone app shows the currently configured capture profile. Aspect ratio is currently metadata/framing intent; resolution, FPS, orientation, lens, zoom, and selected look are applied on the iPhone side. Non-natural looks are applied after recording stops and are baked into the downloaded movie while preserving the camera audio track.
 - Lens options depend on the connected iPhone hardware. Zoom is clamped to the selected camera's supported range; values beyond a physical lens's native view may be digital crop rather than guaranteed optical zoom.
 - Captures are written under `Video Recordings` in the saved project directory, or under REAPER's resource path for unsaved projects.
-- The extension has been observed with an iPhone Continuity Camera exposing only up to `1920x1440` / `1920x1080`; no 4K or true vertical iPhone formats were exposed by AVFoundation in that session.
 - A tested recording inspected with `ffprobe` was `1920x1080` H.264 at a stable ~30 fps and ~24 Mbps, so laggy motion in the docked preview can be a preview playback issue rather than a bad recording.
 - The docked playback preview intentionally avoids frequent exact seeks; it may drift slightly before correcting, but this keeps AVPlayer playback smooth.
-- True real-time waveform drawing during capture is not implemented because `AVCaptureMovieFileOutput` finalizes the movie only after recording stops.
+- True real-time waveform drawing during capture is not implemented because REAPER receives the media after the iPhone app finalizes and downloads the movie.
+
+## Iterating locally
+
+- Restart REAPER after every `make install`; the extension dylib and bundled WebRTC framework are loaded at process startup.
+- Keep protocol changes mirrored between `helper/Sources/VideoSyncCore/ControlProtocol.swift` and `iphone/Sources/VideoSyncCore/ControlProtocol.swift`.
+- Keep helper CLI behavior mirrored between `helper/Sources/video-sync-mac` and `iphone/Sources/video-sync-mac`.
+- Xcode/SwiftPM may regenerate `iphone/Package.resolved` or local `.build` directories during builds. Do not commit those unless dependency pinning intentionally changes.

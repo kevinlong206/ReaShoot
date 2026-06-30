@@ -133,6 +133,9 @@ public struct CaptureProfile: Codable, Equatable, Sendable {
     }
 
     private var lookDisplayName: String {
+        if look.hasPrefix("ci:") {
+            return CaptureProfile.displayName(forRawFilterID: String(look.dropFirst(3)))
+        }
         switch look {
         case "warmVintage":
             return "Warm Vintage"
@@ -175,6 +178,23 @@ public struct CaptureProfile: Codable, Equatable, Sendable {
         default:
             return "Natural"
         }
+    }
+
+    private static func displayName(forRawFilterID filterID: String) -> String {
+        var result = "CI: "
+        let name = filterID.hasPrefix("CI") ? String(filterID.dropFirst(2)) : filterID
+        var previous: Character?
+        for character in name {
+            if let previous,
+               ((previous.isLowercase && character.isUppercase) ||
+                (!previous.isNumber && character.isNumber) ||
+                (previous.isNumber && character.isLetter)) {
+                result.append(" ")
+            }
+            result.append(character)
+            previous = character
+        }
+        return result
     }
 }
 

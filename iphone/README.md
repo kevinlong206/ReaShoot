@@ -1,6 +1,6 @@
 # iPhone Reaper Video Sync
 
-Greenfield Swift implementation for recording 4K video on an iPhone from Mac commands over local Wi-Fi, then transferring each stopped clip back to the Mac.
+Swift implementation for recording 4K video on an iPhone from REAPER/Mac commands over USB when available, falling back to local Wi-Fi/Bonjour, then transferring each stopped clip back to the Mac.
 
 ## Layout
 
@@ -41,6 +41,7 @@ export VIDEO_SYNC_TOKEN='...'
 Then run:
 
 ```sh
+swift run video-sync-mac usb-host
 swift run video-sync-mac ping --host kevin-long-iphone.local --port 8787
 swift run video-sync-mac configure --host kevin-long-iphone.local --port 8787 --token "$VIDEO_SYNC_TOKEN" --lens ultrawide --zoom 0.5 --look warmVintage
 swift run video-sync-mac start --host kevin-long-iphone.local --port 8787 --token "$VIDEO_SYNC_TOKEN" --session smoke-test
@@ -48,7 +49,7 @@ sleep 3
 swift run video-sync-mac stop --host kevin-long-iphone.local --port 8787 --http-port 8788 --token "$VIDEO_SYNC_TOKEN" --download-dir test-downloads
 ```
 
-Expected result: the CLI prints a downloaded `.mov` path in `test-downloads`, then acknowledges transfer so the iPhone deletes its local copy. Add `--progress` to the `stop` command to print transfer progress lines during the movie download. For REAPER's prompted stop flow, the helper also exposes `stop-only`, `download-recording`, and `delete-recording`.
+Expected result: the CLI prints a downloaded `.mov` path in `test-downloads`, then acknowledges transfer so the iPhone deletes its local copy. Add `--progress` to the `stop` command to print transfer progress lines during the movie download. For REAPER's prompted stop flow, the helper also exposes `stop-only`, `list-recordings`, `download-recording`, and `delete-recording`. If a download fails before acknowledgement, the recording remains pending on the phone and can be restored with `list-recordings` plus `download-recording`.
 
 ## Preview endpoints
 
@@ -64,7 +65,7 @@ http://HOST:8788/preview.bin?token=TOKEN
 
 The control WebSocket also supports an experimental authenticated WebRTC preview offer/answer flow. REAPER sends a receive-only SDP offer with `startWebRTCPreview`; the iPhone app answers with a low-resolution video track fed from the same preview capture output. The HTTP preview endpoints remain available as fallback/debugging paths.
 
-Capture configuration supports hardware-dependent lens selection (`wide`, `ultrawide`, `telephoto`, `auto`), zoom, and baked-in artistic looks (`natural`, `warmVintage`, `coolBlue`, `highContrastBW`, `fadedFilm`, `dreamGlow`, `noir`, `saturatedPop`, `bleachBypass`, `sepia`, `instantPhoto`, `chrome`, `tonal`, `silvertone`, `dramaticWarm`, `dramaticCool`, `softMatte`, `comicBook`, `vhs`, `musicVideoPop`). Zoom is applied through AVFoundation and clamped to the selected camera's supported range. Non-natural looks are previewed through the HTTP preview stream and applied as a post-record Core Image export so the reliable movie recording path and embedded camera audio are preserved. The helper can report encoding progress during `stop`/`stop-only` with `--progress`.
+Capture configuration supports hardware-dependent lens selection (`wide`, `ultrawide`, `telephoto`, `auto`), zoom, and baked-in artistic looks (`natural`, `warmVintage`, `coolBlue`, `highContrastBW`, `fadedFilm`, `dreamGlow`, `noir`, `saturatedPop`, `bleachBypass`, `sepia`, `instantPhoto`, `chrome`, `tonal`, `silvertone`, `dramaticWarm`, `dramaticCool`, `softMatte`, `comicBook`, `vhs`, `musicVideoPop`) plus a curated `ci:<CoreImageFilterName>` subset for thermal/X-ray, gradients/edges, crystallize/pixel/halftone, and a few kaleidoscope/distortion looks. Zoom is applied through AVFoundation and clamped to the selected camera's supported range. Non-natural looks are previewed through the HTTP preview stream and applied as a post-record Core Image export so the reliable movie recording path and embedded camera audio are preserved. The helper can report encoding progress during `stop`/`stop-only` with `--progress`.
 
 ## iOS background note
 
