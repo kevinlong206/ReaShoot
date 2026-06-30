@@ -11,7 +11,7 @@ This directory is the source of truth for the iPhone app. Do not use the old `~/
 The current implementation has been installed and tested on a physical iPhone in foreground mode. The tested flow is:
 
 1. iPhone app advertises `_iphone-video-sync._tcp` with Bonjour.
-2. Mac prefers the USB tunnel discovered by `video-sync-mac usb-host`; otherwise it uses Bonjour/Wi-Fi.
+2. Mac prefers the USB tunnel discovered by `video-sync-mac usb-host`; if a wired paired device has no active tunnel, the helper asks CoreDevice to activate it. Otherwise it uses Bonjour/Wi-Fi.
 3. Mac sends WebSocket control commands on port `8787`.
 4. REAPER uses WebRTC as the only preview path; the iPhone renders the selected look before sending preview frames.
 5. iPhone records video with AVFoundation.
@@ -155,6 +155,7 @@ For the REAPER prompted stop flow, use `stop-only` to get recording metadata, th
 - The iPhone creates a send-only video answer from `WebRTCPreviewSession`.
 - The answer may include inline ICE candidates. REAPER is expected to strip and add them separately because the Mac-side parser rejected the full inline-candidate answer during testing.
 - REAPER sends its own candidates back with `addWebRTCIceCandidate`.
+- When USB is available, REAPER filters separate/trickled ICE candidates to the USB tunnel prefix but leaves the SDP offer intact.
 - The iPhone app status UI exposes a `Preview` row so agents/users can see whether WebRTC is active.
 - Keep preview on WebRTC only; HTTP is used for recording downloads, not live preview.
 - Lens selection uses AVFoundation rear camera discovery. Not every iPhone exposes `ultrawide` or `telephoto`; unavailable lens requests should fail clearly instead of silently pretending they worked.

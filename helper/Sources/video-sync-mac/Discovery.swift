@@ -10,6 +10,23 @@ struct DiscoveredPhone {
 
 enum USBDiscovery {
     static func discover() -> [DiscoveredPhone] {
+        let devices = loadDeviceRecords()
+        let connected = discoveredPhones(from: devices)
+        if !connected.isEmpty {
+            return connected
+        }
+
+        let activatableDeviceIDs = devices.compactMap(deviceIDForWiredPairedDevice)
+        for deviceID in activatableDeviceIDs {
+            activateTunnel(for: deviceID)
+        }
+        if !activatableDeviceIDs.isEmpty {
+            return discoveredPhones(from: loadDeviceRecords())
+        }
+        return []
+    }
+
+    private static func loadDeviceRecords() -> [[String: Any]] {
         let outputURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("iphone-video-sync-devices-\(UUID().uuidString).json")
         defer {
@@ -18,7 +35,7 @@ enum USBDiscovery {
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
-        process.arguments = ["devicectl", "list", "devices", "--json-output", outputURL.path]
+        process.arguments = ["devicectl", "list", "--timeout", "8", "devices", "--json-output", outputURL.path]
         process.standardOutput = Pipe()
         process.standardError = Pipe()
         do {
@@ -34,8 +51,11 @@ enum USBDiscovery {
               let devices = result["devices"] as? [[String: Any]] else {
             return []
         }
+        return devices
+    }
 
-        return devices.compactMap { device in
+    private static func discoveredPhones(from devices: [[String: Any]]) -> [DiscoveredPhone] {
+        devices.compactMap { device in
             guard let connection = device["connectionProperties"] as? [String: Any],
                   connection["transportType"] as? String == "wired",
                   connection["tunnelState"] as? String == "connected",
@@ -46,6 +66,31 @@ enum USBDiscovery {
             let properties = device["deviceProperties"] as? [String: Any]
             let name = properties?["name"] as? String ?? "iPhone USB"
             return DiscoveredPhone(name: "\(name) USB", host: tunnelIPAddress, controlPort: 8787, httpPort: 8788, isPaired: true)
+        }
+    }
+
+    private static func deviceIDForWiredPairedDevice(_ device: [String: Any]) -> String? {
+        guard let identifier = device["identifier"] as? String,
+              let connection = device["connectionProperties"] as? [String: Any],
+              connection["transportType"] as? String == "wired",
+              connection["pairingState"] as? String == "paired",
+              connection["tunnelState"] as? String != "connected" else {
+            return nil
+        }
+        return identifier
+    }
+
+    private static func activateTunnel(for deviceID: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+        process.arguments = ["devicectl", "device", "info", "details", "--device", deviceID, "--timeout", "8"]
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            return
         }
     }
 }

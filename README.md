@@ -97,7 +97,8 @@ codesign --force --sign - "$HOME/Library/Application Support/REAPER/UserPlugins/
 - macOS camera and microphone permission are not required because capture happens in the iPhone app.
 - The companion iPhone app sources live in `iphone/`; `~/iphone_reapervideosync` was the original development copy and should no longer be treated as the source of truth.
 - The extension builds and installs a bundled `video-sync-mac` helper and `LiveKitWebRTC.framework` next to the REAPER extension dylib.
-- `video-sync-mac usb-host` reports the current USB tunnel host when the phone is connected, unlocked/trusted, and visible to `devicectl`; REAPER uses this automatically when possible.
+- `video-sync-mac usb-host` reports the current USB tunnel host when the phone is connected, unlocked/trusted, and visible to `devicectl`; if the device is wired and paired but the tunnel is not connected, the helper asks CoreDevice to activate it. REAPER uses this automatically when possible.
+- When USB is available, REAPER filters WebRTC ICE candidates to the USB tunnel prefix so preview media does not silently choose Wi-Fi.
 - To use the extension, launch the iPhone app, click `iPhone Setup` in the REAPER dock, click `Discover`, enter the pairing code shown on the iPhone, click `Pair`, then click `Test` to verify preview/control before recording.
 - The iPhone app shows the currently configured capture profile. Aspect ratio is currently metadata/framing intent; resolution, FPS, orientation, lens, zoom, and selected look are applied on the iPhone side. Non-natural looks are applied after recording stops and are baked into the downloaded movie while preserving the camera audio track.
 - Lens options depend on the connected iPhone hardware. Zoom is clamped to the selected camera's supported range; values beyond a physical lens's native view may be digital crop rather than guaranteed optical zoom.

@@ -1580,6 +1580,8 @@ void setVideoEnabled(bool enabled);
 - (void)sendWebRTCIceCandidateToIPhone:(LKRTCIceCandidate *)candidate;
 - (NSString *)webRTCAnswerSDPByRemovingInlineCandidates:(NSString *)answerSDP
                                              candidates:(NSArray<LKRTCIceCandidate *> **)candidates;
+- (NSArray<LKRTCIceCandidate *> *)webRTCCandidatesByFilteringForCurrentUSBHost:(NSArray<LKRTCIceCandidate *> *)candidates;
+- (BOOL)webRTCCandidateUsesCurrentUSBHost:(NSString *)candidateSDP;
 - (void)addRemoteWebRTCIceCandidates:(NSArray<LKRTCIceCandidate *> *)candidates
                       toPeerConnection:(LKRTCPeerConnection *)peerConnection;
 - (NSString *)runVideoSyncCommand:(NSString *)command
@@ -2905,6 +2907,9 @@ void setVideoEnabled(bool enabled);
   if (g_iPhoneHost.empty() || g_iPhoneToken.empty() || candidate.sdp.length == 0) {
     return;
   }
+  if (![self webRTCCandidateUsesCurrentUSBHost:candidate.sdp]) {
+    return;
+  }
   NSMutableArray<NSString *> *arguments = [NSMutableArray arrayWithObjects:
     @"--token", [NSString stringWithUTF8String:g_iPhoneToken.c_str()],
     @"--candidate", candidate.sdp,
@@ -2919,6 +2924,79 @@ void setVideoEnabled(bool enabled);
       [self setStatus:@"Preview: WebRTC ICE candidate failed"];
     }
   }];
+}
+
+- (NSString *)webRTCCandidateAddress:(NSString *)candidateSDP {
+  NSString *normalized = [candidateSDP hasPrefix:@"a="] ? [candidateSDP substringFromIndex:2] : candidateSDP;
+  NSArray<NSString *> *parts = [normalized componentsSeparatedByCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+  NSMutableArray<NSString *> *tokens = [NSMutableArray array];
+  for (NSString *part in parts) {
+    if (part.length > 0) {
+      [tokens addObject:part];
+    }
+  }
+  if (tokens.count < 5 || ![tokens[0] hasPrefix:@"candidate:"]) {
+    return nil;
+  }
+  NSString *address = tokens[4].lowercaseString;
+  if ([address hasPrefix:@"["] && [address hasSuffix:@"]"] && address.length > 2) {
+    address = [address substringWithRange:NSMakeRange(1, address.length - 2)];
+  }
+  NSRange zoneRange = [address rangeOfString:@"%"];
+  if (zoneRange.location != NSNotFound) {
+    address = [address substringToIndex:zoneRange.location];
+  }
+  return address;
+}
+
+- (NSString *)webRTCUSBPrefix {
+  if (g_iPhoneUSBHost.empty()) {
+    return nil;
+  }
+  NSString *host = [NSString stringWithUTF8String:g_iPhoneUSBHost.c_str()].lowercaseString;
+  if ([host hasPrefix:@"["] && [host hasSuffix:@"]"] && host.length > 2) {
+    host = [host substringWithRange:NSMakeRange(1, host.length - 2)];
+  }
+  NSArray<NSString *> *parts = [host componentsSeparatedByString:@":"];
+  NSMutableArray<NSString *> *prefix = [NSMutableArray array];
+  for (NSString *part in parts) {
+    if (part.length > 0) {
+      [prefix addObject:part];
+      if (prefix.count == 3) {
+        break;
+      }
+    }
+  }
+  if (prefix.count < 3) {
+    return host;
+  }
+  return [[prefix componentsJoinedByString:@":"] stringByAppendingString:@":"];
+}
+
+- (BOOL)webRTCCandidateUsesCurrentUSBHost:(NSString *)candidateSDP {
+  NSString *prefix = [self webRTCUSBPrefix];
+  if (prefix.length == 0) {
+    return YES;
+  }
+  NSString *address = [self webRTCCandidateAddress:candidateSDP];
+  if (address.length == 0) {
+    return NO;
+  }
+  NSString *host = [NSString stringWithUTF8String:g_iPhoneUSBHost.c_str()].lowercaseString;
+  return [address isEqualToString:host] || [address hasPrefix:prefix];
+}
+
+- (NSArray<LKRTCIceCandidate *> *)webRTCCandidatesByFilteringForCurrentUSBHost:(NSArray<LKRTCIceCandidate *> *)candidates {
+  if (g_iPhoneUSBHost.empty()) {
+    return candidates;
+  }
+  NSMutableArray<LKRTCIceCandidate *> *filtered = [NSMutableArray array];
+  for (LKRTCIceCandidate *candidate in candidates) {
+    if ([self webRTCCandidateUsesCurrentUSBHost:candidate.sdp]) {
+      [filtered addObject:candidate];
+    }
+  }
+  return filtered;
 }
 
 - (NSString *)webRTCAnswerSDPByRemovingInlineCandidates:(NSString *)answerSDP
@@ -2941,10 +3019,12 @@ void setVideoEnabled(bool enabled);
     }
     if ([line hasPrefix:@"a=candidate:"]) {
       NSString *candidateSDP = [line substringFromIndex:@"a=".length];
-      LKRTCIceCandidate *candidate = [[LKRTCIceCandidate alloc] initWithSdp:candidateSDP
-                                                               sdpMLineIndex:MAX(currentMLineIndex, 0)
-                                                                      sdpMid:currentMid];
-      [parsedCandidates addObject:candidate];
+      if ([self webRTCCandidateUsesCurrentUSBHost:candidateSDP]) {
+        LKRTCIceCandidate *candidate = [[LKRTCIceCandidate alloc] initWithSdp:candidateSDP
+                                                                 sdpMLineIndex:MAX(currentMLineIndex, 0)
+                                                                        sdpMid:currentMid];
+        [parsedCandidates addObject:candidate];
+      }
       continue;
     }
     if ([line hasPrefix:@"a=end-of-candidates"]) {
@@ -3045,7 +3125,8 @@ void setVideoEnabled(bool enabled);
       dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         dispatch_semaphore_wait(strongSelf.webRTCIceGatheringSemaphore, dispatch_time(DISPATCH_TIME_NOW, static_cast<int64_t>(3.0 * NSEC_PER_SEC)));
         NSString *localSDP = strongPeerConnection.localDescription.sdp ?: offer.sdp;
-        const NSUInteger localCandidateCount = strongSelf.webRTCLocalIceCandidates.count;
+        NSArray<LKRTCIceCandidate *> *localCandidates = [strongSelf webRTCCandidatesByFilteringForCurrentUSBHost:[strongSelf.webRTCLocalIceCandidates copy]];
+        const NSUInteger localCandidateCount = localCandidates.count;
         dispatch_async(dispatch_get_main_queue(), ^{
           if (!strongSelf.showingPlayback && !strongSelf.recordingVisualState) {
             [strongSelf setStatus:[NSString stringWithFormat:@"Preview: WebRTC signaling (%lu local ICE)",
@@ -3083,8 +3164,7 @@ void setVideoEnabled(bool enabled);
             strongSelf.webRTCPreviewView.hidden = NO;
             [strongSelf setStatus:[NSString stringWithFormat:@"Preview: WebRTC (%@ signaling)", [strongSelf iPhoneTransportLabel]]];
             [strongSelf addRemoteWebRTCIceCandidates:remoteCandidates toPeerConnection:strongPeerConnection];
-            NSArray<LKRTCIceCandidate *> *candidates = [strongSelf.webRTCLocalIceCandidates copy];
-            for (LKRTCIceCandidate *candidate in candidates) {
+            for (LKRTCIceCandidate *candidate in localCandidates) {
               [strongSelf sendWebRTCIceCandidateToIPhone:candidate];
             }
           });
