@@ -62,6 +62,10 @@ By default the Makefile builds for the current Mac architecture. To build a univ
 make ARCH_FLAGS="-arch arm64 -arch x86_64"
 ```
 
+Experimental Windows-port scaffolding is tracked in `CMakeLists.txt`, `desktop/core/`, and `docs/portability-matrix.md`. The CMake target currently builds a small portable C++ core plus a Windows diagnostic plugin skeleton; the shipping macOS build still uses the Makefile.
+
+The `Desktop portability` GitHub Actions workflow builds the portable core on macOS, Ubuntu, and Windows, and also builds the Windows diagnostic plugin target on Windows runners.
+
 The companion iPhone app is now consolidated in this repository under `iphone/`. Build it with:
 
 ```sh

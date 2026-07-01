@@ -1,0 +1,36 @@
+name: Desktop portability
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  cmake:
+    name: CMake (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-15
+          - ubuntu-24.04
+          - windows-2025
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build/cmake-ci -DBUILD_TESTING=ON
+
+      - name: Build portable core tests
+        run: cmake --build build/cmake-ci --target reaphone_core_tests --config Release
+
+      - name: Build Windows skeleton
+        if: runner.os == 'Windows'
+        run: cmake --build build/cmake-ci --target reaphonevideo --config Release
+
+      - name: Test
+        run: ctest --test-dir build/cmake-ci --build-config Release --output-on-failure

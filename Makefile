@@ -12,7 +12,7 @@ SWIFT_GIT_ENV := GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CON
 
 CXX ?= clang++
 ARCH_FLAGS ?= -arch $(shell uname -m)
-CXXFLAGS := -std=c++17 -fobjc-arc -Wall -Wextra -Wno-unused-parameter -isystem $(SDK_DIR) -F$(BUILD_DIR) $(ARCH_FLAGS)
+CXXFLAGS := -std=c++17 -fobjc-arc -Wall -Wextra -Wno-unused-parameter -isystem $(SDK_DIR) -Idesktop/reaper_plugin -F$(BUILD_DIR) $(ARCH_FLAGS)
 LDFLAGS := -dynamiclib -undefined dynamic_lookup $(ARCH_FLAGS) \
   -framework Cocoa \
   -framework AVFoundation \
@@ -53,6 +53,9 @@ install: $(TARGET) $(HELPER_TARGET) $(WEBRTC_FRAMEWORK)
 
 check:
 	./scripts/check_mirrored_swift.sh
+	cmake -S . -B $(BUILD_DIR)/cmake-check
+	cmake --build $(BUILD_DIR)/cmake-check --target reaphone_core_tests
+	ctest --test-dir $(BUILD_DIR)/cmake-check --output-on-failure
 	$(SWIFT_GIT_ENV) swift test --package-path iphone
 	$(SWIFT_GIT_ENV) swift build --package-path helper
 

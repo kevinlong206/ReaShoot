@@ -18,6 +18,7 @@ This repository contains ReaPhoneVideo: a macOS-only native REAPER extension plu
 - `iphone/Sources/VideoSyncCore/ControlProtocol.swift` and `helper/Sources/VideoSyncCore/ControlProtocol.swift` - Protocol definitions; keep these in sync when adding commands/events.
 - `Info.plist` - Bundle metadata for the REAPER extension.
 - `Makefile` - Builds and installs `reaper_video_recorder.dylib`, `video-sync-mac`, and `LiveKitWebRTC.framework`.
+- `CMakeLists.txt`, `desktop/core/`, and `docs/portability-matrix.md` - Early Windows/Linux portability scaffolding. The Windows target is only a diagnostic skeleton; the macOS Makefile remains the shipping build.
 - `README.md` - User-facing install and behavior notes.
 
 ## REAPER build and install

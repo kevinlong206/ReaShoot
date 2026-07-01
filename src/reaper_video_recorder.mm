@@ -17,6 +17,8 @@
 #import <LiveKitWebRTC/RTCVideoTrack.h>
 #import <QuartzCore/QuartzCore.h>
 
+#include "reaphone_action_ids.h"
+
 #include <algorithm>
 #include <cstdarg>
 #include <cctype>
@@ -3936,44 +3938,44 @@ void cleanup() {
 bool registerActions(reaper_plugin_info_t *rec) {
   custom_action_register_t videoEnabledAction = {
       0,
-      "KLONG_VIDEO_RECORDER_ENABLE",
-      "Video Recorder: Enable/Disable video features",
+      reaphone::actions::kVideoEnabledId,
+      reaphone::actions::kVideoEnabledName,
       nullptr,
   };
   custom_action_register_t showPreviewAction = {
       0,
-      "KLONG_VIDEO_RECORDER_SHOW_PREVIEW",
-      "Video Recorder: Show/Hide Preview",
+      reaphone::actions::kShowPreviewId,
+      reaphone::actions::kShowPreviewName,
       nullptr,
   };
   custom_action_register_t floatPreviewAction = {
       0,
-      "KLONG_VIDEO_RECORDER_FLOAT_PREVIEW",
-      "Video Recorder: Float/Dock Preview",
+      reaphone::actions::kFloatPreviewId,
+      reaphone::actions::kFloatPreviewName,
       nullptr,
   };
   custom_action_register_t alignSelectedAction = {
       0,
-      "KLONG_VIDEO_RECORDER_ALIGN_SELECTED",
-      "Video Recorder: Align Selected Video Item",
+      reaphone::actions::kAlignSelectedId,
+      reaphone::actions::kAlignSelectedName,
       nullptr,
   };
   custom_action_register_t restoreIPhoneAction = {
       0,
-      "KLONG_VIDEO_RECORDER_RESTORE_IPHONE",
-      "Video Recorder: Restore Pending iPhone Recording",
+      reaphone::actions::kRestoreIPhoneId,
+      reaphone::actions::kRestoreIPhoneName,
       nullptr,
   };
   custom_action_register_t deleteAllIPhoneAction = {
       0,
-      "KLONG_VIDEO_RECORDER_DELETE_ALL_IPHONE",
-      "Video Recorder: Delete All Pending iPhone Recordings",
+      reaphone::actions::kDeleteAllIPhoneId,
+      reaphone::actions::kDeleteAllIPhoneName,
       nullptr,
   };
   custom_action_register_t toggleFollowAction = {
       0,
-      "KLONG_VIDEO_RECORDER_TOGGLE_FOLLOW",
-      "Video Recorder: Enable/Disable Transport Follow",
+      reaphone::actions::kToggleFollowId,
+      reaphone::actions::kToggleFollowName,
       nullptr,
   };
 
