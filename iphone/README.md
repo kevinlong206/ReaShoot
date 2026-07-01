@@ -1,6 +1,6 @@
-# iPhone Reaper Video Sync
+# ReaPhoneVideo iPhone App
 
-Swift implementation for recording 4K video on an iPhone from REAPER/Mac commands over the local Wi-Fi/Bonjour network, then transferring each stopped clip back to the Mac.
+Companion iPhone app for ReaPhoneVideo. It records 4K video from REAPER/Mac commands over the local Wi-Fi/Bonjour network, then transfers each stopped clip back to the Mac.
 
 ## Layout
 

@@ -1,6 +1,6 @@
-# REAPER Video Recorder
+# ReaPhoneVideo
 
-macOS-only REAPER extension for controlling the companion iPhone Video Sync app from REAPER, recording full-quality iPhone video, and inserting the downloaded movie in sync with the REAPER transport.
+ReaPhoneVideo is a macOS-only REAPER extension for controlling a companion iPhone camera app from REAPER, recording full-quality iPhone video, and inserting the downloaded movie in sync with the REAPER transport.
 
 ## MVP behavior
 

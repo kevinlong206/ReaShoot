@@ -4,7 +4,7 @@ Guidance for future agents working in this project.
 
 ## Project status
 
-This is the consolidated companion iPhone app for `reaper_video_recorder`. It records iPhone video controlled from REAPER over the local Wi-Fi/Bonjour network.
+This is the consolidated companion iPhone app for ReaPhoneVideo. It records iPhone video controlled from REAPER over the local Wi-Fi/Bonjour network.
 
 This directory is the source of truth for the iPhone app. Do not use the old `~/iphone_reapervideosync` directory.
 

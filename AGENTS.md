@@ -2,10 +2,11 @@
 
 ## Project
 
-This repository contains a macOS-only native REAPER extension plus its companion iPhone camera app.
+This repository contains ReaPhoneVideo: a macOS-only native REAPER extension plus its companion iPhone camera app.
 
 - The REAPER extension is implemented in Objective-C++ with the REAPER Extension SDK, AVFoundation, Cocoa, and LiveKit WebRTC.
 - The companion iPhone app lives in `iphone/` and records full-quality iPhone video while REAPER controls it over the local Wi-Fi/Bonjour network.
+- The GitHub repository is named `ReaPhoneVideo`; deeper code/action/bundle renames are intentionally deferred.
 - `~/iphone_reapervideosync` was the old development copy and has been moved to Trash. Do not use or recreate it; `reaper_video_recorder/iphone` is the source of truth.
 
 ## Important files
