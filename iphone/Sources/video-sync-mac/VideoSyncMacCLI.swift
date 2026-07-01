@@ -5,8 +5,11 @@ import VideoSyncCore
 struct VideoSyncMacCLI {
     static func main() async {
         do {
+            DebugLog.write("cli start \(DebugLog.redacted(Array(CommandLine.arguments.dropFirst())))")
             try await run()
+            DebugLog.write("cli finish ok")
         } catch {
+            DebugLog.write("cli finish error=\(error.localizedDescription)")
             fputs("error: \(error.localizedDescription)\n", stderr)
             Foundation.exit(1)
         }
@@ -28,6 +31,26 @@ struct VideoSyncMacCLI {
             }
             let http = device.httpPort.map(String.init) ?? "8788"
             print("usb\tname=\(device.name)\thost=\(device.host)\tcontrolPort=\(device.controlPort)\thttpPort=\(http)")
+        case "usb-monitor":
+            let seconds = max(1, args.int(after: "--seconds", default: 180))
+            let interval = max(1, args.int(after: "--interval", default: 5))
+            var lastHost: String?
+            let started = Date()
+            while Date().timeIntervalSince(started) < Double(seconds) {
+                let device = USBDiscovery.discover().first
+                let host = device?.host ?? ""
+                if host != lastHost {
+                    let elapsed = Int(Date().timeIntervalSince(started).rounded())
+                    if let device {
+                        let http = device.httpPort.map(String.init) ?? "8788"
+                        print("usb-change\telapsed=\(elapsed)\tname=\(device.name)\thost=\(device.host)\tcontrolPort=\(device.controlPort)\thttpPort=\(http)")
+                    } else {
+                        print("usb-change\telapsed=\(elapsed)\thost=")
+                    }
+                    lastHost = host
+                }
+                try await Task.sleep(nanoseconds: UInt64(interval) * 1_000_000_000)
+            }
         case "pair":
             let event = try await send(args, type: .pair, tokenRequired: false) {
                 ControlCommand(type: .pair, pairingCode: required(args.value(after: "--code"), "--code"))
@@ -67,31 +90,30 @@ struct VideoSyncMacCLI {
             let token = required(args.value(after: "--token"), "--token")
             let showProgress = args.hasFlag("--progress")
             let encodingProgressTask = showProgress ? pollEncodingProgress(args, token: token) : nil
+            defer { encodingProgressTask?.cancel() }
             let event = try await send(args, type: .stopRecording) {
                 ControlCommand(type: .stopRecording, token: token)
             }
-            encodingProgressTask?.cancel()
             guard let recording = event.recording else {
                 throw ControlClientError.unexpectedEvent(event)
             }
+            let preparedRecording = try await prepareRecording(args, token: token, recordingID: recording.id)
             let directory = URL(fileURLWithPath: args.value(after: "--download-dir") ?? FileManager.default.currentDirectoryPath)
-            let downloaded = try await RecordingDownloader.download(recording: recording, host: host, httpPort: httpPort, token: token, destinationDirectory: directory) { bytes, expected in
+            let downloaded = try await RecordingDownloader.download(recording: preparedRecording, host: host, httpPort: httpPort, token: token, destinationDirectory: directory) { bytes, expected in
                 guard showProgress else {
                     return
                 }
-                printProgress(bytes: bytes, expected: expected > 0 ? expected : recording.byteCount)
+                printProgress(bytes: bytes, expected: expected > 0 ? expected : preparedRecording.byteCount)
             }
             _ = try await send(args, type: .transferComplete) {
-                ControlCommand(type: .transferComplete, token: token, recordingID: recording.id)
+                ControlCommand(type: .transferComplete, token: token, recordingID: preparedRecording.id)
             }
             print("downloaded \(downloaded.path)")
         case "stop-only":
             let token = required(args.value(after: "--token"), "--token")
-            let encodingProgressTask = args.hasFlag("--progress") ? pollEncodingProgress(args, token: token) : nil
             let event = try await send(args, type: .stopRecording) {
                 ControlCommand(type: .stopRecording, token: token)
             }
-            encodingProgressTask?.cancel()
             guard let recording = event.recording else {
                 throw ControlClientError.unexpectedEvent(event)
             }
@@ -100,15 +122,12 @@ struct VideoSyncMacCLI {
             let host = required(args.value(after: "--host"), "--host")
             let httpPort = args.int(after: "--http-port", default: 8788)
             let token = required(args.value(after: "--token"), "--token")
-            let recording = RecordingDescriptor(
-                id: required(args.value(after: "--recording-id"), "--recording-id"),
-                filename: required(args.value(after: "--filename"), "--filename"),
-                byteCount: args.int64(after: "--byte-count", default: 0),
-                checksumSHA256: args.value(after: "--checksum"),
-                downloadPath: required(args.value(after: "--download-path"), "--download-path")
-            )
+            let recordingID = required(args.value(after: "--recording-id"), "--recording-id")
             let directory = URL(fileURLWithPath: args.value(after: "--download-dir") ?? FileManager.default.currentDirectoryPath)
             let showProgress = args.hasFlag("--progress")
+            let encodingProgressTask = showProgress ? pollEncodingProgress(args, token: token) : nil
+            defer { encodingProgressTask?.cancel() }
+            let recording = try await prepareRecording(args, token: token, recordingID: recordingID)
             let downloaded = try await RecordingDownloader.download(recording: recording, host: host, httpPort: httpPort, token: token, destinationDirectory: directory) { bytes, expected in
                 guard showProgress else {
                     return
@@ -119,6 +138,13 @@ struct VideoSyncMacCLI {
                 ControlCommand(type: .transferComplete, token: token, recordingID: recording.id)
             }
             print("downloaded \(downloaded.path)")
+        case "prepare-recording":
+            let token = required(args.value(after: "--token"), "--token")
+            let showProgress = args.hasFlag("--progress")
+            let encodingProgressTask = showProgress ? pollEncodingProgress(args, token: token) : nil
+            defer { encodingProgressTask?.cancel() }
+            let recording = try await prepareRecording(args, token: token, recordingID: required(args.value(after: "--recording-id"), "--recording-id"))
+            printRecording(recording)
         case "list-recordings":
             let event = try await send(args, type: .listRecordings) {
                 ControlCommand(type: .listRecordings, token: required(args.value(after: "--token"), "--token"))
@@ -208,12 +234,14 @@ struct VideoSyncMacCLI {
         video-sync-mac commands:
           discover [--timeout 3]
           usb-host
+          usb-monitor [--seconds 180] [--interval 5]
           pair --host HOST [--port 8787] --code CODE
           configure --host HOST [--port 8787] --token TOKEN [--resolution 4K] [--fps 30] [--orientation portrait] [--aspect 9:16] [--lens wide] [--zoom 1.0] [--look natural]
           start --host HOST [--port 8787] --token TOKEN [--session SESSION]
           stop --host HOST [--port 8787] [--http-port 8788] --token TOKEN [--download-dir DIR] [--progress]
-          stop-only --host HOST [--port 8787] --token TOKEN [--progress]
-          download-recording --host HOST [--port 8787] [--http-port 8788] --token TOKEN --recording-id ID --filename NAME --byte-count BYTES --download-path PATH [--checksum SHA256] [--download-dir DIR] [--progress]
+          stop-only --host HOST [--port 8787] --token TOKEN
+          prepare-recording --host HOST [--port 8787] --token TOKEN --recording-id ID [--progress]
+          download-recording --host HOST [--port 8787] [--http-port 8788] --token TOKEN --recording-id ID [--download-dir DIR] [--progress]
           list-recordings --host HOST [--port 8787] --token TOKEN
           delete-recording --host HOST [--port 8787] --token TOKEN --recording-id ID
           ping --host HOST [--port 8787] [--token TOKEN]
@@ -230,9 +258,20 @@ struct VideoSyncMacCLI {
         FileHandle.standardError.write(Data(line.utf8))
     }
 
+    private static func prepareRecording(_ args: CLIArguments, token: String, recordingID: String) async throws -> RecordingDescriptor {
+        let event = try await send(args, type: .prepareRecording) {
+            ControlCommand(type: .prepareRecording, token: token, recordingID: recordingID)
+        }
+        guard event.type == .recordingPrepared, let preparedRecording = event.recording else {
+            throw ControlClientError.unexpectedEvent(event)
+        }
+        return preparedRecording
+    }
+
     private static func pollEncodingProgress(_ args: CLIArguments, token: String) -> Task<Void, Never> {
         Task {
             var lastPrintedPercent = -1
+            var lastPrintedAt = Date.distantPast
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 500_000_000)
                 guard !Task.isCancelled,
@@ -243,10 +282,12 @@ struct VideoSyncMacCLI {
                     continue
                 }
                 let percent = Int(((event.captureProgress ?? 0.0) * 100.0).rounded())
-                guard percent != lastPrintedPercent else {
+                let now = Date()
+                guard percent != lastPrintedPercent || now.timeIntervalSince(lastPrintedAt) >= 5.0 else {
                     continue
                 }
                 lastPrintedPercent = percent
+                lastPrintedAt = now
                 printEncodingProgress(percent: percent)
             }
         }

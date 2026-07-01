@@ -46,4 +46,21 @@ final class ControlProtocolTests: XCTestCase {
         XCTAssertTrue(RecordingFileStateMachine.canTransition(from: .failed, to: .transferring))
         XCTAssertFalse(RecordingFileStateMachine.canTransition(from: .transferred, to: .transferring))
     }
+
+    func testRecordingFileDecodesOlderManifestWithoutLookFields() throws {
+        let json = """
+        {
+          "id": "clip-1",
+          "url": "file:///tmp/clip-1.mov",
+          "createdAt": 772502400,
+          "state": "pending",
+          "byteCount": 42
+        }
+        """
+
+        let recording = try JSONDecoder().decode(RecordingFile.self, from: Data(json.utf8))
+
+        XCTAssertEqual(recording.desiredLook, "natural")
+        XCTAssertNil(recording.renderedLook)
+    }
 }

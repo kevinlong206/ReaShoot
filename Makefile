@@ -44,6 +44,7 @@ install: $(TARGET) $(HELPER_TARGET) $(WEBRTC_FRAMEWORK)
 	mkdir -p "$(HOME)/Library/Application Support/REAPER/UserPlugins"
 	cp $(TARGET) "$(HOME)/Library/Application Support/REAPER/UserPlugins/reaper_video_recorder.dylib"
 	cp $(HELPER_TARGET) "$(HOME)/Library/Application Support/REAPER/UserPlugins/video-sync-mac"
+	codesign --force --sign - "$(HOME)/Library/Application Support/REAPER/UserPlugins/video-sync-mac"
 	rm -rf "$(HOME)/Library/Application Support/REAPER/UserPlugins/LiveKitWebRTC.framework"
 	cp -R $(WEBRTC_FRAMEWORK) "$(HOME)/Library/Application Support/REAPER/UserPlugins/LiveKitWebRTC.framework"
 

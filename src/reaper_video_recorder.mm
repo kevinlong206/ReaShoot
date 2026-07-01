@@ -18,6 +18,7 @@
 #import <QuartzCore/QuartzCore.h>
 
 #include <algorithm>
+#include <cstdarg>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
@@ -113,6 +114,43 @@ constexpr double kAlignmentSampleRefineSearchSeconds = 0.030;
 constexpr double kAlignmentSearchSeconds = 5.0;
 constexpr double kAlignmentMinimumScore = 0.15;
 constexpr int kAlignmentRetryLimit = 15;
+NSString *kDebugLogPath = @"/tmp/reaper_video_recorder_debug.log";
+
+void debugLog(NSString *format, ...) {
+  va_list args;
+  va_start(args, format);
+  NSString *message = [[NSString alloc] initWithFormat:format arguments:args];
+  va_end(args);
+  NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
+  formatter.dateFormat = @"yyyy-MM-dd HH:mm:ss.SSS";
+  NSString *line = [NSString stringWithFormat:@"%@ REAPER %@\n", [formatter stringFromDate:[NSDate date]], message ?: @""];
+  @synchronized (kDebugLogPath) {
+    if (![[NSFileManager defaultManager] fileExistsAtPath:kDebugLogPath]) {
+      [[NSData data] writeToFile:kDebugLogPath atomically:YES];
+    }
+    NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:kDebugLogPath];
+    [handle seekToEndOfFile];
+    [handle writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
+    [handle closeFile];
+  }
+}
+
+NSString *redactedArguments(NSArray<NSString *> *arguments) {
+  NSMutableArray<NSString *> *redacted = [NSMutableArray arrayWithCapacity:arguments.count];
+  BOOL redactNext = NO;
+  for (NSString *argument in arguments) {
+    if (redactNext) {
+      [redacted addObject:@"REDACTED"];
+      redactNext = NO;
+    } else {
+      [redacted addObject:argument ?: @""];
+      if ([argument isEqualToString:@"--token"]) {
+        redactNext = YES;
+      }
+    }
+  }
+  return [redacted componentsJoinedByString:@" "];
+}
 
 reaper_plugin_info_t *g_reaper = nullptr;
 int g_videoEnabledCommand = 0;
@@ -120,6 +158,7 @@ int g_showPreviewCommand = 0;
 int g_floatPreviewCommand = 0;
 int g_alignSelectedCommand = 0;
 int g_restoreIPhoneCommand = 0;
+int g_deleteAllIPhoneCommand = 0;
 int g_toggleFollowCommand = 0;
 int g_previousPlayState = 0;
 bool g_videoEnabled = false;
@@ -1516,6 +1555,8 @@ void setVideoEnabled(bool enabled);
 @property(nonatomic, strong) NSView *previewView;
 @property(nonatomic, strong) NSWindow *floatingPreviewWindow;
 @property(nonatomic, strong) NSButton *iPhoneSetupButton;
+@property(nonatomic, strong) NSButton *iPhonePendingButton;
+@property(nonatomic, strong) NSButton *iPhoneDeleteAllButton;
 @property(nonatomic, strong) NSWindow *iPhoneSetupWindow;
 @property(nonatomic, strong) NSTextField *iPhoneHostField;
 @property(nonatomic, strong) NSTextField *iPhoneTokenField;
@@ -1587,17 +1628,20 @@ void setVideoEnabled(bool enabled);
 - (NSString *)runVideoSyncCommand:(NSString *)command
                    extraArguments:(NSArray<NSString *> *)extraArguments
                             error:(NSError **)error;
-- (void)runVideoSyncCommandAsync:(NSString *)command
-                  extraArguments:(NSArray<NSString *> *)extraArguments
-                      completion:(void (^)(NSString *output, NSError *error))completion;
-- (void)runVideoSyncCommandAsync:(NSString *)command
-                  extraArguments:(NSArray<NSString *> *)extraArguments
-                   outputHandler:(void (^)(NSString *line))outputHandler
-                      completion:(void (^)(NSString *output, NSError *error))completion;
+- (NSTask *)runVideoSyncCommandAsync:(NSString *)command
+                      extraArguments:(NSArray<NSString *> *)extraArguments
+                          completion:(void (^)(NSString *output, NSError *error))completion;
+- (NSTask *)runVideoSyncCommandAsync:(NSString *)command
+                      extraArguments:(NSArray<NSString *> *)extraArguments
+                       outputHandler:(void (^)(NSString *line))outputHandler
+                          completion:(void (^)(NSString *output, NSError *error))completion;
 - (void)handleVideoSyncProgressLine:(NSString *)line;
 - (NSDictionary<NSString *, NSString *> *)recordingDescriptorFromVideoSyncOutput:(NSString *)output;
 - (NSArray<NSDictionary<NSString *, NSString *> *> *)recordingDescriptorsFromVideoSyncOutput:(NSString *)output;
 - (void)promptForStoppedIPhoneRecording:(NSDictionary<NSString *, NSString *> *)recording;
+- (void)deleteIPhoneRecording:(NSDictionary<NSString *, NSString *> *)recording
+                   completion:(void (^)(NSError *error))completion;
+- (void)deleteAllPendingIPhoneRecordings;
 - (void)finishIPhoneStopWithPath:(NSString *)path error:(NSError *)error;
 @end
 
@@ -1778,16 +1822,16 @@ void setVideoEnabled(bool enabled);
   return output;
 }
 
-- (void)runVideoSyncCommandAsync:(NSString *)command
-                  extraArguments:(NSArray<NSString *> *)extraArguments
-                      completion:(void (^)(NSString *output, NSError *error))completion {
-  [self runVideoSyncCommandAsync:command extraArguments:extraArguments outputHandler:nil completion:completion];
+- (NSTask *)runVideoSyncCommandAsync:(NSString *)command
+                      extraArguments:(NSArray<NSString *> *)extraArguments
+                          completion:(void (^)(NSString *output, NSError *error))completion {
+  return [self runVideoSyncCommandAsync:command extraArguments:extraArguments outputHandler:nil completion:completion];
 }
 
-- (void)runVideoSyncCommandAsync:(NSString *)command
-                  extraArguments:(NSArray<NSString *> *)extraArguments
-                   outputHandler:(void (^)(NSString *line))outputHandler
-                      completion:(void (^)(NSString *output, NSError *error))completion {
+- (NSTask *)runVideoSyncCommandAsync:(NSString *)command
+                      extraArguments:(NSArray<NSString *> *)extraArguments
+                       outputHandler:(void (^)(NSString *line))outputHandler
+                          completion:(void (^)(NSString *output, NSError *error))completion {
   NSString *helperPath = [self videoSyncHelperPath];
   if (![[NSFileManager defaultManager] isExecutableFileAtPath:helperPath]) {
     NSError *missingError = [NSError errorWithDomain:@"KlongVideoRecorder"
@@ -1796,12 +1840,13 @@ void setVideoEnabled(bool enabled);
     dispatch_async(dispatch_get_main_queue(), ^{
       completion(nil, missingError);
     });
-    return;
+    return nil;
   }
 
   NSTask *task = [[NSTask alloc] init];
   task.executableURL = [NSURL fileURLWithPath:helperPath];
   task.arguments = [self videoSyncArgumentsForCommand:command extraArguments:extraArguments];
+  debugLog(@"helper async start command=%@ args=%@", command ?: @"", redactedArguments(task.arguments));
   NSPipe *pipe = [NSPipe pipe];
   task.standardOutput = pipe;
   task.standardError = pipe;
@@ -1861,6 +1906,7 @@ void setVideoEnabled(bool enabled);
                                         code:21
                                     userInfo:@{NSLocalizedDescriptionKey: message}];
     }
+    debugLog(@"helper async finish command=%@ status=%d output=%@", command ?: @"", finishedTask.terminationStatus, output ?: @"");
     dispatch_async(dispatch_get_main_queue(), ^{
       completion(output, commandError);
     });
@@ -1868,10 +1914,13 @@ void setVideoEnabled(bool enabled);
 
   NSError *launchError = nil;
   if (![task launchAndReturnError:&launchError]) {
+    debugLog(@"helper async launch failed command=%@ error=%@", command ?: @"", launchError.localizedDescription ?: @"");
     dispatch_async(dispatch_get_main_queue(), ^{
       completion(nil, launchError);
     });
+    return nil;
   }
+  return task;
 }
 
 - (BOOL)startIPhoneRecordingWithSuggestedPath:(const std::string &)path
@@ -2046,10 +2095,37 @@ void setVideoEnabled(bool enabled);
     [arguments addObjectsFromArray:@[ @"--checksum", checksum ]];
   }
   [self setStatus:@"Downloading iPhone video"];
-  [self runVideoSyncCommandAsync:@"download-recording" extraArguments:arguments outputHandler:^(NSString *line) {
+  __block NSDate *lastProgressDate = [NSDate date];
+  __block NSTask *downloadTask = nil;
+  __block dispatch_source_t watchdogTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+  __block BOOL watchdogResumed = NO;
+  dispatch_source_set_timer(watchdogTimer, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(30.0 * NSEC_PER_SEC)), (uint64_t)(30.0 * NSEC_PER_SEC), (uint64_t)(1.0 * NSEC_PER_SEC));
+  dispatch_source_set_event_handler(watchdogTimer, ^{
+    if (!downloadTask || !downloadTask.running) {
+      debugLog(@"download watchdog stopping; task finished or missing");
+      dispatch_source_cancel(watchdogTimer);
+      return;
+    }
+    if ([[NSDate date] timeIntervalSinceDate:lastProgressDate] > 180.0) {
+      [self setStatus:@"iPhone download stalled; retry from Pending"];
+      debugLog(@"download watchdog terminating stalled helper pid=%d", downloadTask.processIdentifier);
+      [downloadTask terminate];
+      dispatch_source_cancel(watchdogTimer);
+    }
+  });
+  debugLog(@"download start id=%@ filename=%@ bytes=%@ dir=%@", recording[@"id"] ?: @"", recording[@"filename"] ?: @"", recording[@"byteCount"] ?: @"", directory ?: @"");
+  downloadTask = [self runVideoSyncCommandAsync:@"download-recording" extraArguments:arguments outputHandler:^(NSString *line) {
+    lastProgressDate = [NSDate date];
+    debugLog(@"download progress line=%@", line ?: @"");
     [self handleVideoSyncProgressLine:line];
   } completion:^(NSString *output, NSError *error) {
+    if (watchdogTimer && watchdogResumed) {
+      dispatch_source_cancel(watchdogTimer);
+      watchdogTimer = nil;
+      watchdogResumed = NO;
+    }
     if (error) {
+      debugLog(@"download failed error=%@ output=%@", error.localizedDescription ?: @"", output ?: @"");
       [self setStatus:@"iPhone download failed"];
       completion(nil, error);
       return;
@@ -2060,9 +2136,18 @@ void setVideoEnabled(bool enabled);
       missingPathError = [NSError errorWithDomain:@"KlongVideoRecorder"
                                              code:23
                                          userInfo:@{NSLocalizedDescriptionKey: @"The iPhone recording downloaded, but video-sync-mac did not report a file path."}];
+      debugLog(@"download missing path output=%@", output ?: @"");
+    } else {
+      debugLog(@"download complete path=%@", path ?: @"");
     }
     completion(path, missingPathError);
   }];
+  if (downloadTask) {
+    dispatch_resume(watchdogTimer);
+    watchdogResumed = YES;
+  } else {
+    debugLog(@"download helper failed to launch");
+  }
 }
 
 - (void)downloadStoppedIPhoneRecording:(NSDictionary<NSString *, NSString *> *)recording {
@@ -2074,12 +2159,25 @@ void setVideoEnabled(bool enabled);
 }
 
 - (void)deleteStoppedIPhoneRecording:(NSDictionary<NSString *, NSString *> *)recording {
+  [self deleteIPhoneRecording:recording completion:^(NSError *error) {
+    if (error) {
+      [self finishIPhoneStopWithPath:nil error:error];
+      return;
+    }
+    [self finishIPhoneStopWithPath:nil error:nil];
+  }];
+}
+
+- (void)deleteIPhoneRecording:(NSDictionary<NSString *, NSString *> *)recording
+                   completion:(void (^)(NSError *error))completion {
   NSString *recordingID = recording[@"id"];
   if (recordingID.length == 0) {
     NSError *error = [NSError errorWithDomain:@"KlongVideoRecorder"
                                          code:24
                                      userInfo:@{NSLocalizedDescriptionKey: @"The iPhone recording stopped, but video-sync-mac did not report a recording ID to delete."}];
-    [self finishIPhoneStopWithPath:nil error:error];
+    if (completion) {
+      completion(error);
+    }
     return;
   }
   [self setStatus:@"Deleting iPhone video"];
@@ -2093,26 +2191,28 @@ void setVideoEnabled(bool enabled);
     (void)output;
     if (error) {
       [self setStatus:@"iPhone delete failed"];
-      [self finishIPhoneStopWithPath:nil error:error];
+      if (completion) {
+        completion(error);
+      }
       return;
     }
     [self setStatus:@"iPhone video deleted"];
-    [self finishIPhoneStopWithPath:nil error:nil];
+    if (completion) {
+      completion(nil);
+    }
   }];
 }
 
-- (NSDictionary<NSString *, NSString *> *)chooseIPhoneRecordingToRestore:(NSArray<NSDictionary<NSString *, NSString *> *> *)recordings {
+- (NSDictionary<NSString *, id> *)choosePendingIPhoneRecordingAction:(NSArray<NSDictionary<NSString *, NSString *> *> *)recordings {
   if (recordings.count == 0) {
     return nil;
   }
-  if (recordings.count == 1) {
-    return recordings.firstObject;
-  }
 
   NSAlert *alert = [[NSAlert alloc] init];
-  alert.messageText = @"Restore iPhone Recording";
-  alert.informativeText = @"Choose a pending iPhone recording to download and insert at the current edit cursor.";
-  [alert addButtonWithTitle:@"Restore"];
+  alert.messageText = @"Pending iPhone Recordings";
+  alert.informativeText = @"Choose a pending iPhone recording to download and insert at the current edit cursor, or delete it from the phone.";
+  [alert addButtonWithTitle:@"Download"];
+  [alert addButtonWithTitle:@"Delete"];
   [alert addButtonWithTitle:@"Cancel"];
 
   NSPopUpButton *popup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 420, 26) pullsDown:NO];
@@ -2123,10 +2223,16 @@ void setVideoEnabled(bool enabled);
     popup.lastItem.representedObject = recording;
   }
   alert.accessoryView = popup;
-  if ([alert runModal] != NSAlertFirstButtonReturn) {
+  NSModalResponse response = [alert runModal];
+  if (response == NSAlertThirdButtonReturn) {
     return nil;
   }
-  return popup.selectedItem.representedObject;
+  NSDictionary<NSString *, NSString *> *recording = popup.selectedItem.representedObject;
+  if (!recording) {
+    return nil;
+  }
+  NSString *action = response == NSAlertSecondButtonReturn ? @"delete" : @"download";
+  return @{@"action": action, @"recording": recording};
 }
 
 - (void)restoreIPhoneRecording {
@@ -2153,9 +2259,31 @@ void setVideoEnabled(bool enabled);
       return;
     }
 
-    NSDictionary<NSString *, NSString *> *recording = [self chooseIPhoneRecordingToRestore:recordings];
-    if (!recording) {
+    NSDictionary<NSString *, id> *choice = [self choosePendingIPhoneRecordingAction:recordings];
+    if (!choice) {
       [self setStatus:@"Restore canceled"];
+      return;
+    }
+    NSDictionary<NSString *, NSString *> *recording = choice[@"recording"];
+    NSString *action = choice[@"action"];
+    if ([action isEqualToString:@"delete"]) {
+      NSString *filename = recording[@"filename"] ?: recording[@"id"] ?: @"the selected iPhone video";
+      NSAlert *confirm = [[NSAlert alloc] init];
+      confirm.messageText = @"Delete pending iPhone recording?";
+      confirm.informativeText = [NSString stringWithFormat:@"Delete %@ from the iPhone without downloading it?", filename];
+      [confirm addButtonWithTitle:@"Delete"];
+      [confirm addButtonWithTitle:@"Cancel"];
+      if ([confirm runModal] != NSAlertFirstButtonReturn) {
+        [self setStatus:@"Delete canceled"];
+        return;
+      }
+      [self deleteIPhoneRecording:recording completion:^(NSError *deleteError) {
+        if (deleteError) {
+          showError(deleteError.localizedDescription.UTF8String ?: "iPhone delete failed.");
+          return;
+        }
+        [self setStatus:@"Deleted pending iPhone recording"];
+      }];
       return;
     }
 
@@ -2184,6 +2312,63 @@ void setVideoEnabled(bool enabled);
         showError(insertError);
       }
     }];
+  }];
+}
+
+- (void)deletePendingIPhoneRecordings:(NSArray<NSDictionary<NSString *, NSString *> *> *)recordings
+                                index:(NSUInteger)index
+                              deleted:(NSUInteger)deleted {
+  if (index >= recordings.count) {
+    [self setStatus:[NSString stringWithFormat:@"Deleted %lu pending iPhone recording(s)", (unsigned long)deleted]];
+    return;
+  }
+
+  NSDictionary<NSString *, NSString *> *recording = recordings[index];
+  [self deleteIPhoneRecording:recording completion:^(NSError *deleteError) {
+    if (deleteError) {
+      [self setStatus:@"iPhone delete all failed"];
+      showError(deleteError.localizedDescription.UTF8String ?: "iPhone delete failed.");
+      return;
+    }
+    [self deletePendingIPhoneRecordings:recordings index:index + 1 deleted:deleted + 1];
+  }];
+}
+
+- (void)deleteAllPendingIPhoneRecordings {
+  [self persistIPhoneSettings];
+  if (g_iPhoneHost.empty() || g_iPhoneToken.empty()) {
+    [self setStatus:@"Set iPhone host and token before delete"];
+    return;
+  }
+
+  [self setStatus:@"Checking iPhone recordings"];
+  [self runVideoSyncCommandAsync:@"list-recordings"
+                  extraArguments:@[ @"--token", [NSString stringWithUTF8String:g_iPhoneToken.c_str()] ]
+                      completion:^(NSString *output, NSError *error) {
+    if (error) {
+      [self setStatus:@"iPhone recording list failed"];
+      showError(error.localizedDescription.UTF8String ?: "iPhone recording list failed.");
+      return;
+    }
+
+    NSArray<NSDictionary<NSString *, NSString *> *> *recordings = [self recordingDescriptorsFromVideoSyncOutput:output ?: @""];
+    if (recordings.count == 0) {
+      [self setStatus:@"No pending iPhone recordings"];
+      showError("No pending iPhone recordings were found on the phone.");
+      return;
+    }
+
+    NSAlert *confirm = [[NSAlert alloc] init];
+    confirm.messageText = @"Delete all pending iPhone recordings?";
+    confirm.informativeText = [NSString stringWithFormat:@"Delete %lu pending video(s) from the iPhone without downloading them?", (unsigned long)recordings.count];
+    [confirm addButtonWithTitle:@"Delete All"];
+    [confirm addButtonWithTitle:@"Cancel"];
+    if ([confirm runModal] != NSAlertFirstButtonReturn) {
+      [self setStatus:@"Delete all canceled"];
+      return;
+    }
+
+    [self deletePendingIPhoneRecordings:recordings index:0 deleted:0];
   }];
 }
 
@@ -2231,12 +2416,9 @@ void setVideoEnabled(bool enabled);
   [self setStatus:@"Stopping iPhone recording"];
   NSArray<NSString *> *arguments = @[
     @"--token",
-    [NSString stringWithUTF8String:g_iPhoneToken.c_str()],
-    @"--progress"
+    [NSString stringWithUTF8String:g_iPhoneToken.c_str()]
   ];
-  [self runVideoSyncCommandAsync:@"stop-only" extraArguments:arguments outputHandler:^(NSString *line) {
-    [self handleVideoSyncProgressLine:line];
-  } completion:^(NSString *output, NSError *error) {
+  [self runVideoSyncCommandAsync:@"stop-only" extraArguments:arguments completion:^(NSString *output, NSError *error) {
     self.remoteRecording = NO;
     [self setRecordingVisualState:NO];
     if (error) {
@@ -2666,6 +2848,22 @@ void setVideoEnabled(bool enabled);
     self.iPhoneSetupButton.target = self;
     self.iPhoneSetupButton.action = @selector(showIPhoneSetup:);
     [self.dockView addSubview:self.iPhoneSetupButton];
+
+    self.iPhoneDeleteAllButton = [[NSButton alloc] initWithFrame:NSMakeRect(frame.size.width - 216, 101, 96, 24)];
+    self.iPhoneDeleteAllButton.title = @"Delete All";
+    self.iPhoneDeleteAllButton.bezelStyle = NSBezelStyleRounded;
+    self.iPhoneDeleteAllButton.autoresizingMask = NSViewMinXMargin | NSViewMaxYMargin;
+    self.iPhoneDeleteAllButton.target = self;
+    self.iPhoneDeleteAllButton.action = @selector(deleteAllPendingIPhoneRecordings);
+    [self.dockView addSubview:self.iPhoneDeleteAllButton];
+
+    self.iPhonePendingButton = [[NSButton alloc] initWithFrame:NSMakeRect(frame.size.width - 328, 101, 104, 24)];
+    self.iPhonePendingButton.title = @"Pending...";
+    self.iPhonePendingButton.bezelStyle = NSBezelStyleRounded;
+    self.iPhonePendingButton.autoresizingMask = NSViewMinXMargin | NSViewMaxYMargin;
+    self.iPhonePendingButton.target = self;
+    self.iPhonePendingButton.action = @selector(restoreIPhoneRecording);
+    [self.dockView addSubview:self.iPhonePendingButton];
 
     self.iPhoneHostField = [[NSTextField alloc] initWithFrame:NSMakeRect(12, 127, (frame.size.width - 36) / 2.0, 22)];
     self.iPhoneHostField.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
@@ -3798,6 +3996,11 @@ bool hookCommand2(KbdSectionInfo *section, int command, int val, int val2, int r
     return true;
   }
 
+  if (command == g_deleteAllIPhoneCommand) {
+    [recorder() deleteAllPendingIPhoneRecordings];
+    return true;
+  }
+
   if (command == g_toggleFollowCommand) {
     setFollowEnabled(!g_followEnabled);
     if (!g_followEnabled && recorder().isRecording) {
@@ -3859,6 +4062,12 @@ bool registerActions(reaper_plugin_info_t *rec) {
       "Video Recorder: Restore Pending iPhone Recording",
       nullptr,
   };
+  custom_action_register_t deleteAllIPhoneAction = {
+      0,
+      "KLONG_VIDEO_RECORDER_DELETE_ALL_IPHONE",
+      "Video Recorder: Delete All Pending iPhone Recordings",
+      nullptr,
+  };
   custom_action_register_t toggleFollowAction = {
       0,
       "KLONG_VIDEO_RECORDER_TOGGLE_FOLLOW",
@@ -3871,10 +4080,12 @@ bool registerActions(reaper_plugin_info_t *rec) {
   g_floatPreviewCommand = rec->Register("custom_action", &floatPreviewAction);
   g_alignSelectedCommand = rec->Register("custom_action", &alignSelectedAction);
   g_restoreIPhoneCommand = rec->Register("custom_action", &restoreIPhoneAction);
+  g_deleteAllIPhoneCommand = rec->Register("custom_action", &deleteAllIPhoneAction);
   g_toggleFollowCommand = rec->Register("custom_action", &toggleFollowAction);
 
   return g_videoEnabledCommand != 0 && g_showPreviewCommand != 0 && g_floatPreviewCommand != 0 &&
-         g_alignSelectedCommand != 0 && g_restoreIPhoneCommand != 0 && g_toggleFollowCommand != 0 &&
+         g_alignSelectedCommand != 0 && g_restoreIPhoneCommand != 0 && g_deleteAllIPhoneCommand != 0 &&
+         g_toggleFollowCommand != 0 &&
          rec->Register("hookcommand2", reinterpret_cast<void *>(hookCommand2)) &&
          rec->Register("toggleaction", reinterpret_cast<void *>(toggleActionHook)) &&
          rec->Register("timer", reinterpret_cast<void *>(timerPoll)) &&

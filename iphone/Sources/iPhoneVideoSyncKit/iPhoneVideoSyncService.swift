@@ -7,6 +7,37 @@ import UIKit
 import VideoSyncCore
 #endif
 
+enum DebugLog {
+    private static let lock = NSLock()
+    private static let url = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("reaper_video_recorder_debug.log")
+    private static let formatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
+        return formatter
+    }()
+
+    static func write(_ message: String) {
+        let line = "\(formatter.string(from: Date())) iPhoneVideoSync \(message)\n"
+        guard let data = line.data(using: .utf8) else {
+            return
+        }
+        lock.lock()
+        defer { lock.unlock() }
+        if !FileManager.default.fileExists(atPath: url.path) {
+            FileManager.default.createFile(atPath: url.path, contents: nil)
+        }
+        guard let handle = try? FileHandle(forWritingTo: url) else {
+            return
+        }
+        defer { try? handle.close() }
+        do {
+            try handle.seekToEnd()
+            try handle.write(contentsOf: data)
+        } catch {
+        }
+    }
+}
+
 @MainActor
 public final class iPhoneVideoSyncService: ObservableObject {
     @Published public private(set) var status = "Stopped"
@@ -39,6 +70,11 @@ public final class iPhoneVideoSyncService: ObservableObject {
             }
             .store(in: &cancellables)
         self.capture.objectWillChange
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+            .store(in: &cancellables)
+        self.store.objectWillChange
             .sink { [weak self] _ in
                 self?.objectWillChange.send()
             }
@@ -111,14 +147,35 @@ public final class iPhoneVideoSyncService: ObservableObject {
         UIApplication.shared.isIdleTimerDisabled = enabled
     }
 
+    private func descriptor(for recording: RecordingFile) -> RecordingDescriptor {
+        RecordingDescriptor(
+            id: recording.id,
+            filename: recording.url.lastPathComponent,
+            byteCount: recording.byteCount,
+            checksumSHA256: recording.checksumSHA256,
+            downloadPath: "/recordings/\(recording.id)"
+        )
+    }
+
     public func resetPairing() {
         pairingStore.reset()
         updateBonjourTXTRecord()
         status = "Pairing reset"
     }
 
+    public func deletePendingRecording(id: String) {
+        do {
+            try store.deleteRecording(id: id)
+            status = "Deleted pending video"
+            lastError = nil
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
     private func handleControlMessage(_ data: Data) async throws -> Data {
         let command = try ProtocolCodec.decodeCommand(data)
+        DebugLog.write("control command type=\(command.type.rawValue) recordingID=\(command.recordingID ?? "nil")")
 
         switch command.type {
         case .pair:
@@ -157,27 +214,18 @@ public final class iPhoneVideoSyncService: ObservableObject {
                 return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .error, message: "Unauthorized"))
             }
             let recording = try await capture.stopRecording()
-            let descriptor = RecordingDescriptor(
-                id: recording.id,
-                filename: recording.url.lastPathComponent,
-                byteCount: recording.byteCount,
-                checksumSHA256: recording.checksumSHA256,
-                downloadPath: "/recordings/\(recording.id)"
-            )
-            return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .recordingStopped, recording: descriptor, message: "Recording stopped"))
+            return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .recordingStopped, recording: descriptor(for: recording), message: "Recording stopped"))
+        case .prepareRecording:
+            guard pairingStore.validate(token: command.token), let id = command.recordingID else {
+                return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .error, message: "Unauthorized"))
+            }
+            let recording = try await capture.prepareRecordingForDownload(id: id)
+            return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .recordingPrepared, recording: descriptor(for: recording), message: "Recording prepared"))
         case .listRecordings:
             guard pairingStore.validate(token: command.token) else {
                 return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .error, message: "Unauthorized"))
             }
-            let descriptors = store.recordings.map { recording in
-                RecordingDescriptor(
-                    id: recording.id,
-                    filename: recording.url.lastPathComponent,
-                    byteCount: recording.byteCount,
-                    checksumSHA256: recording.checksumSHA256,
-                    downloadPath: "/recordings/\(recording.id)"
-                )
-            }
+            let descriptors = store.recordings.map { descriptor(for: $0) }
             return try ProtocolCodec.encodeEvent(ControlEvent(
                 requestID: command.requestID,
                 type: .recordingsListed,

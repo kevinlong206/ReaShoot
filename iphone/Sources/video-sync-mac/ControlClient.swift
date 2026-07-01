@@ -76,6 +76,9 @@ final class ControlClient {
         while let address = pointer {
             let fd = socket(address.pointee.ai_family, address.pointee.ai_socktype, address.pointee.ai_protocol)
             if fd >= 0 {
+                var timeout = timeval(tv_sec: 20, tv_usec: 0)
+                setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+                setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
                 if connect(fd, address.pointee.ai_addr, address.pointee.ai_addrlen) == 0 {
                     return fd
                 }

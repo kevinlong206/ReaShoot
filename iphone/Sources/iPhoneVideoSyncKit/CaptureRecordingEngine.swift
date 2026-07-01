@@ -348,6 +348,7 @@ public enum CaptureError: Error, LocalizedError {
     case notRecording
     case cannotChangeProfileWhileRecording
     case lensUnavailable(String)
+    case recordingNotFound(String)
 
     public var errorDescription: String? {
         switch self {
@@ -367,6 +368,8 @@ public enum CaptureError: Error, LocalizedError {
             return "Capture profile cannot be changed while recording."
         case .lensUnavailable(let lens):
             return "The requested iPhone lens is not available: \(lens)."
+        case .recordingNotFound(let id):
+            return "Recording not found: \(id)."
         }
     }
 }
@@ -478,6 +481,16 @@ private final class PreviewFrameStore: NSObject, AVCaptureVideoDataOutputSampleB
     }
 }
 
+private enum RecordingFileInspector {
+    static func fileInfo(for url: URL) async -> (byteCount: Int64, checksum: String?) {
+        await Task.detached(priority: .utility) {
+            let byteCount = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64) ?? 0
+            let checksum = try? Checksum.sha256(forFileAt: url)
+            return (byteCount, checksum)
+        }.value
+    }
+}
+
 @MainActor
 public final class CaptureRecordingEngine: NSObject, ObservableObject {
     @Published public private(set) var isConfigured = false
@@ -495,6 +508,7 @@ public final class CaptureRecordingEngine: NSObject, ObservableObject {
     private var videoDevice: AVCaptureDevice?
     private var videoInput: AVCaptureDeviceInput?
     private var activeRecordingID: String?
+    private var activeRecordingLook = "natural"
     private var stopContinuation: CheckedContinuation<RecordingFile, Error>?
 
     public init(store: RecordingStore) {
@@ -591,6 +605,7 @@ public final class CaptureRecordingEngine: NSObject, ObservableObject {
 
         let recording = store.newRecordingURL(sessionID: sessionID)
         activeRecordingID = recording.id
+        activeRecordingLook = normalizedLook(currentProfile.look)
         previewFrameStore.setTargetFPS(6.0)
         applyOrientation()
         movieOutput.startRecording(to: recording.url, recordingDelegate: self)
@@ -688,9 +703,20 @@ public final class CaptureRecordingEngine: NSObject, ObservableObject {
 
         nonisolated(unsafe) let exportSession = export
         lookExportProgress = 0.0
+        let progressStallLimit: TimeInterval = 120.0
+        var lastProgress = 0.0
+        var lastProgressDate = Date()
         let progressTask = Task { [weak self] in
             while !Task.isCancelled {
                 let progress = Double(exportSession.progress)
+                if progress > lastProgress + 0.001 {
+                    lastProgress = progress
+                    lastProgressDate = Date()
+                } else if Date().timeIntervalSince(lastProgressDate) > progressStallLimit {
+                    DebugLog.write("look export stalled progress=\(progress); canceling")
+                    exportSession.cancelExport()
+                    return
+                }
                 await MainActor.run {
                     self?.lookExportProgress = progress
                 }
@@ -715,6 +741,48 @@ public final class CaptureRecordingEngine: NSObject, ObservableObject {
 
         lookExportProgress = 1.0
         return outputURL
+    }
+
+    public func prepareRecordingForDownload(id: String) async throws -> RecordingFile {
+        DebugLog.write("prepare recording start id=\(id)")
+        guard var recording = store.recording(id: id) else {
+            DebugLog.write("prepare recording missing id=\(id)")
+            throw CaptureError.recordingNotFound(id)
+        }
+
+        let look = normalizedLook(recording.desiredLook)
+        guard look != "natural", recording.renderedLook != look else {
+            DebugLog.write("prepare recording no export id=\(id) look=\(look) rendered=\(recording.renderedLook ?? "nil")")
+            return recording
+        }
+
+        isApplyingLook = true
+        lookExportProgress = 0.0
+        do {
+            lastError = nil
+            let renderedURL = try await filteredRecordingURL(for: recording.url, recordingID: recording.id, look: look)
+            DebugLog.write("prepare recording export complete id=\(id) url=\(renderedURL.lastPathComponent)")
+            if renderedURL != recording.url {
+                try? FileManager.default.removeItem(at: recording.url)
+            }
+            let fileInfo = await RecordingFileInspector.fileInfo(for: renderedURL)
+            recording.url = renderedURL
+            recording.byteCount = fileInfo.byteCount
+            recording.checksumSHA256 = fileInfo.checksum
+            recording.desiredLook = look
+            recording.renderedLook = look
+            store.upsert(recording)
+            DebugLog.write("prepare recording stored id=\(id) bytes=\(recording.byteCount) checksum=\(recording.checksumSHA256 ?? "nil")")
+            isApplyingLook = false
+            lookExportProgress = nil
+            return recording
+        } catch {
+            isApplyingLook = false
+            lookExportProgress = nil
+            lastError = error.localizedDescription
+            DebugLog.write("prepare recording failed id=\(id) error=\(error.localizedDescription)")
+            throw error
+        }
     }
 
     private func cameraDevice(for lens: String) throws -> AVCaptureDevice {
@@ -860,40 +928,21 @@ extension CaptureRecordingEngine: AVCaptureFileOutputRecordingDelegate {
                 return
             }
 
-            var finalURL = outputFileURL
-            let look = currentProfile.look
-            if normalizedLook(look) != "natural" {
-                isApplyingLook = true
-                lookExportProgress = 0.0
-                do {
-                    lastError = nil
-                    finalURL = try await filteredRecordingURL(for: outputFileURL, recordingID: activeRecordingID ?? outputFileURL.deletingPathExtension().lastPathComponent, look: look)
-                    isApplyingLook = false
-                    lookExportProgress = nil
-                    if finalURL != outputFileURL {
-                        try? FileManager.default.removeItem(at: outputFileURL)
-                    }
-                } catch {
-                    isApplyingLook = false
-                    lookExportProgress = nil
-                    lastError = error.localizedDescription
-                    stopContinuation?.resume(throwing: error)
-                    stopContinuation = nil
-                    return
-                }
-            }
-
-            let byteCount = (try? FileManager.default.attributesOfItem(atPath: finalURL.path)[.size] as? Int64) ?? 0
-            let checksum = try? Checksum.sha256(forFileAt: finalURL)
+            let look = activeRecordingLook
+            DebugLog.write("recording finished raw url=\(outputFileURL.lastPathComponent) look=\(look)")
+            let fileInfo = await RecordingFileInspector.fileInfo(for: outputFileURL)
             let recording = RecordingFile(
-                id: activeRecordingID ?? finalURL.deletingPathExtension().lastPathComponent,
-                url: finalURL,
+                id: activeRecordingID ?? outputFileURL.deletingPathExtension().lastPathComponent,
+                url: outputFileURL,
                 state: .pending,
-                byteCount: byteCount,
-                checksumSHA256: checksum
+                byteCount: fileInfo.byteCount,
+                checksumSHA256: fileInfo.checksum,
+                desiredLook: look,
+                renderedLook: "natural"
             )
             store.upsert(recording)
             activeRecordingID = nil
+            activeRecordingLook = "natural"
             stopContinuation?.resume(returning: recording)
             stopContinuation = nil
         }

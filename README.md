@@ -10,6 +10,7 @@ macOS-only REAPER extension for controlling the companion iPhone Video Sync app 
   - `Video Recorder: Float/Dock Preview`
   - `Video Recorder: Align Selected Video Item`
   - `Video Recorder: Restore Pending iPhone Recording`
+  - `Video Recorder: Delete All Pending iPhone Recordings`
   - `Video Recorder: Enable/Disable Transport Follow`
 - Adds a main-toolbar toggle button for enabling/disabling all video behavior.
 - Shows the iPhone live preview in a native macOS preview window.
@@ -35,10 +36,10 @@ macOS-only REAPER extension for controlling the companion iPhone Video Sync app 
 - The iPhone preview uses the bundled `LiveKitWebRTC.framework` as the only preview transport. The iPhone renders the selected look into low-resolution preview frames before sending them to REAPER.
 - The dock includes capture profile controls for resolution, FPS, orientation, social aspect ratio, lens, zoom, and baked-in artistic look. Changing a profile control sends the new profile to the iPhone immediately when paired.
 - The look picker keeps the custom looks plus a curated Core Image subset for music-video use, including thermal/X-ray, gradients/edges, crystallize/pixel/halftone, and a few kaleidoscope/distortion looks. `Prev` and `Next` buttons beside the picker make it quick to audition looks.
-- During iPhone recording stop, the dock status shows video transfer progress while the full-resolution movie downloads.
-- If a non-natural iPhone look is selected, the dock status shows on-phone look encoding progress before the download prompt appears.
+- During iPhone recording stop, REAPER prompts before any on-phone look encoding so unwanted takes can be deleted without waiting.
+- If a non-natural iPhone look is selected and the user chooses Download, the dock status shows on-phone look encoding progress before the full-resolution movie downloads.
 - When an iPhone recording stops, REAPER prompts to either download the video or delete it from the iPhone. Delete requires a second confirmation; canceling that confirmation downloads instead.
-- If a download fails or is canceled before transfer acknowledgement, the iPhone keeps the pending recording. Use `Video Recorder: Restore Pending iPhone Recording` to list pending clips on the phone, download one, insert it at the current edit cursor, and acknowledge transfer so the phone deletes its local copy.
+- If a download fails or is canceled before transfer acknowledgement, the iPhone keeps the pending recording. Use the preview window's `Pending...` button or `Video Recorder: Restore Pending iPhone Recording` to list pending clips on the phone, then either download one into the project or delete it from the phone. Use `Delete All` in the preview window or `Video Recorder: Delete All Pending iPhone Recordings` to remove every pending clip from the phone after confirmation.
 - After the Mac verifies the downloaded movie and acknowledges transfer, the iPhone app deletes its local copy immediately.
 - The iPhone app disables the idle timer while it is ready/listening so the phone does not sleep and interrupt preview on a tripod.
 - The iPhone app status screen shows `Keep awake: Yes` when the idle timer is disabled.
@@ -78,6 +79,7 @@ GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=all \
 make install
 codesign --force --sign - "$HOME/Library/Application Support/REAPER/UserPlugins/reaper_video_recorder.dylib"
 codesign --force --sign - "$HOME/Library/Application Support/REAPER/UserPlugins/LiveKitWebRTC.framework"
+codesign --verify "$HOME/Library/Application Support/REAPER/UserPlugins/video-sync-mac"
 codesign --verify "$HOME/Library/Application Support/REAPER/UserPlugins/reaper_video_recorder.dylib"
 codesign --verify "$HOME/Library/Application Support/REAPER/UserPlugins/LiveKitWebRTC.framework"
 ```
@@ -100,7 +102,7 @@ codesign --force --sign - "$HOME/Library/Application Support/REAPER/UserPlugins/
 - `video-sync-mac usb-host` reports the current USB tunnel host when the phone is connected, unlocked/trusted, and visible to `devicectl`; if the device is wired and paired but the tunnel is not connected, the helper asks CoreDevice to activate it. REAPER uses this automatically when possible.
 - When USB is available, REAPER filters WebRTC ICE candidates to the USB tunnel prefix so preview media does not silently choose Wi-Fi.
 - To use the extension, launch the iPhone app, click `iPhone Setup` in the REAPER dock, click `Discover`, enter the pairing code shown on the iPhone, click `Pair`, then click `Test` to verify preview/control before recording.
-- The iPhone app shows the currently configured capture profile. Aspect ratio is currently metadata/framing intent; resolution, FPS, orientation, lens, zoom, and selected look are applied on the iPhone side. Non-natural looks are applied after recording stops and are baked into the downloaded movie while preserving the camera audio track.
+- The iPhone app shows the currently configured capture profile and pending recordings. Pending videos can be deleted directly in the app. Aspect ratio is currently metadata/framing intent; resolution, FPS, orientation, lens, zoom, and selected look are applied on the iPhone side. Non-natural looks are applied only after the user chooses to download a stopped clip and are baked into the downloaded movie while preserving the camera audio track.
 - Lens options depend on the connected iPhone hardware. Zoom is clamped to the selected camera's supported range; values beyond a physical lens's native view may be digital crop rather than guaranteed optical zoom.
 - Captures are written under `Video Recordings` in the saved project directory, or under REAPER's resource path for unsaved projects.
 - A tested recording inspected with `ffprobe` was `1920x1080` H.264 at a stable ~30 fps and ~24 Mbps, so laggy motion in the docked preview can be a preview playback issue rather than a bad recording.

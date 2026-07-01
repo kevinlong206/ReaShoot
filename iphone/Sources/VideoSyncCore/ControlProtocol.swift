@@ -9,6 +9,7 @@ public enum CommandType: String, Codable, Sendable {
     case configureCapture
     case startRecording
     case stopRecording
+    case prepareRecording
     case listRecordings
     case transferComplete
     case deleteRecording
@@ -23,6 +24,7 @@ public enum EventType: String, Codable, Sendable {
     case captureConfigured
     case recordingStarted
     case recordingStopped
+    case recordingPrepared
     case recordingsListed
     case transferAcknowledged
     case recordingDeleted

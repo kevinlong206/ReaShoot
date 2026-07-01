@@ -3,9 +3,13 @@ import SwiftUI
 #if canImport(iPhoneVideoSyncKit)
 import iPhoneVideoSyncKit
 #endif
+#if canImport(VideoSyncCore)
+import VideoSyncCore
+#endif
 
 struct ContentView: View {
     @EnvironmentObject private var service: iPhoneVideoSyncService
+    @State private var recordingToDelete: RecordingFile?
 
     var body: some View {
         NavigationStack {
@@ -35,18 +39,57 @@ struct ContentView: View {
                         Text("No recordings yet.")
                     } else {
                         ForEach(service.store.recordings) { recording in
-                            VStack(alignment: .leading) {
-                                Text(recording.url.lastPathComponent)
-                                Text("\(recording.byteCount) bytes - \(recording.state.rawValue)")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                            HStack(alignment: .top) {
+                                VStack(alignment: .leading) {
+                                    Text(recording.url.lastPathComponent)
+                                    Text("\(recording.byteCount) bytes - \(recording.state.rawValue)")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Button("Delete", role: .destructive) {
+                                    recordingToDelete = recording
+                                }
+                            }
+                            .swipeActions {
+                                Button("Delete", role: .destructive) {
+                                    recordingToDelete = recording
+                                }
                             }
                         }
                     }
                 }
             }
             .navigationTitle("Video Sync")
+            .confirmationDialog(
+                "Delete pending video?",
+                isPresented: isShowingDeleteConfirmation,
+                titleVisibility: .visible
+            ) {
+                if let recording = recordingToDelete {
+                    Button("Delete \(recording.url.lastPathComponent)", role: .destructive) {
+                        service.deletePendingRecording(id: recording.id)
+                        recordingToDelete = nil
+                    }
+                }
+                Button("Cancel", role: .cancel) {
+                    recordingToDelete = nil
+                }
+            } message: {
+                Text("This removes the video from the iPhone without downloading it.")
+            }
         }
+    }
+
+    private var isShowingDeleteConfirmation: Binding<Bool> {
+        Binding(
+            get: { recordingToDelete != nil },
+            set: { isPresented in
+                if !isPresented {
+                    recordingToDelete = nil
+                }
+            }
+        )
     }
 
     private var recordingStatus: String {

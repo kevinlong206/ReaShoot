@@ -26,6 +26,7 @@ GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=all m
 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=all make install
 codesign --force --sign - "$HOME/Library/Application Support/REAPER/UserPlugins/LiveKitWebRTC.framework"
 codesign --force --sign - "$HOME/Library/Application Support/REAPER/UserPlugins/reaper_video_recorder.dylib"
+codesign --verify "$HOME/Library/Application Support/REAPER/UserPlugins/video-sync-mac"
 codesign --verify "$HOME/Library/Application Support/REAPER/UserPlugins/reaper_video_recorder.dylib"
 codesign --verify "$HOME/Library/Application Support/REAPER/UserPlugins/LiveKitWebRTC.framework"
 ```
@@ -72,15 +73,16 @@ rm -rf iphone/Package.resolved iphone/.build helper/.build
   - `Video Recorder: Float/Dock Preview`
   - `Video Recorder: Align Selected Video Item`
   - `Video Recorder: Restore Pending iPhone Recording`
+  - `Video Recorder: Delete All Pending iPhone Recordings`
   - `Video Recorder: Enable/Disable Transport Follow`
 - The user has a main-toolbar button wired to `_KLONG_VIDEO_RECORDER_ENABLE` in `~/Library/Application Support/REAPER/reaper-menu.ini`.
 - Video features are off by default. Enabling video shows the floating preview by default and creates/reuses a `Video Recorder` track.
 - The `Video Recorder` track is forced to REAPER record-disabled state: unarmed, no input, record mode `none`, monitoring off, item monitoring off, and auto-recarm off.
 - The extension is iPhone-only. The preview has iPhone setup/profile controls and a format/status area below the video. The format label shows USB/Wi-Fi transport, resolution, FPS, orientation, aspect, lens, zoom, selected look, and preview size. The look row has `Prev`/`Next` buttons for quick auditioning. Format/status text turns red while recording.
 - For `iPhone Video Sync`, REAPER controls the companion iPhone app over WebSocket port `8787`, downloads recordings over HTTP port `8788`, and uses authenticated WebRTC control messages for preview. REAPER refreshes the USB host via helper `usb-host` before control/preview/download calls; if a wired paired device has no active tunnel, the helper asks CoreDevice to activate it. If no USB host is available, REAPER uses the saved host from setup/discovery.
-- The helper `stop --progress` command emits `progress bytes=... total=... percent=...` lines while downloading; REAPER parses these live and shows transfer progress in the dock status label.
-- REAPER's iPhone stop flow uses helper `stop-only`, prompts for Download vs Delete, then calls either `download-recording --progress` or confirmed `delete-recording`. Canceling delete confirmation downloads instead.
-- Failed/canceled downloads remain pending on the phone because the Mac only sends transfer acknowledgement after verifying the downloaded file. `Video Recorder: Restore Pending iPhone Recording` calls helper `list-recordings`, prompts for a clip, then uses `download-recording --progress` and inserts at the current edit cursor.
+- The helper `stop --progress` command emits `encode percent=...` while preparing non-natural looks and `progress bytes=... total=... percent=...` while downloading; REAPER parses these live and shows progress in the dock status label.
+- REAPER's iPhone stop flow uses helper `stop-only` to receive raw pending recording metadata immediately, prompts for Download vs Delete before look encoding, then calls either `download-recording --progress` or confirmed `delete-recording`. Canceling delete confirmation downloads instead.
+- Failed/canceled downloads remain pending on the phone because the Mac only sends transfer acknowledgement after verifying the downloaded file. The preview window has `Pending...` and `Delete All` buttons. `Pending...` / `Video Recorder: Restore Pending iPhone Recording` calls helper `list-recordings`, prompts for a clip, then can either download/insert with `download-recording --progress` at the current edit cursor or delete the pending recording with `delete-recording`. `Delete All` / `Video Recorder: Delete All Pending iPhone Recordings` lists pending clips, confirms, then deletes them all.
 - After the helper verifies checksum and sends `transferComplete`, the iPhone app deletes the transferred local `.mov` immediately.
 - iPhone preview uses WebRTC only with `LiveKitWebRTC.framework` and a docked `LKRTCMTLVideoView`; there is no HTTP preview fallback.
 - WebRTC signaling uses the existing authenticated control WebSocket. REAPER sends a receive-only offer, the iPhone returns an answer, REAPER strips inline iPhone ICE candidates before `setRemoteDescription`, adds them separately, and trickles Mac ICE candidates back with `addWebRTCIceCandidate`. When USB is available, REAPER filters separate/trickled ICE candidates to the USB tunnel prefix while keeping the SDP offer intact.

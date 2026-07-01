@@ -145,9 +145,9 @@ swift run video-sync-mac stop \
 
 Expected result: a `.mov` appears in `test-downloads`, and the CLI prints `downloaded ...`.
 
-Add `--progress` to `swift run video-sync-mac stop ...` when testing transfer progress. It emits `progress bytes=... total=... percent=...` lines during the HTTP download.
+Add `--progress` to `swift run video-sync-mac stop ...` when testing progress. It emits `encode percent=...` during on-phone look preparation and `progress bytes=... total=... percent=...` lines during the HTTP download.
 
-For the REAPER prompted stop flow, use `stop-only` to get recording metadata, then either `download-recording --progress` or `delete-recording`. If a download fails before acknowledgement, the recording remains pending on the phone; use `list-recordings` and `download-recording --progress` to restore it.
+For the REAPER prompted stop flow, use `stop-only` to get raw pending recording metadata immediately, then either `download-recording --progress` or `delete-recording`. `download-recording` prepares/encodes non-natural looks only after Download is chosen. If a download fails before acknowledgement, the recording remains pending on the phone; use `list-recordings` plus `download-recording --progress` to restore it, `delete-recording` to remove it, or delete it from the iPhone app's Recordings section.
 
 ## WebRTC preview notes
 
