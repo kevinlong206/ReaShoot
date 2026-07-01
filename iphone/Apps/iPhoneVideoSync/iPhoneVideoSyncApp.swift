@@ -14,8 +14,8 @@ struct iPhoneVideoSyncApp: App {
             ContentView()
                 .environmentObject(service)
                 .task {
-                    await service.prepare()
                     service.startNetworkServices()
+                    await service.prepare()
                 }
                 .onChange(of: scenePhase) { _, newPhase in
                     switch newPhase {

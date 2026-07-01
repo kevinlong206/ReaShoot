@@ -90,7 +90,9 @@ public final class iPhoneVideoSyncService: ObservableObject {
             try capture.configure()
             capture.startSession()
             setKeepsScreenAwake(true)
-            status = "Ready"
+            if webSocketServer == nil {
+                status = "Ready"
+            }
         } catch {
             lastError = error.localizedDescription
         }
