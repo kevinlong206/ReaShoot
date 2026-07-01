@@ -76,6 +76,7 @@ GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=all \
   xcodebuild -project iphone/iPhoneVideoSync.xcodeproj \
   -scheme iPhoneVideoSync \
   -destination 'platform=iOS,id=797DC5E5-610E-5972-9FD3-B0045CA5745F' \
+  DEVELOPMENT_TEAM=6QTJXLJJ62 \
   build
 ```
 
@@ -87,6 +88,8 @@ codesign --verify "$HOME/Library/Application Support/REAPER/UserPlugins/video-sy
 codesign --verify "$HOME/Library/Application Support/REAPER/UserPlugins/reaper_video_recorder.dylib"
 codesign --verify "$HOME/Library/Application Support/REAPER/UserPlugins/LiveKitWebRTC.framework"
 ```
+
+`make install` ad-hoc signs the helper, REAPER extension dylib, and bundled WebRTC framework.
 
 Restart REAPER, then open the Action List and search for `Video Recorder`.
 
@@ -116,4 +119,5 @@ make install
 - Restart REAPER after every `make install`; the extension dylib and bundled WebRTC framework are loaded at process startup.
 - Keep protocol changes mirrored between `helper/Sources/VideoSyncCore/ControlProtocol.swift` and `iphone/Sources/VideoSyncCore/ControlProtocol.swift`.
 - Keep helper CLI behavior mirrored between `helper/Sources/video-sync-mac` and `iphone/Sources/video-sync-mac`.
+- Run `make check` before committing shared Swift changes; it verifies mirrored helper/iPhone files and runs the Swift checks.
 - Xcode/SwiftPM may regenerate `iphone/Package.resolved` or local `.build` directories during builds. Do not commit those unless dependency pinning intentionally changes.

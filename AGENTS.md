@@ -46,9 +46,8 @@ GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=all \
   DEVELOPMENT_TEAM=6QTJXLJJ62 \
   -quiet build
 
-xcrun devicectl device install app \
-  --device 797DC5E5-610E-5972-9FD3-B0045CA5745F \
-  "$HOME/Library/Developer/Xcode/DerivedData/iPhoneVideoSync-gmnikqkhnsosqigkbkagydpehvji/Build/Products/Debug-iphoneos/iPhoneVideoSync.app"
+APP_PATH="$(find "$HOME/Library/Developer/Xcode/DerivedData" -path '*Build/Products/*-iphoneos/iPhoneVideoSync.app' -type d -print -quit)"
+xcrun devicectl device install app --device 797DC5E5-610E-5972-9FD3-B0045CA5745F "$APP_PATH"
 
 xcrun devicectl device process launch \
   --device 797DC5E5-610E-5972-9FD3-B0045CA5745F \
@@ -76,7 +75,7 @@ rm -rf iphone/Package.resolved iphone/.build helper/.build
 - The user has a main-toolbar button wired to `_KLONG_VIDEO_RECORDER_ENABLE` in `~/Library/Application Support/REAPER/reaper-menu.ini`.
 - Video features are off by default. Enabling video shows the floating preview by default and creates/reuses a `Video Recorder` track.
 - The `Video Recorder` track is forced to REAPER record-disabled state: unarmed, no input, record mode `none`, monitoring off, item monitoring off, and auto-recarm off.
-- The extension is iPhone-only. The preview has iPhone setup/profile controls and a format/status area below the video. The format label shows the transport (Wi-Fi), resolution, FPS, orientation, aspect, lens, zoom, selected look, and preview size. The look row has `Prev`/`Next` buttons for quick auditioning. Format/status text turns red while recording.
+- The extension is iPhone-only. The preview has iPhone setup/profile controls and a format/status area below the video. The format label shows the transport (Wi-Fi), resolution, FPS, orientation, aspect, lens, zoom, selected look, and WebRTC preview state. The look row has `Prev`/`Next` buttons for quick auditioning. Format/status text turns red while recording.
 - For `iPhone Video Sync`, REAPER controls the companion iPhone app over WebSocket port `8787`, downloads recordings over HTTP port `8788`, and uses authenticated WebRTC control messages for preview, all over the local Wi-Fi network using the host saved from setup/discovery (Bonjour).
 - The helper `stop --progress` command emits `encode percent=...` while preparing non-natural looks and `progress bytes=... total=... percent=...` while downloading; REAPER parses these live and shows progress in the dock status label.
 - REAPER's iPhone stop flow uses helper `stop-only` to receive raw pending recording metadata immediately, prompts for Download vs Delete before look encoding, then calls either `download-recording --progress` or confirmed `delete-recording`. Canceling delete confirmation downloads instead.
@@ -84,6 +83,7 @@ rm -rf iphone/Package.resolved iphone/.build helper/.build
 - After the helper verifies checksum and sends `transferComplete`, the iPhone app deletes the transferred local `.mov` immediately.
 - iPhone preview uses WebRTC only with `LiveKitWebRTC.framework` and a docked `LKRTCMTLVideoView`; there is no HTTP preview fallback.
 - WebRTC signaling uses the existing authenticated control WebSocket. REAPER sends a receive-only offer, the iPhone returns an answer, REAPER strips inline iPhone ICE candidates before `setRemoteDescription`, adds them separately, and trickles Mac ICE candidates back with `addWebRTCIceCandidate`.
+- The helper validates complete WebSocket handshake headers, including `Sec-WebSocket-Accept`; keep the iPhone server response terminated with `\r\n\r\n`.
 - The iPhone app UI has a `Preview` row showing `Idle`, `WebRTC`, or `WebRTC failed`.
 - The iPhone capture profile includes resolution, FPS, orientation, aspect, lens, zoom, and look. The look picker keeps custom looks plus a curated raw Core Image subset, not the full Core Image catalog. Lens availability is hardware-dependent; zoom is clamped by AVFoundation on iPhone and is not guaranteed optical for every value.
 - The iPhone app records a single `.mov` with video and camera audio embedded. The extension inserts only one media item on the `Video Recorder` track.
@@ -128,6 +128,11 @@ Expected output is `OK`; WebRTC preview itself is negotiated by REAPER through t
 - A recorded file at `~/Desktop/ReaperMedia/Video Recordings/unsaved_project_20260627_162649.mov` inspected with `ffprobe` was healthy: `1920x1080` H.264 Main, ~29.99/30 fps, steady decoded 33.34 ms frame cadence, ~23.7 Mbps video, and AAC mono 48 kHz audio. If playback looks jumpy in the extension but fine in VLC, suspect docked preview playback/resync behavior before changing capture settings.
 - The preview `AVPlayer` should remain muted and should not exact-seek every timer tick. Current behavior seeks on source changes/playback start, disables stalling waits, and corrects only large drift.
 - Real-time waveform drawing during capture is not implemented. REAPER sees the media only after the iPhone app finalizes and downloads the movie.
+
+## Validation
+
+- Run `make check` before committing Swift/protocol/helper changes; it checks mirrored Swift files, runs iPhone Swift tests, and builds the helper.
+- Use the installed helper `ping` and `configure` smoke tests after changing WebSocket/control startup behavior.
 
 ## Commit style
 

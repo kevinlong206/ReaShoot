@@ -23,7 +23,7 @@ The iPhone app can be built from `iPhoneVideoSync.xcodeproj`. For local device t
 xcodebuild \
   -project iPhoneVideoSync.xcodeproj \
   -scheme iPhoneVideoSync \
-  -destination 'id=797DC5E5-610E-5972-9FD3-B0045CA5745F' \
+  -destination 'platform=iOS,id=797DC5E5-610E-5972-9FD3-B0045CA5745F' \
   -configuration Debug \
   DEVELOPMENT_TEAM=6QTJXLJJ62 \
   -allowProvisioningUpdates \
@@ -53,6 +53,8 @@ Expected result: the CLI prints a downloaded `.mov` path in `test-downloads`, th
 ## Preview
 
 REAPER uses the authenticated WebRTC offer/answer flow for all iPhone preview. It sends a receive-only SDP offer with `startWebRTCPreview`; the iPhone app answers with a low-resolution video track rendered from the same preview capture output. The iPhone applies the selected look before sending WebRTC frames, so natural and styled previews use the same transport.
+
+The app starts its WebSocket control listener and HTTP download listener before camera preparation so REAPER can retry control commands immediately after launch. The WebSocket server must return a complete `\r\n\r\n`-terminated handshake because the bundled helper validates the full `Sec-WebSocket-Accept` response.
 
 Capture configuration supports hardware-dependent lens selection (`wide`, `ultrawide`, `telephoto`, `auto`), zoom, and baked-in artistic looks (`natural`, `warmVintage`, `coolBlue`, `highContrastBW`, `fadedFilm`, `dreamGlow`, `noir`, `saturatedPop`, `bleachBypass`, `sepia`, `instantPhoto`, `chrome`, `tonal`, `silvertone`, `dramaticWarm`, `dramaticCool`, `softMatte`, `comicBook`, `vhs`, `musicVideoPop`) plus a curated `ci:<CoreImageFilterName>` subset for thermal/X-ray, gradients/edges, crystallize/pixel/halftone, and a few kaleidoscope/distortion looks. Zoom is applied through AVFoundation and clamped to the selected camera's supported range. Non-natural looks are applied as a post-record Core Image export only when the clip is prepared for download, so unwanted takes can be discarded before encoding while the reliable movie recording path and embedded camera audio are preserved.
 

@@ -151,6 +151,8 @@ For the REAPER prompted stop flow, use `stop-only` to get raw pending recording 
 - REAPER sends its own candidates back with `addWebRTCIceCandidate`.
 - The iPhone app status UI exposes a `Preview` row so agents/users can see whether WebRTC is active.
 - Keep preview on WebRTC only; HTTP is used for recording downloads, not live preview.
+- The app starts control/HTTP listeners before camera preparation so REAPER can reconnect quickly after app launch.
+- The helper validates complete WebSocket handshake headers, including `Sec-WebSocket-Accept`; keep `LocalWebSocketServer.handshakeResponse` terminated with `\r\n\r\n`.
 - Lens selection uses AVFoundation rear camera discovery. Not every iPhone exposes `ultrawide` or `telephoto`; unavailable lens requests should fail clearly instead of silently pretending they worked.
 - Looks include custom names plus a curated raw Core Image subset accepted as `ci:<filterName>`. Keep `VideoLook.rawFilterIDs` aligned with the REAPER dropdown list in `../src/reaper_video_recorder.mm`.
 
@@ -164,7 +166,7 @@ dns-sd -L iPhone _iphone-video-sync._tcp local
 ```
 
 - Background/locked recording is not validated and may not be permitted by iOS.
-- The WebSocket and HTTP servers are intentionally minimal. Harden them before relying on unattended long sessions.
-- Add range/resume support for large interrupted downloads.
-- Pending recordings can be restored while the app is still running; fully persistent recording metadata across app relaunch remains a future hardening area.
+- The WebSocket and HTTP servers are custom lightweight implementations; add parser tests before expanding protocol behavior.
+- Downloads support HTTP byte ranges and helper-side resume/retry through `.download` temp files.
+- Pending recordings can be restored after app relaunch via recording metadata; continue improving diagnostics around failed transfers.
 - Avoid broad rewrites of the manually generated Xcode project unless replacing it with a more maintainable project-generation workflow.
