@@ -105,8 +105,13 @@ struct VideoSyncMacCLI {
                 }
                 printProgress(bytes: bytes, expected: expected > 0 ? expected : preparedRecording.byteCount)
             }
-            _ = try await send(args, type: .transferComplete) {
-                ControlCommand(type: .transferComplete, token: token, recordingID: preparedRecording.id)
+            do {
+                _ = try await send(args, type: .transferComplete) {
+                    ControlCommand(type: .transferComplete, token: token, recordingID: preparedRecording.id)
+                }
+            } catch {
+                DebugLog.write("transferComplete failed after successful download id=\(preparedRecording.id) error=\(error.localizedDescription)")
+                fputs("warning: downloaded file, but could not acknowledge transfer completion: \(error.localizedDescription)\n", stderr)
             }
             print("downloaded \(downloaded.path)")
         case "stop-only":
@@ -134,8 +139,13 @@ struct VideoSyncMacCLI {
                 }
                 printProgress(bytes: bytes, expected: expected > 0 ? expected : recording.byteCount)
             }
-            _ = try await send(args, type: .transferComplete) {
-                ControlCommand(type: .transferComplete, token: token, recordingID: recording.id)
+            do {
+                _ = try await send(args, type: .transferComplete) {
+                    ControlCommand(type: .transferComplete, token: token, recordingID: recording.id)
+                }
+            } catch {
+                DebugLog.write("transferComplete failed after successful download id=\(recording.id) error=\(error.localizedDescription)")
+                fputs("warning: downloaded file, but could not acknowledge transfer completion: \(error.localizedDescription)\n", stderr)
             }
             print("downloaded \(downloaded.path)")
         case "prepare-recording":
@@ -211,13 +221,17 @@ struct VideoSyncMacCLI {
         }
     }
 
-    private static func send(_ args: CLIArguments, type: CommandType, tokenRequired: Bool = true, makeCommand: () throws -> ControlCommand) async throws -> ControlEvent {
+    private static func send(_ args: CLIArguments,
+                             type: CommandType,
+                             tokenRequired: Bool = true,
+                             timeoutSeconds: Int = 20,
+                             makeCommand: () throws -> ControlCommand) async throws -> ControlEvent {
         let host = required(args.value(after: "--host"), "--host")
         let port = args.int(after: "--port", default: 8787)
         if tokenRequired {
             _ = required(args.value(after: "--token"), "--token")
         }
-        let client = ControlClient(host: host, port: port)
+        let client = ControlClient(host: host, port: port, timeoutSeconds: timeoutSeconds)
         return try await client.send(makeCommand())
     }
 
@@ -259,7 +273,7 @@ struct VideoSyncMacCLI {
     }
 
     private static func prepareRecording(_ args: CLIArguments, token: String, recordingID: String) async throws -> RecordingDescriptor {
-        let event = try await send(args, type: .prepareRecording) {
+        let event = try await send(args, type: .prepareRecording, timeoutSeconds: 900) {
             ControlCommand(type: .prepareRecording, token: token, recordingID: recordingID)
         }
         guard event.type == .recordingPrepared, let preparedRecording = event.recording else {

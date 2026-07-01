@@ -1594,11 +1594,13 @@ void setVideoEnabled(bool enabled);
 @property(nonatomic, strong) dispatch_semaphore_t webRTCIceGatheringSemaphore;
 @property(nonatomic, copy) void (^stopCompletion)(NSString *path, NSError *error);
 @property(nonatomic, copy) NSString *activeRemoteDownloadDirectory;
+@property(nonatomic, strong) NSDate *lastUSBHostRefreshDate;
 @property(nonatomic, assign) BOOL docked;
 @property(nonatomic, assign) BOOL floatingPreview;
 @property(nonatomic, assign) BOOL recordingVisualState;
 @property(nonatomic, assign) BOOL showingPlayback;
 @property(nonatomic, assign) BOOL remoteRecording;
+@property(nonatomic, assign) BOOL iPhoneTransferActive;
 - (void)ensureDockView;
 - (void)showLivePreview;
 - (void)showFloatingPreview;
@@ -1617,6 +1619,8 @@ void setVideoEnabled(bool enabled);
 - (void)startWebRTCPreviewIfNeeded;
 - (void)stopWebRTCPreview;
 - (NSString *)iPhoneTransportLabel;
+- (void)refreshIPhoneUSBHostIfAvailable;
+- (void)refreshIPhoneUSBHostIfAvailableForce:(BOOL)force;
 - (NSString *)answerForWebRTCOffer:(NSString *)offer error:(NSError **)error;
 - (void)sendWebRTCIceCandidateToIPhone:(LKRTCIceCandidate *)candidate;
 - (NSString *)webRTCAnswerSDPByRemovingInlineCandidates:(NSString *)answerSDP
@@ -1635,6 +1639,12 @@ void setVideoEnabled(bool enabled);
                       extraArguments:(NSArray<NSString *> *)extraArguments
                        outputHandler:(void (^)(NSString *line))outputHandler
                           completion:(void (^)(NSString *output, NSError *error))completion;
+- (NSTask *)runVideoSyncCommandAsync:(NSString *)command
+                      extraArguments:(NSArray<NSString *> *)extraArguments
+                       outputHandler:(void (^)(NSString *line))outputHandler
+                retryOnUSBHostFailure:(BOOL)retryOnUSBHostFailure
+                          completion:(void (^)(NSString *output, NSError *error))completion;
+- (BOOL)videoSyncOutputIndicatesUSBHostFailure:(NSString *)output;
 - (void)handleVideoSyncProgressLine:(NSString *)line;
 - (NSDictionary<NSString *, NSString *> *)recordingDescriptorFromVideoSyncOutput:(NSString *)output;
 - (NSArray<NSDictionary<NSString *, NSString *> *> *)recordingDescriptorsFromVideoSyncOutput:(NSString *)output;
@@ -1729,12 +1739,29 @@ void setVideoEnabled(bool enabled);
 }
 
 - (void)refreshIPhoneUSBHostIfAvailable {
+  [self refreshIPhoneUSBHostIfAvailableForce:NO];
+}
+
+- (void)refreshIPhoneUSBHostIfAvailableForce:(BOOL)force {
+  if (!force) {
+    if (self.iPhoneTransferActive && !g_iPhoneUSBHost.empty()) {
+      debugLog(@"usb-host refresh skipped during active transfer host=%s", g_iPhoneUSBHost.c_str());
+      return;
+    }
+    if (self.lastUSBHostRefreshDate && [[NSDate date] timeIntervalSinceDate:self.lastUSBHostRefreshDate] < 60.0) {
+      return;
+    }
+  }
+
   NSString *helperPath = [self videoSyncHelperPath];
   if (![[NSFileManager defaultManager] isExecutableFileAtPath:helperPath]) {
-    g_iPhoneUSBHost.clear();
+    if (force || g_iPhoneUSBHost.empty()) {
+      g_iPhoneUSBHost.clear();
+    }
     return;
   }
 
+  debugLog(@"usb-host refresh start force=%@", force ? @"yes" : @"no");
   NSTask *task = [[NSTask alloc] init];
   task.executableURL = [NSURL fileURLWithPath:helperPath];
   task.arguments = @[ @"usb-host" ];
@@ -1744,13 +1771,20 @@ void setVideoEnabled(bool enabled);
 
   NSError *launchError = nil;
   if (![task launchAndReturnError:&launchError]) {
-    g_iPhoneUSBHost.clear();
+    if (force || g_iPhoneUSBHost.empty()) {
+      g_iPhoneUSBHost.clear();
+    }
+    debugLog(@"usb-host refresh launch failed error=%@", launchError.localizedDescription ?: @"");
     return;
   }
   [task waitUntilExit];
   NSData *data = [pipe.fileHandleForReading readDataToEndOfFile];
   if (task.terminationStatus != 0) {
-    g_iPhoneUSBHost.clear();
+    if (force || g_iPhoneUSBHost.empty()) {
+      g_iPhoneUSBHost.clear();
+    }
+    self.lastUSBHostRefreshDate = [NSDate date];
+    debugLog(@"usb-host refresh failed status=%d", task.terminationStatus);
     return;
   }
   NSString *output = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
@@ -1766,19 +1800,36 @@ void setVideoEnabled(bool enabled);
       continue;
     }
     g_iPhoneUSBHost = host.UTF8String ?: "";
+    self.lastUSBHostRefreshDate = [NSDate date];
     if (controlPort.length > 0) {
       g_iPhoneControlPort = controlPort.UTF8String ?: "8787";
     }
     if (httpPort.length > 0) {
       g_iPhoneHttpPort = httpPort.UTF8String ?: "8788";
     }
+    debugLog(@"usb-host refresh ok host=%@ controlPort=%@ httpPort=%@", host ?: @"", controlPort ?: @"", httpPort ?: @"");
     return;
   }
-  g_iPhoneUSBHost.clear();
+  if (force || g_iPhoneUSBHost.empty()) {
+    g_iPhoneUSBHost.clear();
+  }
+  self.lastUSBHostRefreshDate = [NSDate date];
 }
 
 - (NSString *)iPhoneTransportLabel {
   return g_iPhoneUSBHost.empty() ? @"Wi-Fi" : @"USB";
+}
+
+- (BOOL)videoSyncOutputIndicatesUSBHostFailure:(NSString *)output {
+  if (output.length == 0 || g_iPhoneUSBHost.empty()) {
+    return NO;
+  }
+  NSString *lowercaseOutput = output.lowercaseString;
+  return [lowercaseOutput containsString:@"no route to host"] ||
+         [lowercaseOutput containsString:@"network is unreachable"] ||
+         [lowercaseOutput containsString:@"host is down"] ||
+         [lowercaseOutput containsString:@"resource temporarily unavailable"] ||
+         [lowercaseOutput containsString:@"could not connect to the control socket"];
 }
 
 - (NSString *)runVideoSyncCommand:(NSString *)command
@@ -1811,6 +1862,29 @@ void setVideoEnabled(bool enabled);
   NSData *data = [pipe.fileHandleForReading readDataToEndOfFile];
   NSString *output = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
   if (task.terminationStatus != 0) {
+    if ([self videoSyncOutputIndicatesUSBHostFailure:output]) {
+      debugLog(@"helper sync command=%@ failed on cached USB host; refreshing and retrying once", command ?: @"");
+      [self refreshIPhoneUSBHostIfAvailableForce:YES];
+      task = [[NSTask alloc] init];
+      task.executableURL = [NSURL fileURLWithPath:helperPath];
+      task.arguments = [self videoSyncArgumentsForCommand:command extraArguments:extraArguments];
+      pipe = [NSPipe pipe];
+      task.standardOutput = pipe;
+      task.standardError = pipe;
+      launchError = nil;
+      if (![task launchAndReturnError:&launchError]) {
+        if (error) {
+          *error = launchError;
+        }
+        return nil;
+      }
+      [task waitUntilExit];
+      data = [pipe.fileHandleForReading readDataToEndOfFile];
+      output = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
+      if (task.terminationStatus == 0) {
+        return output;
+      }
+    }
     if (error) {
       NSString *message = output.length > 0 ? output : @"video-sync-mac failed.";
       *error = [NSError errorWithDomain:@"KlongVideoRecorder"
@@ -1831,6 +1905,18 @@ void setVideoEnabled(bool enabled);
 - (NSTask *)runVideoSyncCommandAsync:(NSString *)command
                       extraArguments:(NSArray<NSString *> *)extraArguments
                        outputHandler:(void (^)(NSString *line))outputHandler
+                          completion:(void (^)(NSString *output, NSError *error))completion {
+  return [self runVideoSyncCommandAsync:command
+                        extraArguments:extraArguments
+                         outputHandler:outputHandler
+                   retryOnUSBHostFailure:YES
+                             completion:completion];
+}
+
+- (NSTask *)runVideoSyncCommandAsync:(NSString *)command
+                      extraArguments:(NSArray<NSString *> *)extraArguments
+                       outputHandler:(void (^)(NSString *line))outputHandler
+                retryOnUSBHostFailure:(BOOL)retryOnUSBHostFailure
                           completion:(void (^)(NSString *output, NSError *error))completion {
   NSString *helperPath = [self videoSyncHelperPath];
   if (![[NSFileManager defaultManager] isExecutableFileAtPath:helperPath]) {
@@ -1907,6 +1993,20 @@ void setVideoEnabled(bool enabled);
                                     userInfo:@{NSLocalizedDescriptionKey: message}];
     }
     debugLog(@"helper async finish command=%@ status=%d output=%@", command ?: @"", finishedTask.terminationStatus, output ?: @"");
+    BOOL canRetryWithProgressHandler = [command isEqualToString:@"download-recording"] && ![output containsString:@"downloaded "];
+    if (commandError && retryOnUSBHostFailure && (!outputHandler || canRetryWithProgressHandler) && [self videoSyncOutputIndicatesUSBHostFailure:output]) {
+      dispatch_async(dispatch_get_main_queue(), ^{
+        debugLog(@"helper async command=%@ failed on cached USB host; refreshing and retrying once", command ?: @"");
+        [self setStatus:@"USB tunnel changed; retrying iPhone command"];
+        [self refreshIPhoneUSBHostIfAvailableForce:YES];
+        [self runVideoSyncCommandAsync:command
+                        extraArguments:extraArguments
+                         outputHandler:nil
+                  retryOnUSBHostFailure:NO
+                             completion:completion];
+      });
+      return;
+    }
     dispatch_async(dispatch_get_main_queue(), ^{
       completion(output, commandError);
     });
@@ -2094,6 +2194,8 @@ void setVideoEnabled(bool enabled);
   if (checksum.length > 0) {
     [arguments addObjectsFromArray:@[ @"--checksum", checksum ]];
   }
+  [self refreshIPhoneUSBHostIfAvailableForce:YES];
+  self.iPhoneTransferActive = YES;
   [self setStatus:@"Downloading iPhone video"];
   __block NSDate *lastProgressDate = [NSDate date];
   __block NSTask *downloadTask = nil;
@@ -2125,6 +2227,7 @@ void setVideoEnabled(bool enabled);
       watchdogResumed = NO;
     }
     if (error) {
+      self.iPhoneTransferActive = NO;
       debugLog(@"download failed error=%@ output=%@", error.localizedDescription ?: @"", output ?: @"");
       [self setStatus:@"iPhone download failed"];
       completion(nil, error);
@@ -2140,12 +2243,14 @@ void setVideoEnabled(bool enabled);
     } else {
       debugLog(@"download complete path=%@", path ?: @"");
     }
+    self.iPhoneTransferActive = NO;
     completion(path, missingPathError);
   }];
   if (downloadTask) {
     dispatch_resume(watchdogTimer);
     watchdogResumed = YES;
   } else {
+    self.iPhoneTransferActive = NO;
     debugLog(@"download helper failed to launch");
   }
 }
@@ -2442,7 +2547,6 @@ void setVideoEnabled(bool enabled);
   if (!self.formatLabel) {
     return;
   }
-  [self refreshIPhoneUSBHostIfAvailable];
   self.formatLabel.stringValue = [NSString stringWithFormat:@"iPhone %@: %s %@ fps, %s, %s, %s lens, %sx, look %s + 640px preview",
                                                             [self iPhoneTransportLabel],
                                                             g_iPhoneResolution.c_str(),

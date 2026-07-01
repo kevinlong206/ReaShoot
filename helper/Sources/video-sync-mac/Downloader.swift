@@ -41,6 +41,16 @@ enum RecordingDownloader {
         let temporaryURL = destinationDirectory.appendingPathComponent(".\(recording.filename).download")
         let expectedBytes = recording.byteCount > 0 ? recording.byteCount : nil
         if let expectedBytes,
+           fileSize(at: destination) == expectedBytes,
+           fileMatchesExpectedChecksumOrTrustsSize(destination, expected: recording.checksumSHA256) {
+            if FileManager.default.fileExists(atPath: temporaryURL.path) {
+                try FileManager.default.removeItem(at: temporaryURL)
+            }
+            DebugLog.write("download already complete destination=\(destination.path)")
+            progress?(expectedBytes, expectedBytes)
+            return destination
+        }
+        if let expectedBytes,
            let existingBytes = fileSize(at: temporaryURL),
            existingBytes > expectedBytes {
             try FileManager.default.removeItem(at: temporaryURL)
@@ -112,6 +122,18 @@ enum RecordingDownloader {
             return nil
         }
         return size.int64Value
+    }
+
+    private static func fileMatchesExpectedChecksumOrTrustsSize(_ url: URL, expected: String?) -> Bool {
+        guard let expected else {
+            return true
+        }
+        do {
+            return try Checksum.sha256(forFileAt: url) == expected
+        } catch {
+            DebugLog.write("download complete file checksum skipped path=\(url.path) error=\(error.localizedDescription)")
+            return true
+        }
     }
 
     private static func downloadAttempt(

@@ -703,7 +703,7 @@ public final class CaptureRecordingEngine: NSObject, ObservableObject {
 
         nonisolated(unsafe) let exportSession = export
         lookExportProgress = 0.0
-        let progressStallLimit: TimeInterval = 120.0
+        let progressStallLimit: TimeInterval = 30.0
         var lastProgress = 0.0
         var lastProgressDate = Date()
         let progressTask = Task { [weak self] in
@@ -760,17 +760,25 @@ public final class CaptureRecordingEngine: NSObject, ObservableObject {
         lookExportProgress = 0.0
         do {
             lastError = nil
-            let renderedURL = try await filteredRecordingURL(for: recording.url, recordingID: recording.id, look: look)
-            DebugLog.write("prepare recording export complete id=\(id) url=\(renderedURL.lastPathComponent)")
-            if renderedURL != recording.url {
-                try? FileManager.default.removeItem(at: recording.url)
+            var preparedURL = recording.url
+            do {
+                let renderedURL = try await filteredRecordingURL(for: recording.url, recordingID: recording.id, look: look)
+                DebugLog.write("prepare recording export complete id=\(id) url=\(renderedURL.lastPathComponent)")
+                if renderedURL != recording.url {
+                    try? FileManager.default.removeItem(at: recording.url)
+                }
+                preparedURL = renderedURL
+                recording.renderedLook = look
+            } catch {
+                DebugLog.write("prepare recording look export failed id=\(id) look=\(look) error=\(error.localizedDescription); using original recording")
+                lastError = "Look export failed; using original recording."
+                recording.renderedLook = "natural"
             }
-            let fileInfo = await RecordingFileInspector.fileInfo(for: renderedURL)
-            recording.url = renderedURL
+            let fileInfo = await RecordingFileInspector.fileInfo(for: preparedURL)
+            recording.url = preparedURL
             recording.byteCount = fileInfo.byteCount
             recording.checksumSHA256 = fileInfo.checksum
             recording.desiredLook = look
-            recording.renderedLook = look
             store.upsert(recording)
             DebugLog.write("prepare recording stored id=\(id) bytes=\(recording.byteCount) checksum=\(recording.checksumSHA256 ?? "nil")")
             isApplyingLook = false

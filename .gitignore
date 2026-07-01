@@ -1,5 +1,12 @@
 build/
+helper/.build/
+iphone/.build/
+iphone/Package.resolved
+iphone/test-downloads/
 *.dSYM/
 *.dylib
 *.o
+*.log
+*.mov
+*.download
 .DS_Store
