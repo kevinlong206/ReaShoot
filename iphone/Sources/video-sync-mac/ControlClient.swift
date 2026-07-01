@@ -55,6 +55,9 @@ final class ControlClient {
     }
 
     private func openSocket() throws -> Int32 {
+        if host == USBMux.hostSentinel {
+            return try USBMux.connect(devicePort: port, timeoutSeconds: timeoutSeconds)
+        }
         var hints = addrinfo(
             ai_flags: 0,
             ai_family: AF_UNSPEC,

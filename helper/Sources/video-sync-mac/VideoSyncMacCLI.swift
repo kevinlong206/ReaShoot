@@ -31,6 +31,12 @@ struct VideoSyncMacCLI {
             }
             let http = device.httpPort.map(String.init) ?? "8788"
             print("usb\tname=\(device.name)\thost=\(device.host)\tcontrolPort=\(device.controlPort)\thttpPort=\(http)")
+        case "usb-status":
+            if USBMux.isDeviceAvailable() {
+                print("usb\tavailable=1\thost=\(USBMux.hostSentinel)\tcontrolPort=8787\thttpPort=8788")
+            } else {
+                print("usb\tavailable=0")
+            }
         case "usb-monitor":
             let seconds = max(1, args.int(after: "--seconds", default: 180))
             let interval = max(1, args.int(after: "--interval", default: 5))

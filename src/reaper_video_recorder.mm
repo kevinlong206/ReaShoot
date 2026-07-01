@@ -1761,10 +1761,10 @@ void setVideoEnabled(bool enabled);
     return;
   }
 
-  debugLog(@"usb-host refresh start force=%@", force ? @"yes" : @"no");
+  debugLog(@"usb-status refresh start force=%@", force ? @"yes" : @"no");
   NSTask *task = [[NSTask alloc] init];
   task.executableURL = [NSURL fileURLWithPath:helperPath];
-  task.arguments = @[ @"usb-host" ];
+  task.arguments = @[ @"usb-status" ];
   NSPipe *pipe = [NSPipe pipe];
   task.standardOutput = pipe;
   task.standardError = pipe;
@@ -3252,7 +3252,7 @@ void setVideoEnabled(bool enabled);
 }
 
 - (NSString *)webRTCUSBPrefix {
-  if (g_iPhoneUSBHost.empty()) {
+  if (g_iPhoneUSBHost.empty() || g_iPhoneUSBHost == "usbmux") {
     return nil;
   }
   NSString *host = [NSString stringWithUTF8String:g_iPhoneUSBHost.c_str()].lowercaseString;
@@ -3289,7 +3289,7 @@ void setVideoEnabled(bool enabled);
 }
 
 - (NSArray<LKRTCIceCandidate *> *)webRTCCandidatesByFilteringForCurrentUSBHost:(NSArray<LKRTCIceCandidate *> *)candidates {
-  if (g_iPhoneUSBHost.empty()) {
+  if (g_iPhoneUSBHost.empty() || g_iPhoneUSBHost == "usbmux") {
     return candidates;
   }
   NSMutableArray<LKRTCIceCandidate *> *filtered = [NSMutableArray array];

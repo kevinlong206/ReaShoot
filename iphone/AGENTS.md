@@ -11,7 +11,7 @@ This directory is the source of truth for the iPhone app. Do not use the old `~/
 The current implementation has been installed and tested on a physical iPhone in foreground mode. The tested flow is:
 
 1. iPhone app advertises `_iphone-video-sync._tcp` with Bonjour.
-2. Mac prefers the USB tunnel discovered by `video-sync-mac usb-host`; if a wired paired device has no active tunnel, the helper asks CoreDevice to activate it. Otherwise it uses Bonjour/Wi-Fi.
+2. Mac reaches a wired device over usbmux (`video-sync-mac usb-status` reports availability; control/download use the `usbmux` host sentinel). Otherwise it uses Bonjour/Wi-Fi.
 3. Mac sends WebSocket control commands on port `8787`.
 4. REAPER uses WebRTC as the only preview path; the iPhone renders the selected look before sending preview frames.
 5. iPhone records video with AVFoundation.

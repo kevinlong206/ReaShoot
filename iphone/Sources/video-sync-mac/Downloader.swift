@@ -86,7 +86,7 @@ enum RecordingDownloader {
             } catch {
                 attempts += 1
                 offset = fileSize(at: temporaryURL) ?? offset
-                if let usb = USBDiscovery.discover().first {
+                if currentHost != USBMux.hostSentinel, let usb = USBDiscovery.discover().first {
                     currentHost = usb.host
                     currentHTTPPort = usb.httpPort ?? currentHTTPPort
                     DebugLog.write("download refreshed usb host=\(currentHost) httpPort=\(currentHTTPPort)")
@@ -216,9 +216,10 @@ enum RecordingDownloader {
         components.path = recording.downloadPath
         components.queryItems = [URLQueryItem(name: "token", value: token)]
         let path = components.string ?? recording.downloadPath
+        let hostHeader = host == USBMux.hostSentinel ? "localhost" : host
         var lines = [
             "GET \(path) HTTP/1.1",
-            "Host: \(host):\(httpPort)",
+            "Host: \(hostHeader):\(httpPort)",
             "Accept: */*",
             "Connection: close"
         ]
@@ -235,6 +236,9 @@ enum RecordingDownloader {
     }
 
     private static func openSocket(host: String, port: Int) throws -> Int32 {
+        if host == USBMux.hostSentinel {
+            return try USBMux.connect(devicePort: port, timeoutSeconds: 30)
+        }
         var hints = addrinfo(
             ai_flags: 0,
             ai_family: AF_UNSPEC,
