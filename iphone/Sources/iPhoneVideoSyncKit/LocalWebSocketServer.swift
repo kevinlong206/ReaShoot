@@ -181,13 +181,14 @@ final class LocalWebSocketServer {
     private func handshakeResponse(for key: String) -> String {
         let magic = key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
         let accept = Insecure.SHA1.hash(data: Data(magic.utf8)).data.base64EncodedString()
-        return """
-        HTTP/1.1 101 Switching Protocols\r
-        Upgrade: websocket\r
-        Connection: Upgrade\r
-        Sec-WebSocket-Accept: \(accept)\r
-        \r
-        """
+        return [
+            "HTTP/1.1 101 Switching Protocols",
+            "Upgrade: websocket",
+            "Connection: Upgrade",
+            "Sec-WebSocket-Accept: \(accept)",
+            "",
+            ""
+        ].joined(separator: "\r\n")
     }
 
     private func encodeTextFrame(_ data: Data) -> Data {
