@@ -25,38 +25,6 @@ struct VideoSyncMacCLI {
                 let http = device.httpPort.map(String.init) ?? "8788"
                 print("device\tname=\(device.name)\thost=\(device.host)\tcontrolPort=\(device.controlPort)\thttpPort=\(http)\tpaired=\(device.isPaired)")
             }
-        case "usb-host":
-            guard let device = USBDiscovery.discover().first else {
-                Foundation.exit(1)
-            }
-            let http = device.httpPort.map(String.init) ?? "8788"
-            print("usb\tname=\(device.name)\thost=\(device.host)\tcontrolPort=\(device.controlPort)\thttpPort=\(http)")
-        case "usb-status":
-            if USBMux.isDeviceAvailable() {
-                print("usb\tavailable=1\thost=\(USBMux.hostSentinel)\tcontrolPort=8787\thttpPort=8788")
-            } else {
-                print("usb\tavailable=0")
-            }
-        case "usb-monitor":
-            let seconds = max(1, args.int(after: "--seconds", default: 180))
-            let interval = max(1, args.int(after: "--interval", default: 5))
-            var lastHost: String?
-            let started = Date()
-            while Date().timeIntervalSince(started) < Double(seconds) {
-                let device = USBDiscovery.discover().first
-                let host = device?.host ?? ""
-                if host != lastHost {
-                    let elapsed = Int(Date().timeIntervalSince(started).rounded())
-                    if let device {
-                        let http = device.httpPort.map(String.init) ?? "8788"
-                        print("usb-change\telapsed=\(elapsed)\tname=\(device.name)\thost=\(device.host)\tcontrolPort=\(device.controlPort)\thttpPort=\(http)")
-                    } else {
-                        print("usb-change\telapsed=\(elapsed)\thost=")
-                    }
-                    lastHost = host
-                }
-                try await Task.sleep(nanoseconds: UInt64(interval) * 1_000_000_000)
-            }
         case "pair":
             let event = try await send(args, type: .pair, tokenRequired: false) {
                 ControlCommand(type: .pair, pairingCode: required(args.value(after: "--code"), "--code"))
@@ -253,8 +221,6 @@ struct VideoSyncMacCLI {
         print("""
         video-sync-mac commands:
           discover [--timeout 3]
-          usb-host
-          usb-monitor [--seconds 180] [--interval 5]
           pair --host HOST [--port 8787] --code CODE
           configure --host HOST [--port 8787] --token TOKEN [--resolution 4K] [--fps 30] [--orientation portrait] [--aspect 9:16] [--lens wide] [--zoom 1.0] [--look natural]
           start --host HOST [--port 8787] --token TOKEN [--session SESSION]

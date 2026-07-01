@@ -4,14 +4,14 @@ Guidance for future agents working in this project.
 
 ## Project status
 
-This is the consolidated companion iPhone app for `reaper_video_recorder`. It controls iPhone video recording from REAPER over USB when available, falling back to local Wi-Fi/Bonjour.
+This is the consolidated companion iPhone app for `reaper_video_recorder`. It records iPhone video controlled from REAPER over the local Wi-Fi/Bonjour network.
 
 This directory is the source of truth for the iPhone app. Do not use the old `~/iphone_reapervideosync` directory.
 
 The current implementation has been installed and tested on a physical iPhone in foreground mode. The tested flow is:
 
 1. iPhone app advertises `_iphone-video-sync._tcp` with Bonjour.
-2. Mac reaches a wired device over usbmux (`video-sync-mac usb-status` reports availability; control/download use the `usbmux` host sentinel). Otherwise it uses Bonjour/Wi-Fi.
+2. Mac reaches the device over the local Wi-Fi network using the Bonjour-advertised host.
 3. Mac sends WebSocket control commands on port `8787`.
 4. REAPER uses WebRTC as the only preview path; the iPhone renders the selected look before sending preview frames.
 5. iPhone records video with AVFoundation.
@@ -43,12 +43,6 @@ Show CLI help:
 
 ```sh
 swift run video-sync-mac --help
-```
-
-Check the current USB tunnel host:
-
-```sh
-swift run video-sync-mac usb-host
 ```
 
 When SwiftPM touches the LiveKit WebRTC package, prefix commands with:
@@ -155,7 +149,6 @@ For the REAPER prompted stop flow, use `stop-only` to get raw pending recording 
 - The iPhone creates a send-only video answer from `WebRTCPreviewSession`.
 - The answer may include inline ICE candidates. REAPER is expected to strip and add them separately because the Mac-side parser rejected the full inline-candidate answer during testing.
 - REAPER sends its own candidates back with `addWebRTCIceCandidate`.
-- When USB is available, REAPER filters separate/trickled ICE candidates to the USB tunnel prefix but leaves the SDP offer intact.
 - The iPhone app status UI exposes a `Preview` row so agents/users can see whether WebRTC is active.
 - Keep preview on WebRTC only; HTTP is used for recording downloads, not live preview.
 - Lens selection uses AVFoundation rear camera discovery. Not every iPhone exposes `ultrawide` or `telephoto`; unavailable lens requests should fail clearly instead of silently pretending they worked.
@@ -172,7 +165,6 @@ dns-sd -L iPhone _iphone-video-sync._tcp local
 
 - Background/locked recording is not validated and may not be permitted by iOS.
 - The WebSocket and HTTP servers are intentionally minimal. Harden them before relying on unattended long sessions.
-- USB discovery depends on Apple device tunnel availability. If `usb-host` is empty, check `xcrun devicectl list devices`, trust/unlock state, and the cable before changing app networking logic.
 - Add range/resume support for large interrupted downloads.
 - Pending recordings can be restored while the app is still running; fully persistent recording metadata across app relaunch remains a future hardening area.
 - Avoid broad rewrites of the manually generated Xcode project unless replacing it with a more maintainable project-generation workflow.

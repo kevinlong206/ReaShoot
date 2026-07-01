@@ -14,7 +14,7 @@ macOS-only REAPER extension for controlling the companion iPhone Video Sync app 
   - `Video Recorder: Enable/Disable Transport Follow`
 - Adds a main-toolbar toggle button for enabling/disabling all video behavior.
 - Shows the iPhone live preview in a native macOS preview window.
-- Shows the active iPhone transport/profile below the preview, including USB/Wi-Fi, resolution, frame rate, orientation, aspect, lens, zoom, and look; status text turns red while recording.
+- Shows the active iPhone profile below the preview, including resolution, frame rate, orientation, aspect, lens, zoom, and look; status text turns red while recording.
 - Controls the companion iPhone app for full-resolution iPhone capture. The REAPER extension no longer records directly from macOS webcams or Continuity Camera.
 - Records iPhone camera audio into the `.mov` alongside video so the inserted item contains an alignment reference.
 - Starts video recording when REAPER enters record.
@@ -32,7 +32,7 @@ macOS-only REAPER extension for controlling the companion iPhone Video Sync app 
 - Can manually re-run alignment for an existing project with `Video Recorder: Align Selected Video Item`; select the item on the `Video Recorder` track first, or it falls back to that track's latest item. If a REAPER time selection is active, only that region is analyzed.
 - Shows load/record/finalize/import state in the preview status label instead of console chatter.
 - Places downloaded iPhone video at the REAPER record-start timeline position.
-- Controls the companion iPhone app for 4K recording, low-latency USB/Wi-Fi WebRTC preview, download/restore, and timeline insertion. When a trusted USB connection is available, the extension prefers the iPhone USB tunnel and falls back to the configured Wi-Fi/Bonjour host.
+- Controls the companion iPhone app for 4K recording, low-latency Wi-Fi WebRTC preview, download/restore, and timeline insertion over the local Wi-Fi/Bonjour network.
 - The iPhone preview uses the bundled `LiveKitWebRTC.framework` as the only preview transport. The iPhone renders the selected look into low-resolution preview frames before sending them to REAPER.
 - The dock includes capture profile controls for resolution, FPS, orientation, social aspect ratio, lens, zoom, and baked-in artistic look. Changing a profile control sends the new profile to the iPhone immediately when paired.
 - The look picker keeps the custom looks plus a curated Core Image subset for music-video use, including thermal/X-ray, gradients/edges, crystallize/pixel/halftone, and a few kaleidoscope/distortion looks. `Prev` and `Next` buttons beside the picker make it quick to audition looks.
@@ -99,8 +99,6 @@ codesign --force --sign - "$HOME/Library/Application Support/REAPER/UserPlugins/
 - macOS camera and microphone permission are not required because capture happens in the iPhone app.
 - The companion iPhone app sources live in `iphone/`; `~/iphone_reapervideosync` was the original development copy and should no longer be treated as the source of truth.
 - The extension builds and installs a bundled `video-sync-mac` helper and `LiveKitWebRTC.framework` next to the REAPER extension dylib.
-- `video-sync-mac usb-status` reports whether a wired iPhone is reachable over usbmux (`usbmuxd`). When available, control/download use the `usbmux` host sentinel and connect to device ports `8787`/`8788` via `USBMux.connect`. The older `usb-host` (CoreDevice tunnel IP) is retained for diagnostics but not used for transport, because that tunnel's address churns.
-- When USB is available, REAPER filters WebRTC ICE candidates to the USB tunnel prefix so preview media does not silently choose Wi-Fi.
 - To use the extension, launch the iPhone app, click `iPhone Setup` in the REAPER dock, click `Discover`, enter the pairing code shown on the iPhone, click `Pair`, then click `Test` to verify preview/control before recording.
 - The iPhone app shows the currently configured capture profile and pending recordings. Pending videos can be deleted directly in the app. Aspect ratio is currently metadata/framing intent; resolution, FPS, orientation, lens, zoom, and selected look are applied on the iPhone side. Non-natural looks are applied only after the user chooses to download a stopped clip and are baked into the downloaded movie while preserving the camera audio track.
 - Lens options depend on the connected iPhone hardware. Zoom is clamped to the selected camera's supported range; values beyond a physical lens's native view may be digital crop rather than guaranteed optical zoom.

@@ -1,6 +1,6 @@
 # iPhone Reaper Video Sync
 
-Swift implementation for recording 4K video on an iPhone from REAPER/Mac commands over USB when available, falling back to local Wi-Fi/Bonjour, then transferring each stopped clip back to the Mac.
+Swift implementation for recording 4K video on an iPhone from REAPER/Mac commands over the local Wi-Fi/Bonjour network, then transferring each stopped clip back to the Mac.
 
 ## Layout
 
@@ -41,15 +41,12 @@ export VIDEO_SYNC_TOKEN='...'
 Then run:
 
 ```sh
-swift run video-sync-mac usb-host
 swift run video-sync-mac ping --host kevin-long-iphone.local --port 8787
 swift run video-sync-mac configure --host kevin-long-iphone.local --port 8787 --token "$VIDEO_SYNC_TOKEN" --lens ultrawide --zoom 0.5 --look warmVintage
 swift run video-sync-mac start --host kevin-long-iphone.local --port 8787 --token "$VIDEO_SYNC_TOKEN" --session smoke-test
 sleep 3
 swift run video-sync-mac stop --host kevin-long-iphone.local --port 8787 --http-port 8788 --token "$VIDEO_SYNC_TOKEN" --download-dir test-downloads
 ```
-
-If a paired wired device is visible but the USB tunnel is not connected, `usb-host` asks CoreDevice to activate the tunnel before reporting the host. REAPER uses that USB host automatically when possible and filters WebRTC ICE candidates to the USB tunnel prefix while keeping the SDP offer intact.
 
 Expected result: the CLI prints a downloaded `.mov` path in `test-downloads`, then acknowledges transfer so the iPhone deletes its local copy. Add `--progress` to the `stop` command to print transfer progress lines during on-phone look encoding and movie download. For REAPER's prompted stop flow, the helper also exposes `stop-only`, `prepare-recording`, `list-recordings`, `download-recording`, and `delete-recording`; `stop-only` returns raw pending recording metadata immediately, while `download-recording` prepares/encodes only after Download is chosen. If a download fails before acknowledgement, the recording remains pending on the phone and can be restored with `list-recordings` plus `download-recording`, deleted through the helper, or deleted directly in the iPhone app's Recordings section.
 

@@ -171,7 +171,6 @@ std::string g_iPhoneHost;
 std::string g_iPhoneControlPort = "8787";
 std::string g_iPhoneHttpPort = "8788";
 std::string g_iPhoneToken;
-std::string g_iPhoneUSBHost;
 std::string g_iPhoneResolution = "4K";
 std::string g_iPhoneFPS = "30";
 std::string g_iPhoneOrientation = "portrait";
@@ -1594,13 +1593,11 @@ void setVideoEnabled(bool enabled);
 @property(nonatomic, strong) dispatch_semaphore_t webRTCIceGatheringSemaphore;
 @property(nonatomic, copy) void (^stopCompletion)(NSString *path, NSError *error);
 @property(nonatomic, copy) NSString *activeRemoteDownloadDirectory;
-@property(nonatomic, strong) NSDate *lastUSBHostRefreshDate;
 @property(nonatomic, assign) BOOL docked;
 @property(nonatomic, assign) BOOL floatingPreview;
 @property(nonatomic, assign) BOOL recordingVisualState;
 @property(nonatomic, assign) BOOL showingPlayback;
 @property(nonatomic, assign) BOOL remoteRecording;
-@property(nonatomic, assign) BOOL iPhoneTransferActive;
 - (void)ensureDockView;
 - (void)showLivePreview;
 - (void)showFloatingPreview;
@@ -1618,15 +1615,10 @@ void setVideoEnabled(bool enabled);
 - (void)stopRemotePreview;
 - (void)startWebRTCPreviewIfNeeded;
 - (void)stopWebRTCPreview;
-- (NSString *)iPhoneTransportLabel;
-- (void)refreshIPhoneUSBHostIfAvailable;
-- (void)refreshIPhoneUSBHostIfAvailableForce:(BOOL)force;
 - (NSString *)answerForWebRTCOffer:(NSString *)offer error:(NSError **)error;
 - (void)sendWebRTCIceCandidateToIPhone:(LKRTCIceCandidate *)candidate;
 - (NSString *)webRTCAnswerSDPByRemovingInlineCandidates:(NSString *)answerSDP
                                              candidates:(NSArray<LKRTCIceCandidate *> **)candidates;
-- (NSArray<LKRTCIceCandidate *> *)webRTCCandidatesByFilteringForCurrentUSBHost:(NSArray<LKRTCIceCandidate *> *)candidates;
-- (BOOL)webRTCCandidateUsesCurrentUSBHost:(NSString *)candidateSDP;
 - (void)addRemoteWebRTCIceCandidates:(NSArray<LKRTCIceCandidate *> *)candidates
                       toPeerConnection:(LKRTCPeerConnection *)peerConnection;
 - (NSString *)runVideoSyncCommand:(NSString *)command
@@ -1639,12 +1631,6 @@ void setVideoEnabled(bool enabled);
                       extraArguments:(NSArray<NSString *> *)extraArguments
                        outputHandler:(void (^)(NSString *line))outputHandler
                           completion:(void (^)(NSString *output, NSError *error))completion;
-- (NSTask *)runVideoSyncCommandAsync:(NSString *)command
-                      extraArguments:(NSArray<NSString *> *)extraArguments
-                       outputHandler:(void (^)(NSString *line))outputHandler
-                retryOnUSBHostFailure:(BOOL)retryOnUSBHostFailure
-                          completion:(void (^)(NSString *output, NSError *error))completion;
-- (BOOL)videoSyncOutputIndicatesUSBHostFailure:(NSString *)output;
 - (void)handleVideoSyncProgressLine:(NSString *)line;
 - (NSDictionary<NSString *, NSString *> *)recordingDescriptorFromVideoSyncOutput:(NSString *)output;
 - (NSArray<NSDictionary<NSString *, NSString *> *> *)recordingDescriptorsFromVideoSyncOutput:(NSString *)output;
@@ -1724,112 +1710,16 @@ void setVideoEnabled(bool enabled);
 
 - (NSArray<NSString *> *)videoSyncArgumentsForCommand:(NSString *)command extraArguments:(NSArray<NSString *> *)extraArguments {
   NSMutableArray<NSString *> *arguments = [NSMutableArray arrayWithObject:command];
-  if (![command isEqualToString:@"discover"] && ![command isEqualToString:@"usb-host"]) {
-    [self refreshIPhoneUSBHostIfAvailable];
-    const std::string &host = g_iPhoneUSBHost.empty() ? g_iPhoneHost : g_iPhoneUSBHost;
+  if (![command isEqualToString:@"discover"]) {
     [arguments addObjectsFromArray:@[
       @"--host",
-      [NSString stringWithUTF8String:host.c_str()],
+      [NSString stringWithUTF8String:g_iPhoneHost.c_str()],
       @"--port",
       [NSString stringWithUTF8String:g_iPhoneControlPort.c_str()]
     ]];
   }
   [arguments addObjectsFromArray:extraArguments ?: @[]];
   return arguments;
-}
-
-- (void)refreshIPhoneUSBHostIfAvailable {
-  [self refreshIPhoneUSBHostIfAvailableForce:NO];
-}
-
-- (void)refreshIPhoneUSBHostIfAvailableForce:(BOOL)force {
-  if (!force) {
-    if (self.iPhoneTransferActive && !g_iPhoneUSBHost.empty()) {
-      debugLog(@"usb-host refresh skipped during active transfer host=%s", g_iPhoneUSBHost.c_str());
-      return;
-    }
-    if (self.lastUSBHostRefreshDate && [[NSDate date] timeIntervalSinceDate:self.lastUSBHostRefreshDate] < 60.0) {
-      return;
-    }
-  }
-
-  NSString *helperPath = [self videoSyncHelperPath];
-  if (![[NSFileManager defaultManager] isExecutableFileAtPath:helperPath]) {
-    if (force || g_iPhoneUSBHost.empty()) {
-      g_iPhoneUSBHost.clear();
-    }
-    return;
-  }
-
-  debugLog(@"usb-status refresh start force=%@", force ? @"yes" : @"no");
-  NSTask *task = [[NSTask alloc] init];
-  task.executableURL = [NSURL fileURLWithPath:helperPath];
-  task.arguments = @[ @"usb-status" ];
-  NSPipe *pipe = [NSPipe pipe];
-  task.standardOutput = pipe;
-  task.standardError = pipe;
-
-  NSError *launchError = nil;
-  if (![task launchAndReturnError:&launchError]) {
-    if (force || g_iPhoneUSBHost.empty()) {
-      g_iPhoneUSBHost.clear();
-    }
-    debugLog(@"usb-host refresh launch failed error=%@", launchError.localizedDescription ?: @"");
-    return;
-  }
-  [task waitUntilExit];
-  NSData *data = [pipe.fileHandleForReading readDataToEndOfFile];
-  if (task.terminationStatus != 0) {
-    if (force || g_iPhoneUSBHost.empty()) {
-      g_iPhoneUSBHost.clear();
-    }
-    self.lastUSBHostRefreshDate = [NSDate date];
-    debugLog(@"usb-host refresh failed status=%d", task.terminationStatus);
-    return;
-  }
-  NSString *output = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
-  for (NSString *line in [output componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
-    if (![line hasPrefix:@"usb\t"]) {
-      continue;
-    }
-    NSDictionary<NSString *, NSString *> *fields = [self fieldsFromHelperLine:line];
-    NSString *host = fields[@"host"];
-    NSString *controlPort = fields[@"controlPort"];
-    NSString *httpPort = fields[@"httpPort"];
-    if (host.length == 0) {
-      continue;
-    }
-    g_iPhoneUSBHost = host.UTF8String ?: "";
-    self.lastUSBHostRefreshDate = [NSDate date];
-    if (controlPort.length > 0) {
-      g_iPhoneControlPort = controlPort.UTF8String ?: "8787";
-    }
-    if (httpPort.length > 0) {
-      g_iPhoneHttpPort = httpPort.UTF8String ?: "8788";
-    }
-    debugLog(@"usb-host refresh ok host=%@ controlPort=%@ httpPort=%@", host ?: @"", controlPort ?: @"", httpPort ?: @"");
-    return;
-  }
-  if (force || g_iPhoneUSBHost.empty()) {
-    g_iPhoneUSBHost.clear();
-  }
-  self.lastUSBHostRefreshDate = [NSDate date];
-}
-
-- (NSString *)iPhoneTransportLabel {
-  return g_iPhoneUSBHost.empty() ? @"Wi-Fi" : @"USB";
-}
-
-- (BOOL)videoSyncOutputIndicatesUSBHostFailure:(NSString *)output {
-  if (output.length == 0 || g_iPhoneUSBHost.empty()) {
-    return NO;
-  }
-  NSString *lowercaseOutput = output.lowercaseString;
-  return [lowercaseOutput containsString:@"no route to host"] ||
-         [lowercaseOutput containsString:@"network is unreachable"] ||
-         [lowercaseOutput containsString:@"host is down"] ||
-         [lowercaseOutput containsString:@"resource temporarily unavailable"] ||
-         [lowercaseOutput containsString:@"could not connect to the control socket"];
 }
 
 - (NSString *)runVideoSyncCommand:(NSString *)command
@@ -1862,29 +1752,6 @@ void setVideoEnabled(bool enabled);
   NSData *data = [pipe.fileHandleForReading readDataToEndOfFile];
   NSString *output = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
   if (task.terminationStatus != 0) {
-    if ([self videoSyncOutputIndicatesUSBHostFailure:output]) {
-      debugLog(@"helper sync command=%@ failed on cached USB host; refreshing and retrying once", command ?: @"");
-      [self refreshIPhoneUSBHostIfAvailableForce:YES];
-      task = [[NSTask alloc] init];
-      task.executableURL = [NSURL fileURLWithPath:helperPath];
-      task.arguments = [self videoSyncArgumentsForCommand:command extraArguments:extraArguments];
-      pipe = [NSPipe pipe];
-      task.standardOutput = pipe;
-      task.standardError = pipe;
-      launchError = nil;
-      if (![task launchAndReturnError:&launchError]) {
-        if (error) {
-          *error = launchError;
-        }
-        return nil;
-      }
-      [task waitUntilExit];
-      data = [pipe.fileHandleForReading readDataToEndOfFile];
-      output = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
-      if (task.terminationStatus == 0) {
-        return output;
-      }
-    }
     if (error) {
       NSString *message = output.length > 0 ? output : @"video-sync-mac failed.";
       *error = [NSError errorWithDomain:@"KlongVideoRecorder"
@@ -1905,18 +1772,6 @@ void setVideoEnabled(bool enabled);
 - (NSTask *)runVideoSyncCommandAsync:(NSString *)command
                       extraArguments:(NSArray<NSString *> *)extraArguments
                        outputHandler:(void (^)(NSString *line))outputHandler
-                          completion:(void (^)(NSString *output, NSError *error))completion {
-  return [self runVideoSyncCommandAsync:command
-                        extraArguments:extraArguments
-                         outputHandler:outputHandler
-                   retryOnUSBHostFailure:YES
-                             completion:completion];
-}
-
-- (NSTask *)runVideoSyncCommandAsync:(NSString *)command
-                      extraArguments:(NSArray<NSString *> *)extraArguments
-                       outputHandler:(void (^)(NSString *line))outputHandler
-                retryOnUSBHostFailure:(BOOL)retryOnUSBHostFailure
                           completion:(void (^)(NSString *output, NSError *error))completion {
   NSString *helperPath = [self videoSyncHelperPath];
   if (![[NSFileManager defaultManager] isExecutableFileAtPath:helperPath]) {
@@ -1993,20 +1848,6 @@ void setVideoEnabled(bool enabled);
                                     userInfo:@{NSLocalizedDescriptionKey: message}];
     }
     debugLog(@"helper async finish command=%@ status=%d output=%@", command ?: @"", finishedTask.terminationStatus, output ?: @"");
-    BOOL canRetryWithProgressHandler = [command isEqualToString:@"download-recording"] && ![output containsString:@"downloaded "];
-    if (commandError && retryOnUSBHostFailure && (!outputHandler || canRetryWithProgressHandler) && [self videoSyncOutputIndicatesUSBHostFailure:output]) {
-      dispatch_async(dispatch_get_main_queue(), ^{
-        debugLog(@"helper async command=%@ failed on cached USB host; refreshing and retrying once", command ?: @"");
-        [self setStatus:@"USB tunnel changed; retrying iPhone command"];
-        [self refreshIPhoneUSBHostIfAvailableForce:YES];
-        [self runVideoSyncCommandAsync:command
-                        extraArguments:extraArguments
-                         outputHandler:nil
-                  retryOnUSBHostFailure:NO
-                             completion:completion];
-      });
-      return;
-    }
     dispatch_async(dispatch_get_main_queue(), ^{
       completion(output, commandError);
     });
@@ -2194,8 +2035,6 @@ void setVideoEnabled(bool enabled);
   if (checksum.length > 0) {
     [arguments addObjectsFromArray:@[ @"--checksum", checksum ]];
   }
-  [self refreshIPhoneUSBHostIfAvailableForce:YES];
-  self.iPhoneTransferActive = YES;
   [self setStatus:@"Downloading iPhone video"];
   __block NSDate *lastProgressDate = [NSDate date];
   __block NSTask *downloadTask = nil;
@@ -2227,7 +2066,6 @@ void setVideoEnabled(bool enabled);
       watchdogResumed = NO;
     }
     if (error) {
-      self.iPhoneTransferActive = NO;
       debugLog(@"download failed error=%@ output=%@", error.localizedDescription ?: @"", output ?: @"");
       [self setStatus:@"iPhone download failed"];
       completion(nil, error);
@@ -2243,14 +2081,12 @@ void setVideoEnabled(bool enabled);
     } else {
       debugLog(@"download complete path=%@", path ?: @"");
     }
-    self.iPhoneTransferActive = NO;
     completion(path, missingPathError);
   }];
   if (downloadTask) {
     dispatch_resume(watchdogTimer);
     watchdogResumed = YES;
   } else {
-    self.iPhoneTransferActive = NO;
     debugLog(@"download helper failed to launch");
   }
 }
@@ -2548,7 +2384,7 @@ void setVideoEnabled(bool enabled);
     return;
   }
   self.formatLabel.stringValue = [NSString stringWithFormat:@"iPhone %@: %s %@ fps, %s, %s, %s lens, %sx, look %s + 640px preview",
-                                                            [self iPhoneTransportLabel],
+                                                            @"Wi-Fi",
                                                             g_iPhoneResolution.c_str(),
                                                             [NSString stringWithUTF8String:g_iPhoneFPS.c_str()],
                                                             g_iPhoneOrientation.c_str(),
@@ -3209,9 +3045,6 @@ void setVideoEnabled(bool enabled);
   if (g_iPhoneHost.empty() || g_iPhoneToken.empty() || candidate.sdp.length == 0) {
     return;
   }
-  if (![self webRTCCandidateUsesCurrentUSBHost:candidate.sdp]) {
-    return;
-  }
   NSMutableArray<NSString *> *arguments = [NSMutableArray arrayWithObjects:
     @"--token", [NSString stringWithUTF8String:g_iPhoneToken.c_str()],
     @"--candidate", candidate.sdp,
@@ -3226,79 +3059,6 @@ void setVideoEnabled(bool enabled);
       [self setStatus:@"Preview: WebRTC ICE candidate failed"];
     }
   }];
-}
-
-- (NSString *)webRTCCandidateAddress:(NSString *)candidateSDP {
-  NSString *normalized = [candidateSDP hasPrefix:@"a="] ? [candidateSDP substringFromIndex:2] : candidateSDP;
-  NSArray<NSString *> *parts = [normalized componentsSeparatedByCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
-  NSMutableArray<NSString *> *tokens = [NSMutableArray array];
-  for (NSString *part in parts) {
-    if (part.length > 0) {
-      [tokens addObject:part];
-    }
-  }
-  if (tokens.count < 5 || ![tokens[0] hasPrefix:@"candidate:"]) {
-    return nil;
-  }
-  NSString *address = tokens[4].lowercaseString;
-  if ([address hasPrefix:@"["] && [address hasSuffix:@"]"] && address.length > 2) {
-    address = [address substringWithRange:NSMakeRange(1, address.length - 2)];
-  }
-  NSRange zoneRange = [address rangeOfString:@"%"];
-  if (zoneRange.location != NSNotFound) {
-    address = [address substringToIndex:zoneRange.location];
-  }
-  return address;
-}
-
-- (NSString *)webRTCUSBPrefix {
-  if (g_iPhoneUSBHost.empty() || g_iPhoneUSBHost == "usbmux") {
-    return nil;
-  }
-  NSString *host = [NSString stringWithUTF8String:g_iPhoneUSBHost.c_str()].lowercaseString;
-  if ([host hasPrefix:@"["] && [host hasSuffix:@"]"] && host.length > 2) {
-    host = [host substringWithRange:NSMakeRange(1, host.length - 2)];
-  }
-  NSArray<NSString *> *parts = [host componentsSeparatedByString:@":"];
-  NSMutableArray<NSString *> *prefix = [NSMutableArray array];
-  for (NSString *part in parts) {
-    if (part.length > 0) {
-      [prefix addObject:part];
-      if (prefix.count == 3) {
-        break;
-      }
-    }
-  }
-  if (prefix.count < 3) {
-    return host;
-  }
-  return [[prefix componentsJoinedByString:@":"] stringByAppendingString:@":"];
-}
-
-- (BOOL)webRTCCandidateUsesCurrentUSBHost:(NSString *)candidateSDP {
-  NSString *prefix = [self webRTCUSBPrefix];
-  if (prefix.length == 0) {
-    return YES;
-  }
-  NSString *address = [self webRTCCandidateAddress:candidateSDP];
-  if (address.length == 0) {
-    return NO;
-  }
-  NSString *host = [NSString stringWithUTF8String:g_iPhoneUSBHost.c_str()].lowercaseString;
-  return [address isEqualToString:host] || [address hasPrefix:prefix];
-}
-
-- (NSArray<LKRTCIceCandidate *> *)webRTCCandidatesByFilteringForCurrentUSBHost:(NSArray<LKRTCIceCandidate *> *)candidates {
-  if (g_iPhoneUSBHost.empty() || g_iPhoneUSBHost == "usbmux") {
-    return candidates;
-  }
-  NSMutableArray<LKRTCIceCandidate *> *filtered = [NSMutableArray array];
-  for (LKRTCIceCandidate *candidate in candidates) {
-    if ([self webRTCCandidateUsesCurrentUSBHost:candidate.sdp]) {
-      [filtered addObject:candidate];
-    }
-  }
-  return filtered;
 }
 
 - (NSString *)webRTCAnswerSDPByRemovingInlineCandidates:(NSString *)answerSDP
@@ -3321,12 +3081,10 @@ void setVideoEnabled(bool enabled);
     }
     if ([line hasPrefix:@"a=candidate:"]) {
       NSString *candidateSDP = [line substringFromIndex:@"a=".length];
-      if ([self webRTCCandidateUsesCurrentUSBHost:candidateSDP]) {
-        LKRTCIceCandidate *candidate = [[LKRTCIceCandidate alloc] initWithSdp:candidateSDP
-                                                                 sdpMLineIndex:MAX(currentMLineIndex, 0)
-                                                                        sdpMid:currentMid];
-        [parsedCandidates addObject:candidate];
-      }
+      LKRTCIceCandidate *candidate = [[LKRTCIceCandidate alloc] initWithSdp:candidateSDP
+                                                               sdpMLineIndex:MAX(currentMLineIndex, 0)
+                                                                      sdpMid:currentMid];
+      [parsedCandidates addObject:candidate];
       continue;
     }
     if ([line hasPrefix:@"a=end-of-candidates"]) {
@@ -3370,7 +3128,7 @@ void setVideoEnabled(bool enabled);
   self.webRTCLocalIceCandidates = [NSMutableArray array];
   self.webRTCIceGatheringSemaphore = dispatch_semaphore_create(0);
   self.webRTCPreviewView.hidden = NO;
-  [self setStatus:[NSString stringWithFormat:@"Preview: WebRTC connecting (%@ signaling)", [self iPhoneTransportLabel]]];
+  [self setStatus:[NSString stringWithFormat:@"Preview: WebRTC connecting (%@ signaling)", @"Wi-Fi"]];
 
   if (!self.webRTCPeerConnectionFactory) {
     self.webRTCPeerConnectionFactory = [[LKRTCPeerConnectionFactory alloc] init];
@@ -3427,7 +3185,7 @@ void setVideoEnabled(bool enabled);
       dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         dispatch_semaphore_wait(strongSelf.webRTCIceGatheringSemaphore, dispatch_time(DISPATCH_TIME_NOW, static_cast<int64_t>(3.0 * NSEC_PER_SEC)));
         NSString *localSDP = strongPeerConnection.localDescription.sdp ?: offer.sdp;
-        NSArray<LKRTCIceCandidate *> *localCandidates = [strongSelf webRTCCandidatesByFilteringForCurrentUSBHost:[strongSelf.webRTCLocalIceCandidates copy]];
+        NSArray<LKRTCIceCandidate *> *localCandidates = [strongSelf.webRTCLocalIceCandidates copy];
         const NSUInteger localCandidateCount = localCandidates.count;
         dispatch_async(dispatch_get_main_queue(), ^{
           if (!strongSelf.showingPlayback && !strongSelf.recordingVisualState) {
@@ -3464,7 +3222,7 @@ void setVideoEnabled(bool enabled);
             strongSelf.webRTCPreviewFailed = NO;
             strongSelf.webRTCPreviewFallbackReason = nil;
             strongSelf.webRTCPreviewView.hidden = NO;
-            [strongSelf setStatus:[NSString stringWithFormat:@"Preview: WebRTC (%@ signaling)", [strongSelf iPhoneTransportLabel]]];
+            [strongSelf setStatus:[NSString stringWithFormat:@"Preview: WebRTC (%@ signaling)", @"Wi-Fi"]];
             [strongSelf addRemoteWebRTCIceCandidates:remoteCandidates toPeerConnection:strongPeerConnection];
             for (LKRTCIceCandidate *candidate in localCandidates) {
               [strongSelf sendWebRTCIceCandidateToIPhone:candidate];
@@ -3562,7 +3320,7 @@ void setVideoEnabled(bool enabled);
     switch (newState) {
       case LKRTCIceConnectionStateConnected:
       case LKRTCIceConnectionStateCompleted:
-        [self setStatus:[NSString stringWithFormat:@"Preview: WebRTC connected (%@ signaling)", [self iPhoneTransportLabel]]];
+        [self setStatus:[NSString stringWithFormat:@"Preview: WebRTC connected (%@ signaling)", @"Wi-Fi"]];
         break;
       case LKRTCIceConnectionStateFailed:
       case LKRTCIceConnectionStateDisconnected:
@@ -3619,7 +3377,7 @@ void setVideoEnabled(bool enabled);
     [self.webRTCVideoTrack addRenderer:self.webRTCPreviewView];
     self.webRTCPreviewView.hidden = NO;
     self.webRTCPreviewActive = YES;
-    [self setStatus:[NSString stringWithFormat:@"Preview: WebRTC video (%@ signaling)", [self iPhoneTransportLabel]]];
+    [self setStatus:[NSString stringWithFormat:@"Preview: WebRTC video (%@ signaling)", @"Wi-Fi"]];
   });
 }
 

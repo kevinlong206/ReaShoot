@@ -8,93 +8,6 @@ struct DiscoveredPhone {
     var isPaired: Bool
 }
 
-enum USBDiscovery {
-    static func discover() -> [DiscoveredPhone] {
-        let devices = loadDeviceRecords()
-        let connected = discoveredPhones(from: devices)
-        if !connected.isEmpty {
-            return connected
-        }
-
-        let activatableDeviceIDs = devices.compactMap(deviceIDForWiredPairedDevice)
-        for deviceID in activatableDeviceIDs {
-            activateTunnel(for: deviceID)
-        }
-        if !activatableDeviceIDs.isEmpty {
-            return discoveredPhones(from: loadDeviceRecords())
-        }
-        return []
-    }
-
-    private static func loadDeviceRecords() -> [[String: Any]] {
-        let outputURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("iphone-video-sync-devices-\(UUID().uuidString).json")
-        defer {
-            try? FileManager.default.removeItem(at: outputURL)
-        }
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
-        process.arguments = ["devicectl", "list", "--timeout", "8", "devices", "--json-output", outputURL.path]
-        process.standardOutput = Pipe()
-        process.standardError = Pipe()
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
-            return []
-        }
-        guard process.terminationStatus == 0,
-              let data = try? Data(contentsOf: outputURL),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let result = root["result"] as? [String: Any],
-              let devices = result["devices"] as? [[String: Any]] else {
-            return []
-        }
-        return devices
-    }
-
-    private static func discoveredPhones(from devices: [[String: Any]]) -> [DiscoveredPhone] {
-        devices.compactMap { device in
-            guard let connection = device["connectionProperties"] as? [String: Any],
-                  connection["transportType"] as? String == "wired",
-                  connection["tunnelState"] as? String == "connected",
-                  let tunnelIPAddress = connection["tunnelIPAddress"] as? String,
-                  !tunnelIPAddress.isEmpty else {
-                return nil
-            }
-            let properties = device["deviceProperties"] as? [String: Any]
-            let name = properties?["name"] as? String ?? "iPhone USB"
-            return DiscoveredPhone(name: "\(name) USB", host: tunnelIPAddress, controlPort: 8787, httpPort: 8788, isPaired: true)
-        }
-    }
-
-    private static func deviceIDForWiredPairedDevice(_ device: [String: Any]) -> String? {
-        guard let identifier = device["identifier"] as? String,
-              let connection = device["connectionProperties"] as? [String: Any],
-              connection["transportType"] as? String == "wired",
-              connection["pairingState"] as? String == "paired",
-              connection["tunnelState"] as? String != "connected" else {
-            return nil
-        }
-        return identifier
-    }
-
-    private static func activateTunnel(for deviceID: String) {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
-        process.arguments = ["devicectl", "device", "info", "details", "--device", deviceID, "--timeout", "8"]
-        process.standardOutput = Pipe()
-        process.standardError = Pipe()
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
-            return
-        }
-    }
-}
-
 enum DNSSDDiscovery {
     static func discover(timeout: TimeInterval = 3) -> [DiscoveredPhone] {
         let browseOutput = runDNSSD(arguments: ["-B", "_iphone-video-sync._tcp", "local"], timeout: timeout)
@@ -177,7 +90,6 @@ final class BonjourDiscovery: NSObject, NetServiceBrowserDelegate, NetServiceDel
     }
 
     func discover(timeout: TimeInterval = 3) async -> [DiscoveredPhone] {
-        let usbResults = USBDiscovery.discover()
         let bonjourResults = await withCheckedContinuation { continuation in
             self.continuation = continuation
             browser.searchForServices(ofType: "_iphone-video-sync._tcp.", inDomain: "local.")
@@ -187,11 +99,9 @@ final class BonjourDiscovery: NSObject, NetServiceBrowserDelegate, NetServiceDel
             RunLoop.main.perform {}
         }
         if !bonjourResults.isEmpty {
-            return usbResults + bonjourResults.filter { bonjour in
-                !usbResults.contains { $0.host == bonjour.host }
-            }
+            return bonjourResults
         }
-        return usbResults + DNSSDDiscovery.discover(timeout: timeout)
+        return DNSSDDiscovery.discover(timeout: timeout)
     }
 
     func netServiceBrowser(_ browser: NetServiceBrowser, didFind service: NetService, moreComing: Bool) {
