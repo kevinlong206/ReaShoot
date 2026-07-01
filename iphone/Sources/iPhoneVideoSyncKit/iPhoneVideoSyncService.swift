@@ -97,6 +97,7 @@ public final class iPhoneVideoSyncService: ObservableObject {
     }
 
     public func startNetworkServices() {
+        stopNetworkServices(resetStatus: false)
         do {
             setKeepsScreenAwake(true)
             let httpServer = HTTPRecordingServer(
@@ -118,16 +119,26 @@ public final class iPhoneVideoSyncService: ObservableObject {
             try advertiseBonjour()
             status = "Listening on Wi-Fi"
         } catch {
+            stopNetworkServices(resetStatus: false)
             lastError = error.localizedDescription
         }
     }
 
     public func stopNetworkServices() {
+        stopNetworkServices(resetStatus: true)
+    }
+
+    private func stopNetworkServices(resetStatus: Bool) {
         webSocketServer?.stop()
+        webSocketServer = nil
         httpServer?.stop()
+        httpServer = nil
         netService?.stop()
+        netService = nil
         setKeepsScreenAwake(false)
-        status = "Stopped"
+        if resetStatus {
+            status = "Stopped"
+        }
     }
 
     public func applicationBecameActive() {

@@ -1,4 +1,5 @@
 import Darwin
+import CryptoKit
 import Foundation
 import VideoSyncCore
 
@@ -106,9 +107,11 @@ final class ControlClient {
         ].joined(separator: "\r\n")
         try write(Data(request.utf8), to: socket)
 
-        let response = try readAvailable(upTo: 4096, from: socket)
+        let response = try readHTTPHeaders(from: socket)
         let text = String(data: response, encoding: .utf8) ?? ""
-        guard text.contains("101 Switching Protocols") else {
+        let expectedAccept = webSocketAccept(for: key)
+        guard text.contains("101 Switching Protocols"),
+              headerValue("sec-websocket-accept", in: text) == expectedAccept else {
             throw ControlClientError.handshakeFailed(text)
         }
     }
@@ -180,19 +183,30 @@ final class ControlClient {
         return data
     }
 
-    private func readAvailable(upTo count: Int, from socket: Int32) throws -> Data {
-        var data = Data(count: count)
-        let received = try data.withUnsafeMutableBytes { buffer in
-            guard let base = buffer.baseAddress else {
-                return 0
-            }
-            let result = Darwin.recv(socket, base, count, 0)
+    private func readHTTPHeaders(from socket: Int32) throws -> Data {
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while data.range(of: Data("\r\n\r\n".utf8)) == nil {
+            let result = Darwin.recv(socket, &buffer, buffer.count, 0)
             guard result > 0 else {
                 throw ControlClientError.connectionFailed(String(cString: strerror(errno)))
             }
-            return result
+            data.append(buffer, count: result)
         }
-        data.removeSubrange(received..<data.count)
         return data
+    }
+
+    private func webSocketAccept(for key: String) -> String {
+        let magic = key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+        return Data(Insecure.SHA1.hash(data: Data(magic.utf8))).base64EncodedString()
+    }
+
+    private func headerValue(_ name: String, in response: String) -> String? {
+        let prefix = "\(name):"
+        return response
+            .components(separatedBy: "\r\n")
+            .first { $0.lowercased().hasPrefix(prefix) }?
+            .dropFirst(prefix.count)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

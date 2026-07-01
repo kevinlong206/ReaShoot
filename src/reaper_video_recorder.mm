@@ -1502,14 +1502,8 @@ bool insertRecordedMedia(const std::string &path, double position, bool fromIPho
   }
 
   (void)fromIPhone;
-  AlignmentResult alignment = alignVideoItemToReference(project, track, videoItem);
-  if (alignment.aligned) {
-    clearPendingAlignment();
-    g_lastAlignmentStatus = alignmentStatusText(alignment);
-  } else {
-    queuePendingAlignment(project, track, videoItem);
-    g_lastAlignmentStatus = "Recorded to Video Recorder track; aligning audio";
-  }
+  queuePendingAlignment(project, track, videoItem);
+  g_lastAlignmentStatus = "Recorded to Video Recorder track; aligning audio";
 
   if (UpdateArrange) {
     UpdateArrange();
@@ -1740,16 +1734,38 @@ void setVideoEnabled(bool enabled);
   NSPipe *pipe = [NSPipe pipe];
   task.standardOutput = pipe;
   task.standardError = pipe;
+  NSFileHandle *readHandle = pipe.fileHandleForReading;
+  NSMutableData *outputData = [NSMutableData data];
+  readHandle.readabilityHandler = ^(NSFileHandle *handle) {
+    NSData *chunk = handle.availableData;
+    if (chunk.length == 0) {
+      return;
+    }
+    @synchronized (outputData) {
+      [outputData appendData:chunk];
+    }
+  };
 
   NSError *launchError = nil;
   if (![task launchAndReturnError:&launchError]) {
+    readHandle.readabilityHandler = nil;
     if (error) {
       *error = launchError;
     }
     return nil;
   }
   [task waitUntilExit];
-  NSData *data = [pipe.fileHandleForReading readDataToEndOfFile];
+  readHandle.readabilityHandler = nil;
+  NSData *remainingData = [readHandle readDataToEndOfFile];
+  @synchronized (outputData) {
+    if (remainingData.length > 0) {
+      [outputData appendData:remainingData];
+    }
+  }
+  NSData *data = nil;
+  @synchronized (outputData) {
+    data = [outputData copy];
+  }
   NSString *output = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
   if (task.terminationStatus != 0) {
     if (error) {
@@ -2038,33 +2054,23 @@ void setVideoEnabled(bool enabled);
   [self setStatus:@"Downloading iPhone video"];
   __block NSDate *lastProgressDate = [NSDate date];
   __block NSTask *downloadTask = nil;
-  __block dispatch_source_t watchdogTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
-  __block BOOL watchdogResumed = NO;
-  dispatch_source_set_timer(watchdogTimer, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(30.0 * NSEC_PER_SEC)), (uint64_t)(30.0 * NSEC_PER_SEC), (uint64_t)(1.0 * NSEC_PER_SEC));
-  dispatch_source_set_event_handler(watchdogTimer, ^{
-    if (!downloadTask || !downloadTask.running) {
-      debugLog(@"download watchdog stopping; task finished or missing");
-      dispatch_source_cancel(watchdogTimer);
+  __block dispatch_source_t watchdogTimer = nil;
+  __block BOOL watchdogCanceled = NO;
+  void (^cancelWatchdog)(void) = ^{
+    if (!watchdogTimer || watchdogCanceled) {
       return;
     }
-    if ([[NSDate date] timeIntervalSinceDate:lastProgressDate] > 180.0) {
-      [self setStatus:@"iPhone download stalled; retry from Pending"];
-      debugLog(@"download watchdog terminating stalled helper pid=%d", downloadTask.processIdentifier);
-      [downloadTask terminate];
-      dispatch_source_cancel(watchdogTimer);
-    }
-  });
+    watchdogCanceled = YES;
+    dispatch_source_cancel(watchdogTimer);
+    watchdogTimer = nil;
+  };
   debugLog(@"download start id=%@ filename=%@ bytes=%@ dir=%@", recording[@"id"] ?: @"", recording[@"filename"] ?: @"", recording[@"byteCount"] ?: @"", directory ?: @"");
   downloadTask = [self runVideoSyncCommandAsync:@"download-recording" extraArguments:arguments outputHandler:^(NSString *line) {
     lastProgressDate = [NSDate date];
     debugLog(@"download progress line=%@", line ?: @"");
     [self handleVideoSyncProgressLine:line];
   } completion:^(NSString *output, NSError *error) {
-    if (watchdogTimer && watchdogResumed) {
-      dispatch_source_cancel(watchdogTimer);
-      watchdogTimer = nil;
-      watchdogResumed = NO;
-    }
+    cancelWatchdog();
     if (error) {
       debugLog(@"download failed error=%@ output=%@", error.localizedDescription ?: @"", output ?: @"");
       [self setStatus:@"iPhone download failed"];
@@ -2084,8 +2090,22 @@ void setVideoEnabled(bool enabled);
     completion(path, missingPathError);
   }];
   if (downloadTask) {
+    watchdogTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+    dispatch_source_set_timer(watchdogTimer, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(30.0 * NSEC_PER_SEC)), (uint64_t)(30.0 * NSEC_PER_SEC), (uint64_t)(1.0 * NSEC_PER_SEC));
+    dispatch_source_set_event_handler(watchdogTimer, ^{
+      if (!downloadTask || !downloadTask.running) {
+        debugLog(@"download watchdog stopping; task finished or missing");
+        cancelWatchdog();
+        return;
+      }
+      if ([[NSDate date] timeIntervalSinceDate:lastProgressDate] > 180.0) {
+        [self setStatus:@"iPhone download stalled; retry from Pending"];
+        debugLog(@"download watchdog terminating stalled helper pid=%d", downloadTask.processIdentifier);
+        [downloadTask terminate];
+        cancelWatchdog();
+      }
+    });
     dispatch_resume(watchdogTimer);
-    watchdogResumed = YES;
   } else {
     debugLog(@"download helper failed to launch");
   }
@@ -2383,7 +2403,8 @@ void setVideoEnabled(bool enabled);
   if (!self.formatLabel) {
     return;
   }
-  self.formatLabel.stringValue = [NSString stringWithFormat:@"iPhone %@: %s %@ fps, %s, %s, %s lens, %sx, look %s + 640px preview",
+  NSString *previewState = self.webRTCPreviewActive ? @"WebRTC preview" : (self.webRTCPreviewStarting ? @"WebRTC connecting" : @"preview idle");
+  self.formatLabel.stringValue = [NSString stringWithFormat:@"iPhone %@: %s %@ fps, %s, %s, %s lens, %sx, look %s, %@",
                                                             @"Wi-Fi",
                                                             g_iPhoneResolution.c_str(),
                                                             [NSString stringWithUTF8String:g_iPhoneFPS.c_str()],
@@ -2391,7 +2412,8 @@ void setVideoEnabled(bool enabled);
                                                             g_iPhoneAspect.c_str(),
                                                             g_iPhoneLens.c_str(),
                                                             g_iPhoneZoom.c_str(),
-                                                            g_iPhoneLook.c_str()];
+                                                            g_iPhoneLook.c_str(),
+                                                            previewState];
   [self updateRecordingTextColor];
 }
 
@@ -2450,6 +2472,10 @@ void setVideoEnabled(bool enabled);
 
 - (void)profileSelectionChanged:(id)sender {
   (void)sender;
+  if (self.iPhonePreviewProfileConfiguring) {
+    [self setStatus:@"iPhone profile configure already running"];
+    return;
+  }
   [self persistIPhoneSettings];
   [self updateCaptureFormatLabel];
   if (g_iPhoneHost.empty() || g_iPhoneToken.empty()) {
@@ -2474,7 +2500,9 @@ void setVideoEnabled(bool enabled);
     [NSString stringWithUTF8String:g_iPhoneLook.c_str()]
   ];
   [self setStatus:@"Configuring iPhone profile"];
+  self.iPhonePreviewProfileConfiguring = YES;
   [self runVideoSyncCommandAsync:@"configure" extraArguments:arguments completion:^(NSString *output, NSError *error) {
+    self.iPhonePreviewProfileConfiguring = NO;
     if (error) {
       [self setStatus:@"iPhone profile configure failed"];
       showError(error.localizedDescription.UTF8String ?: "iPhone profile configure failed.");
@@ -2482,8 +2510,10 @@ void setVideoEnabled(bool enabled);
     }
     NSString *message = [output stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
     [self setStatus:message.length > 0 ? message : @"iPhone profile configured"];
-    [self stopRemotePreview];
-    [self startRemotePreview];
+    if (self.webRTCPreviewActive || self.webRTCPreviewStarting) {
+      [self stopRemotePreview];
+      [self startRemotePreview];
+    }
   }];
 }
 
@@ -3208,10 +3238,12 @@ void setVideoEnabled(bool enabled);
         NSArray<LKRTCIceCandidate *> *remoteCandidates = @[];
         NSString *answerWithoutCandidates = [strongSelf webRTCAnswerSDPByRemovingInlineCandidates:answerSDP candidates:&remoteCandidates];
         LKRTCSessionDescription *answer = [[LKRTCSessionDescription alloc] initWithType:LKRTCSdpTypeAnswer sdp:answerWithoutCandidates];
+        __weak LKRTCPeerConnection *weakRemotePeerConnection = strongPeerConnection;
         [strongPeerConnection setRemoteDescription:answer completionHandler:^(NSError *remoteError) {
           dispatch_async(dispatch_get_main_queue(), ^{
+            LKRTCPeerConnection *remotePeerConnection = weakRemotePeerConnection;
             strongSelf.webRTCPreviewStarting = NO;
-            if (remoteError) {
+            if (remoteError || !remotePeerConnection) {
               [strongSelf stopWebRTCPreview];
               strongSelf.webRTCPreviewFailed = YES;
               strongSelf.webRTCPreviewFallbackReason = @"WebRTC answer failed";
@@ -3223,7 +3255,7 @@ void setVideoEnabled(bool enabled);
             strongSelf.webRTCPreviewFallbackReason = nil;
             strongSelf.webRTCPreviewView.hidden = NO;
             [strongSelf setStatus:[NSString stringWithFormat:@"Preview: WebRTC (%@ signaling)", @"Wi-Fi"]];
-            [strongSelf addRemoteWebRTCIceCandidates:remoteCandidates toPeerConnection:strongPeerConnection];
+            [strongSelf addRemoteWebRTCIceCandidates:remoteCandidates toPeerConnection:remotePeerConnection];
             for (LKRTCIceCandidate *candidate in localCandidates) {
               [strongSelf sendWebRTCIceCandidateToIPhone:candidate];
             }
@@ -3649,6 +3681,14 @@ void processPendingAlignment() {
   const std::time_t now = std::time(nullptr);
   if (now < g_nextAlignmentAttemptTime) {
     return;
+  }
+
+  if (GetPlayStateEx) {
+    const int playState = GetPlayStateEx(g_pendingAlignmentProject);
+    if ((playState & 5) != 0) {
+      g_nextAlignmentAttemptTime = now + 1;
+      return;
+    }
   }
 
   if (ValidatePtr2 &&

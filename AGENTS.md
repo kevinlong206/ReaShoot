@@ -24,8 +24,6 @@ This repository contains a macOS-only native REAPER extension plus its companion
 ```sh
 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=all make
 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=all make install
-codesign --force --sign - "$HOME/Library/Application Support/REAPER/UserPlugins/LiveKitWebRTC.framework"
-codesign --force --sign - "$HOME/Library/Application Support/REAPER/UserPlugins/reaper_video_recorder.dylib"
 codesign --verify "$HOME/Library/Application Support/REAPER/UserPlugins/video-sync-mac"
 codesign --verify "$HOME/Library/Application Support/REAPER/UserPlugins/reaper_video_recorder.dylib"
 codesign --verify "$HOME/Library/Application Support/REAPER/UserPlugins/LiveKitWebRTC.framework"

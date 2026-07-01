@@ -50,6 +50,12 @@ macOS-only REAPER extension for controlling the companion iPhone Video Sync app 
 make
 ```
 
+Run the lightweight validation suite with:
+
+```sh
+make check
+```
+
 By default the Makefile builds for the current Mac architecture. To build a universal binary:
 
 ```sh
@@ -77,8 +83,6 @@ GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=all \
 
 ```sh
 make install
-codesign --force --sign - "$HOME/Library/Application Support/REAPER/UserPlugins/reaper_video_recorder.dylib"
-codesign --force --sign - "$HOME/Library/Application Support/REAPER/UserPlugins/LiveKitWebRTC.framework"
 codesign --verify "$HOME/Library/Application Support/REAPER/UserPlugins/video-sync-mac"
 codesign --verify "$HOME/Library/Application Support/REAPER/UserPlugins/reaper_video_recorder.dylib"
 codesign --verify "$HOME/Library/Application Support/REAPER/UserPlugins/LiveKitWebRTC.framework"
@@ -90,7 +94,7 @@ If macOS blocks the dylib during local development:
 
 ```sh
 xattr -dr com.apple.quarantine "$HOME/Library/Application Support/REAPER/UserPlugins/reaper_video_recorder.dylib"
-codesign --force --sign - "$HOME/Library/Application Support/REAPER/UserPlugins/reaper_video_recorder.dylib"
+make install
 ```
 
 ## Notes

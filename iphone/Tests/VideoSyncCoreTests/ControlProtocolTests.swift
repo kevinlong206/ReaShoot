@@ -63,4 +63,21 @@ final class ControlProtocolTests: XCTestCase {
         XCTAssertEqual(recording.desiredLook, "natural")
         XCTAssertNil(recording.renderedLook)
     }
+
+    func testFileChecksumMatchesDataChecksum() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("bin")
+        defer {
+            try? FileManager.default.removeItem(at: url)
+        }
+
+        var data = Data()
+        for value in 0..<16_384 {
+            data.append(UInt8(value % 251))
+        }
+        try data.write(to: url)
+
+        XCTAssertEqual(try Checksum.sha256(forFileAt: url), Checksum.sha256(for: data))
+    }
 }

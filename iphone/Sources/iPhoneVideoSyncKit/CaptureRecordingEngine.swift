@@ -759,6 +759,10 @@ public final class CaptureRecordingEngine: NSObject, ObservableObject {
         isApplyingLook = true
         lookExportProgress = 0.0
         lastError = nil
+        defer {
+            isApplyingLook = false
+            lookExportProgress = nil
+        }
         var preparedURL = recording.url
         do {
             let renderedURL = try await filteredRecordingURL(for: recording.url, recordingID: recording.id, look: look)
@@ -780,8 +784,6 @@ public final class CaptureRecordingEngine: NSObject, ObservableObject {
         recording.desiredLook = look
         store.upsert(recording)
         DebugLog.write("prepare recording stored id=\(id) bytes=\(recording.byteCount) checksum=\(recording.checksumSHA256 ?? "nil")")
-        isApplyingLook = false
-        lookExportProgress = nil
         return recording
     }
 
