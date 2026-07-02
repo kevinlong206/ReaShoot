@@ -57,6 +57,7 @@
 
 #include <cmath>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -79,6 +80,10 @@ int g_configureCommand = 0;
 int g_toggleFollowCommand = 0;
 
 std::unique_ptr<reaphone::Win32PreviewPanel> g_previewPanel;
+
+// Optional sink so report() mirrors status messages into the preview panel's
+// status line. Set when the panel is configured; only touched on the UI thread.
+std::function<void(const std::string &)> g_statusSink;
 
 reaphone::Win32PreviewPanel &previewPanel() {
   if (!g_previewPanel) {
@@ -140,6 +145,9 @@ void report(const std::string &message) {
   logger().log(message);
   if (ShowConsoleMsg) {
     ShowConsoleMsg((message + "\n").c_str());
+  }
+  if (g_statusSink) {
+    g_statusSink(message);
   }
 }
 
@@ -617,14 +625,91 @@ void handleStop(ReaperExtStateStore &store) {
   }
 }
 
+// Persists the panel's editable fields into the durable settings before an
+// action runs, so the helper sees the values shown in the window.
+void applyPanelFields(ReaperExtStateStore &store, const reaphone::PanelControls &pc) {
+  reaphone::PluginSettings settings = reaphone::loadSettings(store);
+  if (!pc.host.empty()) {
+    settings.host = pc.host;
+  }
+  if (!pc.resolution.empty()) {
+    settings.resolution = pc.resolution;
+  }
+  if (!pc.fps.empty()) {
+    settings.fps = pc.fps;
+  }
+  reaphone::saveSettings(store, settings);
+}
+
+// Wires the preview panel's control strip to the existing action handlers, and
+// routes report() status text into the panel's status line. Runs once.
+void ensurePanelConfigured() {
+  static bool configured = false;
+  reaphone::Win32PreviewPanel &panel = previewPanel();
+  if (configured) {
+    return;
+  }
+  configured = true;
+
+  g_statusSink = [](const std::string &message) {
+    if (g_previewPanel) {
+      g_previewPanel->setStatus(message);
+    }
+  };
+
+  reaphone::PanelCallbacks callbacks;
+  callbacks.onPair = [](const reaphone::PanelControls &pc) {
+    ReaperExtStateStore store;
+    applyPanelFields(store, pc);
+    store.setString(reaphone::settings_keys::kSection, kPairCodeKey, pc.pairingCode);
+    handlePair(store);
+  };
+  callbacks.onTest = [](const reaphone::PanelControls &pc) {
+    ReaperExtStateStore store;
+    applyPanelFields(store, pc);
+    handleTestConnection(store);
+  };
+  callbacks.onStart = [](const reaphone::PanelControls &pc) {
+    ReaperExtStateStore store;
+    applyPanelFields(store, pc);
+    handleStart(store);
+  };
+  callbacks.onStop = [](const reaphone::PanelControls &pc) {
+    ReaperExtStateStore store;
+    applyPanelFields(store, pc);
+    handleStop(store);
+  };
+  callbacks.onDiscover = [](const reaphone::PanelControls &) {
+    report("ReaPhoneVideo: Discover needs mDNS and isn't available on Windows yet; enter the host "
+           "manually.");
+  };
+  panel.setCallbacks(std::move(callbacks));
+}
+
+// Refreshes the panel's fields from the persisted settings (e.g. after the
+// Configure dialog or a pairing round-trip updated them).
+void primePanelValues() {
+  ReaperExtStateStore store;
+  const reaphone::PluginSettings settings = reaphone::loadSettings(store);
+  reaphone::PanelControls pc;
+  pc.host = settings.host;
+  pc.pairingCode = store.getString(reaphone::settings_keys::kSection, kPairCodeKey);
+  pc.resolution = settings.resolution;
+  pc.fps = settings.fps;
+  previewPanel().setInitialValues(pc);
+}
+
 void handleShowPreview() {
+  ensurePanelConfigured();
   reaphone::Win32PreviewPanel &panel = previewPanel();
   if (panel.isVisible()) {
     panel.hide();
     report("ReaPhoneVideo: preview hidden.");
   } else {
+    primePanelValues();
     panel.show();
-    report("ReaPhoneVideo: preview shown (WebRTC rendering not yet wired).");
+    report("ReaPhoneVideo: preview panel shown. Pair and record from here (video preview pending "
+           "WebRTC).");
   }
 }
 
@@ -697,6 +782,21 @@ int registerAction(reaper_plugin_info_t *rec, const char *id, const char *name) 
   return rec->Register("custom_action", &action);
 }
 
+// Routes keystrokes to the preview panel's edit fields when it (or one of its
+// children) has focus, so REAPER's global shortcuts don't swallow typing.
+int translatePanelAccel(MSG *msg, accelerator_register_t *) {
+  if (msg == nullptr || !g_previewPanel) {
+    return 0;
+  }
+  const HWND panel = g_previewPanel->nativeHandle();
+  if (panel != nullptr && (msg->hwnd == panel || IsChild(panel, msg->hwnd))) {
+    return -1; // pass the key on to our window/controls
+  }
+  return 0;
+}
+
+accelerator_register_t g_panelAccel = {translatePanelAccel, true, nullptr};
+
 bool registerActions(reaper_plugin_info_t *rec) {
   using namespace reaphone::actions;
 
@@ -723,11 +823,13 @@ bool registerActions(reaper_plugin_info_t *rec) {
   // Seed the follow toggle from persisted settings and start the transport poll.
   ReaperExtStateStore store;
   g_follow.enabled = reaphone::loadSettings(store).followEnabled;
+  rec->Register("accelerator", &g_panelAccel);
   return rec->Register("timer", reinterpret_cast<void *>(onTimer)) != 0;
 }
 
 void unregisterActions(reaper_plugin_info_t *rec) {
   rec->Register("-timer", reinterpret_cast<void *>(onTimer));
+  rec->Register("-accelerator", &g_panelAccel);
   rec->Register("-hookcommand2", reinterpret_cast<void *>(hookCommand2));
   joinFollowWorkers();
 }
@@ -743,6 +845,7 @@ REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hI
     if (g_reaper) {
       unregisterActions(g_reaper);
     }
+    g_statusSink = nullptr;
     g_previewPanel.reset();
     g_reaper = nullptr;
     return 0;
