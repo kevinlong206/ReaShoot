@@ -40,6 +40,7 @@
 #define REAPERAPI_WANT_Undo_BeginBlock
 #define REAPERAPI_WANT_Undo_EndBlock
 #define REAPERAPI_WANT_GetMainHwnd
+#define REAPERAPI_WANT_GetPlayState
 #include "reaper_plugin_functions.h"
 
 #include "reaphone_action_ids.h"
@@ -57,7 +58,9 @@
 #include <cmath>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -73,6 +76,7 @@ int g_stopCommand = 0;
 int g_showPreviewCommand = 0;
 int g_floatPreviewCommand = 0;
 int g_configureCommand = 0;
+int g_toggleFollowCommand = 0;
 
 std::unique_ptr<reaphone::Win32PreviewPanel> g_previewPanel;
 
@@ -427,6 +431,118 @@ std::wstring downloadDirectory() {
   return ec ? std::wstring(L".") : temp.wstring();
 }
 
+// ---- Transport follow ------------------------------------------------------
+// When enabled, hitting record in REAPER auto-starts the iPhone recording, and
+// stopping auto-stops + downloads it. Helper calls run on worker threads so the
+// REAPER UI thread (timer) never blocks on network I/O; completed downloads are
+// handed back to the timer, which performs insert/align on the main thread
+// (REAPER APIs are not thread-safe).
+
+constexpr int kRecordBit = 4;
+
+struct FollowState {
+  std::mutex mutex;
+  std::vector<std::string> completedPaths; // guarded by mutex
+  std::vector<std::thread> workers;        // guarded by mutex
+  bool recording = false;                  // main thread only
+  bool enabled = false;                    // main thread only
+};
+
+FollowState g_follow;
+
+// Worker-thread-safe helper runner: logs to file only, never touches REAPER APIs.
+reaphone::ProcessResult runCommandSilent(const std::string &command, const reaphone::PluginSettings &settings,
+                                         const std::vector<std::wstring> &extraArguments) {
+  const reaphone::HelperConnection connection =
+      reaphone::makeConnection(settings.host, settings.controlPort, settings.httpPort);
+  logger().log("follow: running helper " + command);
+  reaphone::ProcessResult result =
+      reaphone::runVideoSyncCommand(helperExecutablePath(), command, connection, extraArguments);
+  logger().log("follow: helper " + command + " exited " + std::to_string(result.exitCode));
+  return result;
+}
+
+void launchStartWorker(const reaphone::PluginSettings &settings) {
+  std::lock_guard<std::mutex> lock(g_follow.mutex);
+  g_follow.workers.emplace_back(
+      [settings]() { runCommandSilent("start", settings, {L"--token", widen(settings.token)}); });
+}
+
+void launchStopWorker(const reaphone::PluginSettings &settings, const std::wstring &downloadDir) {
+  std::lock_guard<std::mutex> lock(g_follow.mutex);
+  g_follow.workers.emplace_back([settings, downloadDir]() {
+    const reaphone::ProcessResult result =
+        runCommandSilent("stop", settings, {L"--token", widen(settings.token), L"--download-dir", downloadDir});
+    if (result.exitCode != 0) {
+      return;
+    }
+    if (const auto path = reaphone::parseDownloadedPath(result.standardOutput)) {
+      std::lock_guard<std::mutex> lock(g_follow.mutex);
+      g_follow.completedPaths.push_back(*path);
+    }
+  });
+}
+
+void onTimer() {
+  // Insert any downloads finished by worker threads (main thread => REAPER-safe).
+  std::vector<std::string> ready;
+  {
+    std::lock_guard<std::mutex> lock(g_follow.mutex);
+    ready.swap(g_follow.completedPaths);
+  }
+  for (const std::string &path : ready) {
+    insertAndAlign(path);
+  }
+
+  if (!GetPlayState) {
+    return;
+  }
+  const bool recording = (GetPlayState() & kRecordBit) != 0;
+  if (recording == g_follow.recording) {
+    return;
+  }
+  g_follow.recording = recording;
+
+  if (!g_follow.enabled) {
+    return;
+  }
+
+  ReaperExtStateStore store;
+  const reaphone::PluginSettings settings = reaphone::loadSettings(store);
+  if (settings.host.empty() || settings.token.empty()) {
+    logger().log("follow: skipped auto start/stop; host or token not set");
+    return;
+  }
+
+  if (recording) {
+    launchStartWorker(settings);
+  } else {
+    launchStopWorker(settings, downloadDirectory());
+  }
+}
+
+void joinFollowWorkers() {
+  std::vector<std::thread> workers;
+  {
+    std::lock_guard<std::mutex> lock(g_follow.mutex);
+    workers.swap(g_follow.workers);
+  }
+  for (std::thread &worker : workers) {
+    if (worker.joinable()) {
+      worker.join();
+    }
+  }
+}
+
+void handleToggleFollow(ReaperExtStateStore &store) {
+  g_follow.enabled = !g_follow.enabled;
+  reaphone::PluginSettings settings = reaphone::loadSettings(store);
+  settings.followEnabled = g_follow.enabled;
+  reaphone::saveSettings(store, settings);
+  report(g_follow.enabled ? "ReaPhoneVideo: transport follow ON (record in REAPER drives the iPhone)."
+                          : "ReaPhoneVideo: transport follow OFF.");
+}
+
 void handlePair(ReaperExtStateStore &store) {
   const reaphone::PluginSettings settings = reaphone::loadSettings(store);
   if (settings.host.empty()) {
@@ -569,6 +685,10 @@ bool hookCommand2(KbdSectionInfo *section, int command, int value, int valuehw, 
     handleConfigure(store);
     return true;
   }
+  if (command == g_toggleFollowCommand) {
+    handleToggleFollow(store);
+    return true;
+  }
   return false;
 }
 
@@ -588,17 +708,28 @@ bool registerActions(reaper_plugin_info_t *rec) {
   g_showPreviewCommand = registerAction(rec, kShowPreviewId, kShowPreviewName);
   g_floatPreviewCommand = registerAction(rec, kFloatPreviewId, kFloatPreviewName);
   g_configureCommand = registerAction(rec, kConfigureId, kConfigureName);
+  g_toggleFollowCommand = registerAction(rec, kToggleFollowId, kToggleFollowName);
 
   const bool allRegistered = g_diagnosticCommand != 0 && g_pairCommand != 0 &&
                              g_testConnectionCommand != 0 && g_startCommand != 0 &&
                              g_stopCommand != 0 && g_showPreviewCommand != 0 &&
-                             g_floatPreviewCommand != 0 && g_configureCommand != 0;
+                             g_floatPreviewCommand != 0 && g_configureCommand != 0 &&
+                             g_toggleFollowCommand != 0;
 
-  return allRegistered && rec->Register("hookcommand2", reinterpret_cast<void *>(hookCommand2));
+  if (!allRegistered || !rec->Register("hookcommand2", reinterpret_cast<void *>(hookCommand2))) {
+    return false;
+  }
+
+  // Seed the follow toggle from persisted settings and start the transport poll.
+  ReaperExtStateStore store;
+  g_follow.enabled = reaphone::loadSettings(store).followEnabled;
+  return rec->Register("timer", reinterpret_cast<void *>(onTimer)) != 0;
 }
 
 void unregisterActions(reaper_plugin_info_t *rec) {
+  rec->Register("-timer", reinterpret_cast<void *>(onTimer));
   rec->Register("-hookcommand2", reinterpret_cast<void *>(hookCommand2));
+  joinFollowWorkers();
 }
 
 } // namespace
