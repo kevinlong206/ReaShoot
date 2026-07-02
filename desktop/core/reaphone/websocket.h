@@ -13,6 +13,9 @@ namespace reaphone {
 std::string webSocketAcceptKey(std::string_view clientKey);
 bool isWebSocketSwitchingProtocolsResponse(const HttpHeaders &headers, std::string_view clientKey);
 
+// Standard base64 encoding of a byte buffer (used for the Sec-WebSocket-Key).
+std::string base64Encode(const std::uint8_t *bytes, std::size_t size);
+
 // Builds the client WebSocket upgrade request, mirroring the macOS helper
 // ControlClient handshake (GET <path> HTTP/1.1 with Upgrade/Connection/Key/Version).
 std::string buildWebSocketHandshakeRequest(std::string_view host, int port,

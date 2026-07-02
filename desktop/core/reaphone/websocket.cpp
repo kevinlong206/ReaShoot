@@ -96,6 +96,10 @@ std::array<std::uint8_t, 20> sha1(std::string_view input) {
   return digest;
 }
 
+bool tokenListContains(std::string value, std::string_view expected);
+
+} // namespace
+
 std::string base64Encode(const std::uint8_t *bytes, std::size_t size) {
   std::string encoded;
   encoded.reserve(((size + 2) / 3) * 4);
@@ -112,6 +116,8 @@ std::string base64Encode(const std::uint8_t *bytes, std::size_t size) {
   }
   return encoded;
 }
+
+namespace {
 
 bool tokenListContains(std::string value, std::string_view expected) {
   std::size_t start = 0;
