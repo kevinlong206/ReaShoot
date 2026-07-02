@@ -100,6 +100,12 @@ if(BUILD_TESTING)
   target_link_libraries(reaphone_logger_tests PRIVATE reaphone_core)
   add_test(NAME reaphone_logger_tests COMMAND reaphone_logger_tests)
 
+  add_executable(reaphone_preview_tests
+    desktop/core/tests/preview_tests.cpp
+  )
+  target_link_libraries(reaphone_preview_tests PRIVATE reaphone_core)
+  add_test(NAME reaphone_preview_tests COMMAND reaphone_preview_tests)
+
   if(WIN32)
     add_executable(reaphone_process_tests
       desktop/core/tests/process_tests.cpp
@@ -131,8 +137,9 @@ endif()
 if(WIN32)
   add_library(reaphonevideo MODULE
     src/windows/reaphonevideo_win_skeleton.cpp
+    src/windows/preview_panel_win32.cpp
   )
-  target_link_libraries(reaphonevideo PRIVATE reaphone_portability reaphone_core)
+  target_link_libraries(reaphonevideo PRIVATE reaphone_portability reaphone_core gdi32 user32)
   # REAPER only loads extension DLLs from UserPlugins whose filename starts
   # with "reaper_" (matching the macOS "reaper_video_recorder.dylib" convention),
   # so the output name must carry that prefix or REAPER silently ignores it.

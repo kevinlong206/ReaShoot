@@ -17,9 +17,12 @@
 #include "reaphone/plugin_settings.h"
 #include "reaphone/windows/helper_launcher.h"
 
+#include "preview_panel_win32.h"
+
 #include <windows.h>
 
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -33,6 +36,17 @@ int g_pairCommand = 0;
 int g_testConnectionCommand = 0;
 int g_startCommand = 0;
 int g_stopCommand = 0;
+int g_showPreviewCommand = 0;
+int g_floatPreviewCommand = 0;
+
+std::unique_ptr<reaphone::Win32PreviewPanel> g_previewPanel;
+
+reaphone::Win32PreviewPanel &previewPanel() {
+  if (!g_previewPanel) {
+    g_previewPanel = std::make_unique<reaphone::Win32PreviewPanel>(g_instance);
+  }
+  return *g_previewPanel;
+}
 
 // Transient pairing code, read from ExtState so it can be set from a future UI
 // or ReaScript without persisting alongside the durable settings.
@@ -176,6 +190,24 @@ void handleStop(ReaperExtStateStore &store) {
   runCommand("stop", settings, {L"--token", widen(settings.token)});
 }
 
+void handleShowPreview() {
+  reaphone::Win32PreviewPanel &panel = previewPanel();
+  if (panel.isVisible()) {
+    panel.hide();
+    report("ReaPhoneVideo: preview hidden.");
+  } else {
+    panel.show();
+    report("ReaPhoneVideo: preview shown (WebRTC rendering not yet wired).");
+  }
+}
+
+void handleFloatPreview() {
+  reaphone::Win32PreviewPanel &panel = previewPanel();
+  panel.setFloating(!panel.isFloating());
+  report(panel.isFloating() ? "ReaPhoneVideo: preview set to floating."
+                            : "ReaPhoneVideo: preview set to docked.");
+}
+
 bool hookCommand2(KbdSectionInfo *section, int command, int value, int valuehw, int relmode, HWND hwnd) {
   (void)section;
   (void)value;
@@ -205,6 +237,14 @@ bool hookCommand2(KbdSectionInfo *section, int command, int value, int valuehw, 
     handleStop(store);
     return true;
   }
+  if (command == g_showPreviewCommand) {
+    handleShowPreview();
+    return true;
+  }
+  if (command == g_floatPreviewCommand) {
+    handleFloatPreview();
+    return true;
+  }
   return false;
 }
 
@@ -221,10 +261,13 @@ bool registerActions(reaper_plugin_info_t *rec) {
   g_testConnectionCommand = registerAction(rec, kTestConnectionId, kTestConnectionName);
   g_startCommand = registerAction(rec, kStartRecordingId, kStartRecordingName);
   g_stopCommand = registerAction(rec, kStopRecordingId, kStopRecordingName);
+  g_showPreviewCommand = registerAction(rec, kShowPreviewId, kShowPreviewName);
+  g_floatPreviewCommand = registerAction(rec, kFloatPreviewId, kFloatPreviewName);
 
   const bool allRegistered = g_diagnosticCommand != 0 && g_pairCommand != 0 &&
                              g_testConnectionCommand != 0 && g_startCommand != 0 &&
-                             g_stopCommand != 0;
+                             g_stopCommand != 0 && g_showPreviewCommand != 0 &&
+                             g_floatPreviewCommand != 0;
 
   return allRegistered && rec->Register("hookcommand2", reinterpret_cast<void *>(hookCommand2));
 }
@@ -244,6 +287,7 @@ REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hI
     if (g_reaper) {
       unregisterActions(g_reaper);
     }
+    g_previewPanel.reset();
     g_reaper = nullptr;
     return 0;
   }
