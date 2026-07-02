@@ -24,6 +24,7 @@ add_library(reaphone_core
   desktop/core/reaphone/json.cpp
   desktop/core/reaphone/sha256.cpp
   desktop/core/reaphone/websocket.cpp
+  desktop/core/reaphone/windows/process_runner.cpp
 )
 target_include_directories(reaphone_core PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/desktop/core"
@@ -61,6 +62,14 @@ if(BUILD_TESTING)
   )
   target_link_libraries(reaphone_protocol_tests PRIVATE reaphone_core)
   add_test(NAME reaphone_protocol_tests COMMAND reaphone_protocol_tests)
+
+  if(WIN32)
+    add_executable(reaphone_process_tests
+      desktop/core/tests/process_tests.cpp
+    )
+    target_link_libraries(reaphone_process_tests PRIVATE reaphone_core)
+    add_test(NAME reaphone_process_tests COMMAND reaphone_process_tests)
+  endif()
 endif()
 
 if(WIN32)
