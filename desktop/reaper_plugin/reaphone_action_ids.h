@@ -26,4 +26,16 @@ inline constexpr const char *kToggleFollowName = "Video Recorder: Enable/Disable
 inline constexpr const char *kWindowsDiagnosticId = "KLONG_REAPHONEVIDEO_WINDOWS_DIAGNOSTIC";
 inline constexpr const char *kWindowsDiagnosticName = "ReaPhoneVideo: Windows Port Diagnostic";
 
+inline constexpr const char *kPairId = "KLONG_REAPHONEVIDEO_PAIR";
+inline constexpr const char *kPairName = "ReaPhoneVideo: Pair iPhone (uses saved pairing code)";
+
+inline constexpr const char *kTestConnectionId = "KLONG_REAPHONEVIDEO_TEST_CONNECTION";
+inline constexpr const char *kTestConnectionName = "ReaPhoneVideo: Test iPhone Connection";
+
+inline constexpr const char *kStartRecordingId = "KLONG_REAPHONEVIDEO_START_RECORDING";
+inline constexpr const char *kStartRecordingName = "ReaPhoneVideo: Start iPhone Recording";
+
+inline constexpr const char *kStopRecordingId = "KLONG_REAPHONEVIDEO_STOP_RECORDING";
+inline constexpr const char *kStopRecordingName = "ReaPhoneVideo: Stop iPhone Recording and Download";
+
 } // namespace reaphone::actions

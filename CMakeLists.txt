@@ -132,7 +132,7 @@ if(WIN32)
   add_library(reaphonevideo MODULE
     src/windows/reaphonevideo_win_skeleton.cpp
   )
-  target_link_libraries(reaphonevideo PRIVATE reaphone_portability)
+  target_link_libraries(reaphonevideo PRIVATE reaphone_portability reaphone_core)
   # REAPER only loads extension DLLs from UserPlugins whose filename starts
   # with "reaper_" (matching the macOS "reaper_video_recorder.dylib" convention),
   # so the output name must carry that prefix or REAPER silently ignores it.

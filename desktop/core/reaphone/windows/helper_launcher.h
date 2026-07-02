@@ -18,6 +18,14 @@ struct HelperConnection {
   int httpPort = 8788;
 };
 
+// Builds a HelperConnection from settings strings, parsing the ports and falling
+// back to the standard defaults (8787 control, 8788 http) when a value is empty
+// or not a positive integer.
+HelperConnection makeConnection(const std::string &host,
+                                const std::string &controlPort,
+                                const std::string &httpPort);
+
+
 // Builds the helper CLI argument vector, mirroring the macOS plugin's
 // videoSyncArgumentsForCommand: the command first, then --host/--port (omitted
 // only for "discover"), then the caller's extra arguments (token, code, etc.).

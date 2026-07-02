@@ -1,11 +1,24 @@
 #include "reaphone/windows/helper_launcher.h"
 
+#include <exception>
 #include <string>
 #include <string_view>
 
 namespace reaphone {
 
 namespace {
+
+int parsePort(const std::string &value, int fallback) {
+  if (value.empty()) {
+    return fallback;
+  }
+  try {
+    const int parsed = std::stoi(value);
+    return parsed > 0 ? parsed : fallback;
+  } catch (const std::exception &) {
+    return fallback;
+  }
+}
 
 // Iterates the newline-separated lines of an output blob (splitting on both
 // "\r\n" and "\n"), invoking the callback for each line without its terminator.
@@ -28,6 +41,16 @@ void forEachLine(std::string_view output, Callback &&callback) {
 }
 
 } // namespace
+
+HelperConnection makeConnection(const std::string &host,
+                                const std::string &controlPort,
+                                const std::string &httpPort) {
+  HelperConnection connection;
+  connection.host = host;
+  connection.controlPort = parsePort(controlPort, 8787);
+  connection.httpPort = parsePort(httpPort, 8788);
+  return connection;
+}
 
 std::optional<std::string> parsePairedToken(std::string_view output) {
   constexpr std::string_view prefix = "paired token=";
