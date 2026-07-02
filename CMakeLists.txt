@@ -46,9 +46,12 @@ if(WIN32)
     src/windows/reaphonevideo_win_skeleton.cpp
   )
   target_link_libraries(reaphonevideo PRIVATE reaphone_portability)
+  # REAPER only loads extension DLLs from UserPlugins whose filename starts
+  # with "reaper_" (matching the macOS "reaper_video_recorder.dylib" convention),
+  # so the output name must carry that prefix or REAPER silently ignores it.
   set_target_properties(reaphonevideo PROPERTIES
     PREFIX ""
-    OUTPUT_NAME "reaphonevideo"
+    OUTPUT_NAME "reaper_reaphonevideo"
     SUFFIX ".dll"
   )
 
