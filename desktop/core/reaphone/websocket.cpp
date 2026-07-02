@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -149,6 +150,85 @@ bool isWebSocketSwitchingProtocolsResponse(const HttpHeaders &headers, std::stri
   return upgrade && *upgrade == "websocket" &&
          connection && tokenListContains(*connection, "Upgrade") &&
          accept && *accept == webSocketAcceptKey(clientKey);
+}
+
+std::string buildWebSocketHandshakeRequest(std::string_view host, int port,
+                                           std::string_view path, std::string_view key) {
+  std::string request;
+  request.append("GET ").append(path).append(" HTTP/1.1\r\n");
+  request.append("Host: ").append(host).append(":").append(std::to_string(port)).append("\r\n");
+  request.append("Upgrade: websocket\r\n");
+  request.append("Connection: Upgrade\r\n");
+  request.append("Sec-WebSocket-Key: ").append(key).append("\r\n");
+  request.append("Sec-WebSocket-Version: 13\r\n");
+  request.append("\r\n");
+  return request;
+}
+
+std::string encodeClientTextFrame(std::string_view payload,
+                                  const std::array<std::uint8_t, 4> &mask) {
+  if (payload.size() > 0xffff) {
+    throw std::length_error("client text frame payload exceeds the 16-bit length the helper emits");
+  }
+
+  std::string frame;
+  frame.reserve(payload.size() + 8);
+  frame.push_back(static_cast<char>(0x81));
+
+  const std::size_t length = payload.size();
+  if (length < 126) {
+    frame.push_back(static_cast<char>(0x80 | static_cast<std::uint8_t>(length)));
+  } else {
+    frame.push_back(static_cast<char>(0x80 | 126));
+    frame.push_back(static_cast<char>((length >> 8) & 0xff));
+    frame.push_back(static_cast<char>(length & 0xff));
+  }
+
+  for (const std::uint8_t byte : mask) {
+    frame.push_back(static_cast<char>(byte));
+  }
+  for (std::size_t i = 0; i < length; ++i) {
+    frame.push_back(static_cast<char>(static_cast<std::uint8_t>(payload[i]) ^ mask[i % 4]));
+  }
+  return frame;
+}
+
+WebSocketFrame decodeServerTextFrame(std::string_view bytes) {
+  WebSocketFrame result;
+  if (bytes.size() < 2) {
+    return result;
+  }
+
+  const std::uint8_t byte0 = static_cast<std::uint8_t>(bytes[0]);
+  const std::uint8_t byte1 = static_cast<std::uint8_t>(bytes[1]);
+  if ((byte0 & 0x0f) != 0x1) {
+    throw std::invalid_argument("expected a WebSocket text frame");
+  }
+
+  const std::uint8_t marker = byte1 & 0x7f;
+  if (marker == 127) {
+    throw std::invalid_argument("64-bit WebSocket frame lengths are not supported");
+  }
+
+  std::size_t headerLength = 2;
+  std::size_t payloadLength = marker;
+  if (marker == 126) {
+    if (bytes.size() < 4) {
+      return result;
+    }
+    payloadLength = (static_cast<std::size_t>(static_cast<std::uint8_t>(bytes[2])) << 8) |
+                    static_cast<std::size_t>(static_cast<std::uint8_t>(bytes[3]));
+    headerLength = 4;
+  }
+
+  if (bytes.size() < headerLength + payloadLength) {
+    return result;
+  }
+
+  result.complete = true;
+  result.payload.assign(bytes.data() + headerLength, payloadLength);
+  result.consumed = headerLength + payloadLength;
+  return result;
 }
 
 } // namespace reaphone

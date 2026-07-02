@@ -39,6 +39,12 @@ if(BUILD_TESTING)
   )
   target_link_libraries(reaphone_core_tests PRIVATE reaphone_core)
   add_test(NAME reaphone_core_tests COMMAND reaphone_core_tests)
+
+  add_executable(reaphone_websocket_tests
+    desktop/core/tests/websocket_frame_tests.cpp
+  )
+  target_link_libraries(reaphone_websocket_tests PRIVATE reaphone_core)
+  add_test(NAME reaphone_websocket_tests COMMAND reaphone_websocket_tests)
 endif()
 
 if(WIN32)
