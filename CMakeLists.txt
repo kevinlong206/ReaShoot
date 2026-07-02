@@ -19,9 +19,11 @@ target_compile_features(reaphone_portability INTERFACE cxx_std_17)
 
 add_library(reaphone_core
   desktop/core/reaphone/control_protocol.cpp
+  desktop/core/reaphone/debug_logger.cpp
   desktop/core/reaphone/http_download.cpp
   desktop/core/reaphone/http_headers.cpp
   desktop/core/reaphone/json.cpp
+  desktop/core/reaphone/plugin_settings.cpp
   desktop/core/reaphone/sha256.cpp
   desktop/core/reaphone/websocket.cpp
   desktop/core/reaphone/windows/control_client.cpp
@@ -85,6 +87,18 @@ if(BUILD_TESTING)
   )
   target_link_libraries(reaphone_event_tests PRIVATE reaphone_core)
   add_test(NAME reaphone_event_tests COMMAND reaphone_event_tests)
+
+  add_executable(reaphone_settings_tests
+    desktop/core/tests/plugin_settings_tests.cpp
+  )
+  target_link_libraries(reaphone_settings_tests PRIVATE reaphone_core)
+  add_test(NAME reaphone_settings_tests COMMAND reaphone_settings_tests)
+
+  add_executable(reaphone_logger_tests
+    desktop/core/tests/debug_logger_tests.cpp
+  )
+  target_link_libraries(reaphone_logger_tests PRIVATE reaphone_core)
+  add_test(NAME reaphone_logger_tests COMMAND reaphone_logger_tests)
 
   if(WIN32)
     add_executable(reaphone_process_tests
