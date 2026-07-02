@@ -25,6 +25,7 @@ add_library(reaphone_core
   desktop/core/reaphone/sha256.cpp
   desktop/core/reaphone/websocket.cpp
   desktop/core/reaphone/windows/control_client.cpp
+  desktop/core/reaphone/windows/helper_launcher.cpp
   desktop/core/reaphone/windows/process_runner.cpp
 )
 target_include_directories(reaphone_core PUBLIC
@@ -40,6 +41,16 @@ if(MSVC)
   target_compile_options(reaphone_core PRIVATE /W4 /permissive-)
 else()
   target_compile_options(reaphone_core PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+if(WIN32)
+  # The Windows control helper CLI, mirroring the macOS video-sync-mac tool. The
+  # REAPER plugin launches it as a subprocess (via the process adapter) for each
+  # pairing/control command.
+  add_executable(video-sync-win
+    desktop/helper/video_sync_win.cpp
+  )
+  target_link_libraries(video-sync-win PRIVATE reaphone_core)
 endif()
 
 include(CTest)
@@ -86,6 +97,13 @@ if(BUILD_TESTING)
     )
     target_link_libraries(reaphone_control_client_tests PRIVATE reaphone_core)
     add_test(NAME reaphone_control_client_tests COMMAND reaphone_control_client_tests)
+
+    add_executable(reaphone_helper_launcher_tests
+      desktop/core/tests/helper_launcher_tests.cpp
+    )
+    target_link_libraries(reaphone_helper_launcher_tests PRIVATE reaphone_core)
+    add_dependencies(reaphone_helper_launcher_tests video-sync-win)
+    add_test(NAME reaphone_helper_launcher_tests COMMAND reaphone_helper_launcher_tests)
   endif()
 endif()
 
