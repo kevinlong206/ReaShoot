@@ -18,8 +18,10 @@ target_include_directories(reaphone_portability INTERFACE
 target_compile_features(reaphone_portability INTERFACE cxx_std_17)
 
 add_library(reaphone_core
+  desktop/core/reaphone/control_protocol.cpp
   desktop/core/reaphone/http_download.cpp
   desktop/core/reaphone/http_headers.cpp
+  desktop/core/reaphone/json.cpp
   desktop/core/reaphone/sha256.cpp
   desktop/core/reaphone/websocket.cpp
 )
@@ -53,6 +55,12 @@ if(BUILD_TESTING)
   )
   target_link_libraries(reaphone_download_tests PRIVATE reaphone_core)
   add_test(NAME reaphone_download_tests COMMAND reaphone_download_tests)
+
+  add_executable(reaphone_protocol_tests
+    desktop/core/tests/protocol_tests.cpp
+  )
+  target_link_libraries(reaphone_protocol_tests PRIVATE reaphone_core)
+  add_test(NAME reaphone_protocol_tests COMMAND reaphone_protocol_tests)
 endif()
 
 if(WIN32)
