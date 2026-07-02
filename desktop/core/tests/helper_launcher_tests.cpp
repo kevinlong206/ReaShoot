@@ -69,6 +69,16 @@ void parsesPairedToken() {
           "absent paired line should yield nullopt");
 }
 
+void parsesDownloadedPath() {
+  require(reaphone::parseDownloadedPath("progress bytes=1\r\ndownloaded C:\\rec\\a.mov\r\n") ==
+              "C:\\rec\\a.mov",
+          "downloaded path should be parsed from stdout");
+  require(reaphone::parseDownloadedPath("downloaded first.mov\ndownloaded second.mov") == "second.mov",
+          "last downloaded path should win");
+  require(!reaphone::parseDownloadedPath("pong").has_value(),
+          "absent downloaded line should yield nullopt");
+}
+
 void parsesDeviceFields() {
   const std::string output =
       "searching\ndevice\tname=iPhone\thost=1.2.3.4\tcontrolPort=8787\thttpPort=8788\n";
@@ -162,6 +172,7 @@ int main() {
   try {
     buildsArgumentsMirroringPlugin();
     parsesPairedToken();
+    parsesDownloadedPath();
     parsesDeviceFields();
     launchesHelperPairEndToEnd();
     launchesHelperPingEndToEnd();

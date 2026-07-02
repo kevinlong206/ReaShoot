@@ -46,6 +46,10 @@ ProcessResult runVideoSyncCommand(const std::wstring &helperExecutable,
 // pairIPhone. Returns the token from the first matching line, or nullopt.
 std::optional<std::string> parsePairedToken(std::string_view output);
 
+// Parses "downloaded <path>" from helper stdout. Returns the path from the last
+// matching line (the most recent download), or nullopt.
+std::optional<std::string> parseDownloadedPath(std::string_view output);
+
 // Splits a tab-delimited "key=value" helper line into fields, mirroring the
 // macOS plugin's fieldsFromHelperLine (parts with no '=' or a leading '=' are
 // skipped).

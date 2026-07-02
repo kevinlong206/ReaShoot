@@ -9,10 +9,41 @@
 #define REAPERAPI_WANT_ShowConsoleMsg
 #define REAPERAPI_WANT_GetExtState
 #define REAPERAPI_WANT_SetExtState
+#define REAPERAPI_WANT_EnumProjects
+#define REAPERAPI_WANT_CountTracks
+#define REAPERAPI_WANT_GetTrack
+#define REAPERAPI_WANT_GetTrackName
+#define REAPERAPI_WANT_InsertTrackAtIndex
+#define REAPERAPI_WANT_GetSetMediaTrackInfo_String
+#define REAPERAPI_WANT_SetMediaTrackInfo_Value
+#define REAPERAPI_WANT_CountTrackMediaItems
+#define REAPERAPI_WANT_GetTrackMediaItem
+#define REAPERAPI_WANT_AddMediaItemToTrack
+#define REAPERAPI_WANT_AddTakeToMediaItem
+#define REAPERAPI_WANT_GetActiveTake
+#define REAPERAPI_WANT_GetMediaItemTake_Source
+#define REAPERAPI_WANT_SetMediaItemTake_Source
+#define REAPERAPI_WANT_GetMediaItemInfo_Value
+#define REAPERAPI_WANT_SetMediaItemInfo_Value
+#define REAPERAPI_WANT_GetMediaItemTakeInfo_Value
+#define REAPERAPI_WANT_SetMediaItemSelected
+#define REAPERAPI_WANT_PCM_Source_CreateFromFile
+#define REAPERAPI_WANT_GetMediaSourceLength
+#define REAPERAPI_WANT_PCM_Source_BuildPeaks
+#define REAPERAPI_WANT_CreateTakeAudioAccessor
+#define REAPERAPI_WANT_DestroyAudioAccessor
+#define REAPERAPI_WANT_GetAudioAccessorSamples
+#define REAPERAPI_WANT_GetCursorPosition
+#define REAPERAPI_WANT_GetProjectPath
+#define REAPERAPI_WANT_UpdateArrange
+#define REAPERAPI_WANT_UpdateTimeline
+#define REAPERAPI_WANT_Undo_BeginBlock
+#define REAPERAPI_WANT_Undo_EndBlock
 #include "reaper_plugin_functions.h"
 
 #include "reaphone_action_ids.h"
 
+#include "reaphone/audio_align.h"
 #include "reaphone/debug_logger.h"
 #include "reaphone/plugin_settings.h"
 #include "reaphone/windows/helper_launcher.h"
@@ -21,6 +52,7 @@
 
 #include <windows.h>
 
+#include <cmath>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -126,6 +158,272 @@ reaphone::ProcessResult runCommand(const std::string &command,
   return result;
 }
 
+// ---- REAPER media insertion + audio alignment -----------------------------
+
+constexpr const char *kVideoTrackName = "Video Recorder";
+
+ReaProject *activeProject() { return EnumProjects ? EnumProjects(-1, nullptr, 0) : nullptr; }
+
+std::wstring widenPath(const std::string &value) { return widen(value); }
+
+// Finds the "Video Recorder" track, or creates it at the end of the project.
+MediaTrack *findOrCreateVideoTrack(ReaProject *project) {
+  if (!CountTracks || !GetTrack || !GetTrackName || !InsertTrackAtIndex || !GetSetMediaTrackInfo_String) {
+    return nullptr;
+  }
+  const int trackCount = CountTracks(project);
+  for (int i = 0; i < trackCount; ++i) {
+    MediaTrack *track = GetTrack(project, i);
+    char name[256] = {0};
+    if (track && GetTrackName(track, name, sizeof(name)) && std::string(name) == kVideoTrackName) {
+      return track;
+    }
+  }
+
+  InsertTrackAtIndex(trackCount, true);
+  MediaTrack *track = GetTrack(project, trackCount);
+  if (track) {
+    char name[] = "Video Recorder";
+    GetSetMediaTrackInfo_String(track, "P_NAME", name, true);
+    if (SetMediaTrackInfo_Value) {
+      SetMediaTrackInfo_Value(track, "I_RECARM", 0.0);
+    }
+  }
+  return track;
+}
+
+// Inserts the media file as a new item+take on the track at project position.
+// Returns the created item (nullptr on failure, with error populated).
+MediaItem *insertVideoItem(MediaTrack *track, const std::string &path, double position, std::string &error) {
+  if (!PCM_Source_CreateFromFile || !AddMediaItemToTrack || !AddTakeToMediaItem || !SetMediaItemTake_Source ||
+      !SetMediaItemInfo_Value || !GetMediaSourceLength) {
+    error = "required REAPER media insertion APIs are unavailable";
+    return nullptr;
+  }
+
+  PCM_source *source = PCM_Source_CreateFromFile(path.c_str());
+  if (!source) {
+    error = "REAPER could not open the recording: " + path;
+    return nullptr;
+  }
+
+  MediaItem *item = AddMediaItemToTrack(track);
+  MediaItem_Take *take = item ? AddTakeToMediaItem(item) : nullptr;
+  if (!item || !take || !SetMediaItemTake_Source(take, source)) {
+    error = "REAPER could not create a media item for the recording";
+    return nullptr;
+  }
+
+  bool lengthIsQN = false;
+  const double length = GetMediaSourceLength(source, &lengthIsQN);
+  SetMediaItemInfo_Value(item, "D_POSITION", position);
+  if (!lengthIsQN && length > 0.0) {
+    SetMediaItemInfo_Value(item, "D_LENGTH", length);
+  }
+  SetMediaItemInfo_Value(item, "B_LOOPSRC", 0.0);
+  if (SetMediaItemSelected) {
+    SetMediaItemSelected(item, true);
+  }
+  if (PCM_Source_BuildPeaks) {
+    int remaining = PCM_Source_BuildPeaks(source, 0);
+    int guard = 0;
+    while (remaining > 0 && guard++ < 100000) {
+      remaining = PCM_Source_BuildPeaks(source, 1);
+    }
+    PCM_Source_BuildPeaks(source, 2);
+  }
+  return item;
+}
+
+// Reads mono audio samples for a take over [projectStart, projectStart+duration]
+// at the alignment sample rate, via a temporary audio accessor.
+std::vector<double> takeSamples(MediaItem_Take *take, double projectStart, double duration) {
+  if (!take || !CreateTakeAudioAccessor || !GetAudioAccessorSamples || !DestroyAudioAccessor || duration <= 0.0) {
+    return {};
+  }
+  const int sampleCount = static_cast<int>(std::ceil(duration * reaphone::align_constants::kSampleRate));
+  if (sampleCount <= 0) {
+    return {};
+  }
+  std::vector<double> samples(static_cast<std::size_t>(sampleCount), 0.0);
+  AudioAccessor *accessor = CreateTakeAudioAccessor(take);
+  if (!accessor) {
+    return {};
+  }
+  const int result = GetAudioAccessorSamples(accessor, reaphone::align_constants::kSampleRate, 1, projectStart,
+                                             sampleCount, samples.data());
+  DestroyAudioAccessor(accessor);
+  if (result <= 0) {
+    return {};
+  }
+  return samples;
+}
+
+// Finds the first non-video track item overlapping [position, position+length]
+// and returns its active take (the alignment reference), plus the item position.
+MediaItem_Take *findReferenceTake(ReaProject *project, MediaItem *videoItem, double position, double length,
+                                  double &referencePosition, double &referenceLength) {
+  if (!CountTracks || !GetTrack || !GetTrackName || !CountTrackMediaItems || !GetTrackMediaItem ||
+      !GetMediaItemInfo_Value || !GetActiveTake) {
+    return nullptr;
+  }
+  const double windowEnd = position + length;
+  const int trackCount = CountTracks(project);
+  for (int t = 0; t < trackCount; ++t) {
+    MediaTrack *track = GetTrack(project, t);
+    char name[256] = {0};
+    if (!track || (GetTrackName(track, name, sizeof(name)) && std::string(name) == kVideoTrackName)) {
+      continue;
+    }
+    const int itemCount = CountTrackMediaItems(track);
+    for (int i = 0; i < itemCount; ++i) {
+      MediaItem *item = GetTrackMediaItem(track, i);
+      if (!item || item == videoItem) {
+        continue;
+      }
+      const double itemStart = GetMediaItemInfo_Value(item, "D_POSITION");
+      const double itemLength = GetMediaItemInfo_Value(item, "D_LENGTH");
+      const double itemEnd = itemStart + itemLength;
+      if (itemEnd <= position || itemStart >= windowEnd) {
+        continue;
+      }
+      MediaItem_Take *take = GetActiveTake(item);
+      if (take) {
+        referencePosition = itemStart;
+        referenceLength = itemLength;
+        return take;
+      }
+    }
+  }
+  return nullptr;
+}
+
+// Best-effort audio alignment: correlates the inserted video's audio against a
+// reference audio item and shifts the video item to the matched position.
+// Returns true if the item was moved. Never fatal.
+bool alignVideoItem(ReaProject *project, MediaItem *videoItem, MediaItem_Take *videoTake, double insertPosition) {
+  using namespace reaphone::align_constants;
+  if (!videoItem || !videoTake || !GetMediaItemInfo_Value || !SetMediaItemInfo_Value) {
+    return false;
+  }
+
+  const double videoLength = GetMediaItemInfo_Value(videoItem, "D_LENGTH");
+  const double duration = (std::min)(videoLength, kSampleRefineDuration);
+  if (duration <= 0.0) {
+    return false;
+  }
+
+  double referencePosition = 0.0;
+  double referenceLength = 0.0;
+  MediaItem_Take *referenceTake =
+      findReferenceTake(project, videoItem, insertPosition, videoLength, referencePosition, referenceLength);
+  if (!referenceTake) {
+    report("ReaPhoneVideo: inserted recording; no overlapping audio to align against.");
+    return false;
+  }
+
+  const double search = kSampleRefineSearchSeconds + kSearchSeconds;
+  const double referenceWindowStart = (std::max)(referencePosition, insertPosition - search);
+  const double referenceDuration =
+      (std::min)(referenceLength - (referenceWindowStart - referencePosition), duration + (2.0 * search));
+  if (referenceDuration <= duration * 0.5) {
+    return false;
+  }
+
+  const std::vector<double> videoSamples =
+      reaphone::normalizedSampleShape(takeSamples(videoTake, insertPosition, duration));
+  const std::vector<double> referenceSamples =
+      reaphone::normalizedSampleShape(takeSamples(referenceTake, referenceWindowStart, referenceDuration));
+  if (videoSamples.empty() || referenceSamples.empty()) {
+    return false;
+  }
+
+  const int expectedLag = static_cast<int>(std::llround((insertPosition - referenceWindowStart) * kSampleRate));
+  const int searchSamples = static_cast<int>(std::llround(search * kSampleRate));
+  const int minLag = (std::max)(0, expectedLag - searchSamples);
+  const int maxLag = (std::min)(static_cast<int>(referenceSamples.size()) - static_cast<int>(videoSamples.size()),
+                                expectedLag + searchSamples);
+  const int minimumOverlapSamples = static_cast<int>(std::llround(0.25 * kSampleRate));
+
+  const reaphone::LagMatch match =
+      reaphone::findBestLag(videoSamples, referenceSamples, minLag, maxLag, minimumOverlapSamples);
+  if (!match.valid || match.score < kMinimumScore) {
+    char msg[128] = {0};
+    std::snprintf(msg, sizeof(msg), "ReaPhoneVideo: inserted recording; alignment score %.2f below %.2f.",
+                  match.valid ? match.score : 0.0, kMinimumScore);
+    report(msg);
+    return false;
+  }
+
+  const double refinedPosition = referenceWindowStart + (static_cast<double>(match.lag) / kSampleRate);
+  SetMediaItemInfo_Value(videoItem, "D_POSITION", refinedPosition);
+
+  char msg[160] = {0};
+  std::snprintf(msg, sizeof(msg), "ReaPhoneVideo: aligned recording %.0f ms (score %.2f).",
+                (refinedPosition - insertPosition) * 1000.0, match.score);
+  report(msg);
+  return true;
+}
+
+// Inserts a downloaded recording into the project and aligns it. Non-fatal.
+void insertAndAlign(const std::string &path) {
+  if (path.empty()) {
+    return;
+  }
+  ReaProject *project = activeProject();
+  if (!project) {
+    report("ReaPhoneVideo: no active project to insert the recording into.");
+    return;
+  }
+  MediaTrack *track = findOrCreateVideoTrack(project);
+  if (!track) {
+    report("ReaPhoneVideo: could not find or create the Video Recorder track.");
+    return;
+  }
+
+  const double position = GetCursorPosition ? GetCursorPosition() : 0.0;
+  if (Undo_BeginBlock) {
+    Undo_BeginBlock();
+  }
+
+  std::string error;
+  MediaItem *item = insertVideoItem(track, path, position, error);
+  if (!item) {
+    report("ReaPhoneVideo: " + error);
+    if (Undo_EndBlock) {
+      Undo_EndBlock("ReaPhoneVideo insert recording", -1);
+    }
+    return;
+  }
+
+  MediaItem_Take *take = GetActiveTake ? GetActiveTake(item) : nullptr;
+  alignVideoItem(project, item, take, position);
+
+  if (UpdateTimeline) {
+    UpdateTimeline();
+  }
+  if (UpdateArrange) {
+    UpdateArrange();
+  }
+  if (Undo_EndBlock) {
+    Undo_EndBlock("ReaPhoneVideo insert recording", -1);
+  }
+}
+
+// Chooses a download directory: the project directory if known, else %TEMP%.
+std::wstring downloadDirectory() {
+  if (GetProjectPath) {
+    char buffer[4096] = {0};
+    GetProjectPath(buffer, sizeof(buffer));
+    if (buffer[0] != '\0') {
+      return widenPath(buffer);
+    }
+  }
+  std::error_code ec;
+  std::filesystem::path temp = std::filesystem::temp_directory_path(ec);
+  return ec ? std::wstring(L".") : temp.wstring();
+}
+
 void handlePair(ReaperExtStateStore &store) {
   const reaphone::PluginSettings settings = reaphone::loadSettings(store);
   if (settings.host.empty()) {
@@ -187,7 +485,17 @@ void handleStop(ReaperExtStateStore &store) {
   if (!requireHostAndToken(settings, "stopping a recording")) {
     return;
   }
-  runCommand("stop", settings, {L"--token", widen(settings.token)});
+  const std::wstring dir = downloadDirectory();
+  const reaphone::ProcessResult result =
+      runCommand("stop", settings, {L"--token", widen(settings.token), L"--download-dir", dir});
+  if (result.exitCode != 0) {
+    return;
+  }
+  if (const auto path = reaphone::parseDownloadedPath(result.standardOutput)) {
+    insertAndAlign(*path);
+  } else {
+    report("ReaPhoneVideo: stop completed but no downloaded file was reported.");
+  }
 }
 
 void handleShowPreview() {

@@ -63,6 +63,17 @@ std::optional<std::string> parsePairedToken(std::string_view output) {
   return token;
 }
 
+std::optional<std::string> parseDownloadedPath(std::string_view output) {
+  constexpr std::string_view prefix = "downloaded ";
+  std::optional<std::string> path;
+  forEachLine(output, [&](std::string_view line) {
+    if (line.substr(0, prefix.size()) == prefix) {
+      path = std::string(line.substr(prefix.size())); // keep the last match
+    }
+  });
+  return path;
+}
+
 std::map<std::string, std::string> fieldsFromHelperLine(std::string_view line) {
   std::map<std::string, std::string> fields;
   std::size_t start = 0;
