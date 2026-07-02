@@ -27,6 +27,7 @@ add_library(reaphone_core
   desktop/core/reaphone/windows/control_client.cpp
   desktop/core/reaphone/windows/helper_launcher.cpp
   desktop/core/reaphone/windows/process_runner.cpp
+  desktop/core/reaphone/windows/recording_downloader.cpp
 )
 target_include_directories(reaphone_core PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/desktop/core"
@@ -104,6 +105,12 @@ if(BUILD_TESTING)
     target_link_libraries(reaphone_helper_launcher_tests PRIVATE reaphone_core)
     add_dependencies(reaphone_helper_launcher_tests video-sync-win)
     add_test(NAME reaphone_helper_launcher_tests COMMAND reaphone_helper_launcher_tests)
+
+    add_executable(reaphone_recording_downloader_tests
+      desktop/core/tests/recording_downloader_tests.cpp
+    )
+    target_link_libraries(reaphone_recording_downloader_tests PRIVATE reaphone_core)
+    add_test(NAME reaphone_recording_downloader_tests COMMAND reaphone_recording_downloader_tests)
   endif()
 endif()
 

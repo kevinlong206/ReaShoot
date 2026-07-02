@@ -7,12 +7,22 @@
 
 #include "reaphone/control_protocol.h"
 #include "reaphone/windows/control_client.h"
+#include "reaphone/windows/recording_downloader.h"
+
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 
 #include <array>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <optional>
@@ -131,6 +141,29 @@ reaphone::ControlEvent send(const Arguments &args, const reaphone::ControlComman
   return client.send(command);
 }
 
+std::wstring widenPath(std::string_view value) {
+  if (value.empty()) {
+    return std::wstring();
+  }
+  const int length = MultiByteToWideChar(CP_UTF8, 0, value.data(),
+                                         static_cast<int>(value.size()), nullptr, 0);
+  std::wstring wide(static_cast<std::size_t>(length), L'\0');
+  MultiByteToWideChar(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), wide.data(), length);
+  return wide;
+}
+
+std::string narrowPath(const std::wstring &value) {
+  if (value.empty()) {
+    return std::string();
+  }
+  const int length = WideCharToMultiByte(CP_UTF8, 0, value.data(), static_cast<int>(value.size()),
+                                         nullptr, 0, nullptr, nullptr);
+  std::string narrow(static_cast<std::size_t>(length), '\0');
+  WideCharToMultiByte(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), narrow.data(), length,
+                      nullptr, nullptr);
+  return narrow;
+}
+
 // Reports an unexpected event the way the macOS helper's unexpectedEvent error
 // does: the event message when present, otherwise a generic description.
 [[noreturn]] void unexpectedEvent(const reaphone::ControlEvent &event) {
@@ -154,14 +187,82 @@ void printRecording(const reaphone::RecordingDescriptor &recording) {
   std::cout << line.str() << '\n';
 }
 
+void printProgress(std::int64_t bytes, std::int64_t total) {
+  const std::int64_t safeTotal = total > 0 ? total : 0;
+  const double percent = safeTotal > 0 ? (std::min)(100.0, (static_cast<double>(bytes) / safeTotal) * 100.0) : 0.0;
+  char line[128];
+  std::snprintf(line, sizeof(line), "progress bytes=%lld total=%lld percent=%.1f\n",
+                static_cast<long long>(bytes), static_cast<long long>(safeTotal), percent);
+  std::fputs(line, stderr);
+}
+
+// Sends prepareRecording and returns the prepared descriptor, mirroring the
+// macOS helper's prepareRecording (long timeout to allow on-device encoding).
+reaphone::RecordingDescriptor prepareRecording(const Arguments &args, const std::string &token,
+                                               const std::string &recordingID) {
+  reaphone::ControlCommand cmd = baseCommand(reaphone::CommandType::PrepareRecording);
+  cmd.token = token;
+  cmd.recordingID = recordingID;
+  const reaphone::ControlEvent event = send(args, cmd, std::chrono::seconds{900});
+  if (event.type != reaphone::EventType::RecordingPrepared || !event.recording) {
+    unexpectedEvent(event);
+  }
+  return *event.recording;
+}
+
+// Best-effort transferComplete acknowledgement after a successful download,
+// mirroring the macOS helper's warn-but-continue behaviour.
+void acknowledgeTransfer(const Arguments &args, const std::string &token,
+                         const std::string &recordingID) {
+  try {
+    reaphone::ControlCommand cmd = baseCommand(reaphone::CommandType::TransferComplete);
+    cmd.token = token;
+    cmd.recordingID = recordingID;
+    send(args, cmd);
+  } catch (const std::exception &error) {
+    std::fputs(("warning: downloaded file, but could not acknowledge transfer completion: " +
+                std::string(error.what()) + "\n")
+                   .c_str(),
+               stderr);
+  }
+}
+
+// Prepares, downloads, and acknowledges a recording, printing the final path.
+int downloadAndAcknowledge(const Arguments &args, const std::string &token,
+                           const std::string &recordingID) {
+  const std::string host = require(args.value("--host"), "--host");
+  const int httpPort = args.intValue("--http-port", 8788);
+  const bool showProgress = args.hasFlag("--progress");
+
+  const reaphone::RecordingDescriptor recording = prepareRecording(args, token, recordingID);
+
+  const std::wstring destinationDirectory =
+      args.value("--download-dir") ? widenPath(*args.value("--download-dir"))
+                                   : std::filesystem::current_path().wstring();
+
+  reaphone::DownloadProgressCallback progress;
+  if (showProgress) {
+    progress = [](std::int64_t bytes, std::int64_t total) { printProgress(bytes, total); };
+  }
+
+  const std::wstring path =
+      reaphone::downloadRecording(recording, host, httpPort, token, destinationDirectory, progress);
+  acknowledgeTransfer(args, token, recording.id);
+  std::cout << "downloaded " << narrowPath(path) << '\n';
+  return 0;
+}
+
 void printHelp() {
   std::cout << "video-sync-win commands:\n"
                "  pair --host HOST [--port 8787] --code CODE\n"
                "  configure --host HOST [--port 8787] --token TOKEN [--resolution 4K] [--fps 30]"
                " [--orientation portrait] [--aspect 9:16] [--lens wide] [--zoom 1.0] [--look natural]\n"
                "  start --host HOST [--port 8787] --token TOKEN [--session SESSION]\n"
+               "  stop --host HOST [--port 8787] [--http-port 8788] --token TOKEN [--download-dir DIR] [--progress]\n"
                "  prepare-recording --host HOST [--port 8787] --token TOKEN --recording-id ID\n"
                "  stop-only --host HOST [--port 8787] --token TOKEN\n"
+               "  download-recording --host HOST [--port 8787] [--http-port 8788] --token TOKEN"
+               " --recording-id ID [--download-dir DIR] [--progress]\n"
                "  list-recordings --host HOST [--port 8787] --token TOKEN\n"
                "  delete-recording --host HOST [--port 8787] --token TOKEN --recording-id ID\n"
                "  ping --host HOST [--port 8787] [--token TOKEN]\n"
@@ -251,6 +352,23 @@ int run(const Arguments &args) {
     return 0;
   }
 
+  if (command == "stop") {
+    const std::string token = require(args.value("--token"), "--token");
+    reaphone::ControlCommand cmd = baseCommand(reaphone::CommandType::StopRecording);
+    cmd.token = token;
+    const reaphone::ControlEvent event = send(args, cmd);
+    if (!event.recording) {
+      unexpectedEvent(event);
+    }
+    return downloadAndAcknowledge(args, token, event.recording->id);
+  }
+
+  if (command == "download-recording") {
+    const std::string token = require(args.value("--token"), "--token");
+    const std::string recordingID = require(args.value("--recording-id"), "--recording-id");
+    return downloadAndAcknowledge(args, token, recordingID);
+  }
+
   if (command == "list-recordings") {
     reaphone::ControlCommand cmd = baseCommand(reaphone::CommandType::ListRecordings);
     cmd.token = require(args.value("--token"), "--token");
@@ -327,8 +445,8 @@ int run(const Arguments &args) {
     return 0;
   }
 
-  if (command == "discover" || command == "stop" || command == "download-recording") {
-    std::fputs(("error: " + command + " is not yet supported in the Windows helper\n").c_str(), stderr);
+  if (command == "discover") {
+    std::fputs("error: discover is not yet supported in the Windows helper\n", stderr);
     return 1;
   }
 
