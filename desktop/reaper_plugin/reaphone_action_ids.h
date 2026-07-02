@@ -38,4 +38,7 @@ inline constexpr const char *kStartRecordingName = "ReaPhoneVideo: Start iPhone 
 inline constexpr const char *kStopRecordingId = "KLONG_REAPHONEVIDEO_STOP_RECORDING";
 inline constexpr const char *kStopRecordingName = "ReaPhoneVideo: Stop iPhone Recording and Download";
 
+inline constexpr const char *kConfigureId = "KLONG_REAPHONEVIDEO_CONFIGURE";
+inline constexpr const char *kConfigureName = "ReaPhoneVideo: Settings\u2026 (host, token, ports)";
+
 } // namespace reaphone::actions

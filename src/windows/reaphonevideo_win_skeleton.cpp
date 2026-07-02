@@ -39,6 +39,7 @@
 #define REAPERAPI_WANT_UpdateTimeline
 #define REAPERAPI_WANT_Undo_BeginBlock
 #define REAPERAPI_WANT_Undo_EndBlock
+#define REAPERAPI_WANT_GetMainHwnd
 #include "reaper_plugin_functions.h"
 
 #include "reaphone_action_ids.h"
@@ -49,6 +50,7 @@
 #include "reaphone/windows/helper_launcher.h"
 
 #include "preview_panel_win32.h"
+#include "settings_dialog_win32.h"
 
 #include <windows.h>
 
@@ -70,6 +72,7 @@ int g_startCommand = 0;
 int g_stopCommand = 0;
 int g_showPreviewCommand = 0;
 int g_floatPreviewCommand = 0;
+int g_configureCommand = 0;
 
 std::unique_ptr<reaphone::Win32PreviewPanel> g_previewPanel;
 
@@ -516,6 +519,15 @@ void handleFloatPreview() {
                             : "ReaPhoneVideo: preview set to docked.");
 }
 
+void handleConfigure(ReaperExtStateStore &store) {
+  reaphone::PluginSettings settings = reaphone::loadSettings(store);
+  HWND parent = GetMainHwnd ? GetMainHwnd() : nullptr;
+  if (reaphone::showSettingsDialog(parent, g_instance, settings)) {
+    reaphone::saveSettings(store, settings);
+    report("ReaPhoneVideo: settings saved.");
+  }
+}
+
 bool hookCommand2(KbdSectionInfo *section, int command, int value, int valuehw, int relmode, HWND hwnd) {
   (void)section;
   (void)value;
@@ -553,6 +565,10 @@ bool hookCommand2(KbdSectionInfo *section, int command, int value, int valuehw, 
     handleFloatPreview();
     return true;
   }
+  if (command == g_configureCommand) {
+    handleConfigure(store);
+    return true;
+  }
   return false;
 }
 
@@ -571,11 +587,12 @@ bool registerActions(reaper_plugin_info_t *rec) {
   g_stopCommand = registerAction(rec, kStopRecordingId, kStopRecordingName);
   g_showPreviewCommand = registerAction(rec, kShowPreviewId, kShowPreviewName);
   g_floatPreviewCommand = registerAction(rec, kFloatPreviewId, kFloatPreviewName);
+  g_configureCommand = registerAction(rec, kConfigureId, kConfigureName);
 
   const bool allRegistered = g_diagnosticCommand != 0 && g_pairCommand != 0 &&
                              g_testConnectionCommand != 0 && g_startCommand != 0 &&
                              g_stopCommand != 0 && g_showPreviewCommand != 0 &&
-                             g_floatPreviewCommand != 0;
+                             g_floatPreviewCommand != 0 && g_configureCommand != 0;
 
   return allRegistered && rec->Register("hookcommand2", reinterpret_cast<void *>(hookCommand2));
 }

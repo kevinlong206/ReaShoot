@@ -145,6 +145,7 @@ if(WIN32)
   add_library(reaphonevideo MODULE
     src/windows/reaphonevideo_win_skeleton.cpp
     src/windows/preview_panel_win32.cpp
+    src/windows/settings_dialog_win32.cpp
   )
   target_link_libraries(reaphonevideo PRIVATE reaphone_portability reaphone_core gdi32 user32)
   # REAPER only loads extension DLLs from UserPlugins whose filename starts
