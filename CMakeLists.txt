@@ -18,6 +18,7 @@ target_include_directories(reaphone_portability INTERFACE
 target_compile_features(reaphone_portability INTERFACE cxx_std_17)
 
 add_library(reaphone_core
+  desktop/core/reaphone/audio_align.cpp
   desktop/core/reaphone/control_protocol.cpp
   desktop/core/reaphone/debug_logger.cpp
   desktop/core/reaphone/http_download.cpp
@@ -105,6 +106,12 @@ if(BUILD_TESTING)
   )
   target_link_libraries(reaphone_preview_tests PRIVATE reaphone_core)
   add_test(NAME reaphone_preview_tests COMMAND reaphone_preview_tests)
+
+  add_executable(reaphone_audio_align_tests
+    desktop/core/tests/audio_align_tests.cpp
+  )
+  target_link_libraries(reaphone_audio_align_tests PRIVATE reaphone_core)
+  add_test(NAME reaphone_audio_align_tests COMMAND reaphone_audio_align_tests)
 
   if(WIN32)
     add_executable(reaphone_process_tests
