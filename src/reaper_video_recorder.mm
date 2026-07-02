@@ -2582,7 +2582,7 @@ void setVideoEnabled(bool enabled);
 
 - (void)discoverIPhone:(id)sender {
   (void)sender;
-  [self setStatus:@"Searching for iPhone Video Sync"];
+  [self setStatus:@"Searching for ReaShoot"];
   [self runVideoSyncCommandAsync:@"discover" extraArguments:@[ @"--timeout", @"3" ] completion:^(NSString *output, NSError *error) {
     if (error) {
       [self setStatus:@"iPhone discovery failed"];
@@ -2678,7 +2678,7 @@ void setVideoEnabled(bool enabled);
                                                            backing:NSBackingStoreBuffered
                                                              defer:NO];
     self.iPhoneSetupWindow.releasedWhenClosed = NO;
-    self.iPhoneSetupWindow.title = @"iPhone Video Sync Setup";
+    self.iPhoneSetupWindow.title = @"ReaShoot Setup";
     NSView *content = self.iPhoneSetupWindow.contentView;
 
     self.iPhoneSetupHostField = [[NSTextField alloc] initWithFrame:NSMakeRect(12, 112, 240, 22)];

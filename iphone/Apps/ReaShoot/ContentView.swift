@@ -1,14 +1,14 @@
 #if os(iOS)
 import SwiftUI
-#if canImport(iPhoneVideoSyncKit)
-import iPhoneVideoSyncKit
+#if canImport(ReaShootKit)
+import ReaShootKit
 #endif
 #if canImport(VideoSyncCore)
 import VideoSyncCore
 #endif
 
 struct ContentView: View {
-    @EnvironmentObject private var service: iPhoneVideoSyncService
+    @EnvironmentObject private var service: ReaShootService
     @State private var recordingToDelete: RecordingFile?
 
     var body: some View {
@@ -60,7 +60,7 @@ struct ContentView: View {
                     }
                 }
             }
-            .navigationTitle("Video Sync")
+            .navigationTitle("ReaShoot")
             .confirmationDialog(
                 "Delete pending video?",
                 isPresented: isShowingDeleteConfirmation,

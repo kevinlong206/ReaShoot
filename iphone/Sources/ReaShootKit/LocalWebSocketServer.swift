@@ -8,7 +8,7 @@ final class LocalWebSocketServer {
 
     private let port: UInt16
     private let handler: MessageHandler
-    private let queue = DispatchQueue(label: "com.kevinlong.iphonevideosync.websocket")
+    private let queue = DispatchQueue(label: "com.kevinlong.reashoot.websocket")
     private var listener: NWListener?
 
     init(port: UInt16, handler: @escaping MessageHandler) {

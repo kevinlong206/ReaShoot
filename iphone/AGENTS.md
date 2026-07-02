@@ -22,14 +22,17 @@ The app disables the idle timer while ready/listening so foreground preview does
 ## Repository layout
 
 - `Package.swift`: Swift package with shared core, iPhone kit, and Mac CLI products.
-- `iPhoneVideoSync.xcodeproj`: installable iOS app project used for device deployment.
-- `Apps/iPhoneVideoSync`: SwiftUI app entry point, UI, and iOS `Info.plist`.
+- `ReaShoot.xcodeproj`: installable iOS app project used for device deployment.
+- `Apps/ReaShoot`: SwiftUI app entry point, UI, and iOS `Info.plist`.
+- `Apps/ReaShoot/Assets.xcassets`: iOS app icon assets, including the ReaShoot camera-and-music-note AppIcon.
 - `Sources/VideoSyncCore`: shared protocol models, transfer state, and checksums.
-- `Sources/iPhoneVideoSyncKit`: iOS recording engine, pairing, WebSocket server, HTTP server, and orchestration service.
-- `Sources/iPhoneVideoSyncKit/WebRTCPreviewSession.swift`: LiveKit WebRTC sender for the low-resolution dock preview.
+- `Sources/ReaShootKit`: iOS recording engine, pairing, WebSocket server, HTTP server, and orchestration service.
+- `Sources/ReaShootKit/WebRTCPreviewSession.swift`: LiveKit WebRTC sender for the low-resolution dock preview.
 - `Sources/video-sync-mac`: Mac command-line tool. Keep this aligned with `../helper/Sources/video-sync-mac`.
 - `Tests/VideoSyncCoreTests`: shared protocol and state-machine tests.
 - `test-downloads`: local output directory for downloaded recordings; do not commit it.
+
+The ReaShoot bundle ID is `com.kevinlong.reashoot`. iOS treats it as a separate app from old personal-device installs that used `com.kevinlong.iphonevideosync`; do not assume pairing state or pending recordings migrate automatically.
 
 ## Build and test commands
 
@@ -55,8 +58,8 @@ Build the iPhone app for the paired physical device:
 
 ```sh
 xcodebuild \
-  -project iPhoneVideoSync.xcodeproj \
-  -scheme iPhoneVideoSync \
+  -project ReaShoot.xcodeproj \
+  -scheme ReaShoot \
   -destination 'platform=iOS,id=797DC5E5-610E-5972-9FD3-B0045CA5745F' \
   -configuration Debug \
   DEVELOPMENT_TEAM=6QTJXLJJ62 \
@@ -68,15 +71,15 @@ Install and launch after building:
 
 ```sh
 APP_PATH="$(xcodebuild \
-  -project iPhoneVideoSync.xcodeproj \
-  -scheme iPhoneVideoSync \
+  -project ReaShoot.xcodeproj \
+  -scheme ReaShoot \
   -destination 'platform=iOS,id=797DC5E5-610E-5972-9FD3-B0045CA5745F' \
   -configuration Debug \
   DEVELOPMENT_TEAM=6QTJXLJJ62 \
   -showBuildSettings 2>/dev/null \
   | awk -F'= ' '/TARGET_BUILD_DIR/ {dir=$2} /FULL_PRODUCT_NAME/ {name=$2} END {print dir "/" name}')"
 xcrun devicectl device install app --device 797DC5E5-610E-5972-9FD3-B0045CA5745F "$APP_PATH"
-xcrun devicectl device process launch --device 797DC5E5-610E-5972-9FD3-B0045CA5745F com.kevinlong.iphonevideosync
+xcrun devicectl device process launch --device 797DC5E5-610E-5972-9FD3-B0045CA5745F com.kevinlong.reashoot
 ```
 
 ## Device and signing notes
@@ -87,7 +90,7 @@ Tested physical device:
 - devicectl identifier: `797DC5E5-610E-5972-9FD3-B0045CA5745F`
 - Product type: `iPhone15,4`
 - iOS: `26.5`
-- Bundle ID: `com.kevinlong.iphonevideosync`
+- Bundle ID: `com.kevinlong.reashoot`
 - Development team used for local signing: `6QTJXLJJ62`
 
 Prerequisites for device testing:
@@ -108,7 +111,7 @@ rm -rf .build Package.resolved ../helper/.build
 
 ## Manual end-to-end test
 
-Keep the iPhone unlocked with the Video Sync app open in the foreground, then run:
+Keep the iPhone unlocked with the ReaShoot app open in the foreground, then run:
 
 ```sh
 swift run video-sync-mac ping --host kevin-long-iphone.local --port 8787
@@ -150,7 +153,7 @@ For the REAPER prompted stop flow, use `stop-only` to get raw pending recording 
 - The answer may include inline ICE candidates. REAPER is expected to strip and add them separately because the Mac-side parser rejected the full inline-candidate answer during testing.
 - REAPER sends its own candidates back with `addWebRTCIceCandidate`.
 - The iPhone app status UI exposes a `Preview` row so agents/users can see whether WebRTC is active.
-- Keep preview on WebRTC only; HTTP is used for recording downloads, not live preview.
+- Keep preview on WebRTC only; HTTP is used for recording downloads, not live preview. Do not suggest MJPEG, HTTP preview, H.264-over-WebSocket, or other non-WebRTC preview transports.
 - The app starts control/HTTP listeners before camera preparation so REAPER can reconnect quickly after app launch.
 - The helper validates complete WebSocket handshake headers, including `Sec-WebSocket-Accept`; keep `LocalWebSocketServer.handshakeResponse` terminated with `\r\n\r\n`.
 - Lens selection uses AVFoundation rear camera discovery. Not every iPhone exposes `ultrawide` or `telephoto`; unavailable lens requests should fail clearly instead of silently pretending they worked.

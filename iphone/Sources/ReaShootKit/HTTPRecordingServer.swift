@@ -9,8 +9,8 @@ final class HTTPRecordingServer {
     private let port: UInt16
     private let store: RecordingStore
     private let pairingStore: PairingStore
-    private let transferQueue = DispatchQueue(label: "com.kevinlong.iphonevideosync.http-recording-transfer")
-    private let listenerQueue = DispatchQueue(label: "com.kevinlong.iphonevideosync.http-recording-listener")
+    private let transferQueue = DispatchQueue(label: "com.kevinlong.reashoot.http-recording-transfer")
+    private let listenerQueue = DispatchQueue(label: "com.kevinlong.reashoot.http-recording-listener")
     private var listener: NWListener?
 
     init(port: UInt16, store: RecordingStore, pairingStore: PairingStore) {

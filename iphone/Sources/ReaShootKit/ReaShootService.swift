@@ -17,7 +17,7 @@ enum DebugLog {
     }()
 
     static func write(_ message: String) {
-        let line = "\(formatter.string(from: Date())) iPhoneVideoSync \(message)\n"
+        let line = "\(formatter.string(from: Date())) ReaShoot \(message)\n"
         guard let data = line.data(using: .utf8) else {
             return
         }
@@ -39,7 +39,7 @@ enum DebugLog {
 }
 
 @MainActor
-public final class iPhoneVideoSyncService: ObservableObject {
+public final class ReaShootService: ObservableObject {
     @Published public private(set) var status = "Stopped"
     @Published public private(set) var previewStatus = "Idle"
     @Published public private(set) var lastError: String?

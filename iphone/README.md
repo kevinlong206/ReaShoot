@@ -1,13 +1,13 @@
-# ReaPhoneVideo iPhone App
+# ReaShoot iPhone App
 
-Companion iPhone app for ReaPhoneVideo. It records 4K video from REAPER/Mac commands over the local Wi-Fi/Bonjour network, then transfers each stopped clip back to the Mac.
+ReaShoot is the companion iPhone app for ReaPhoneVideo. It records 4K video from REAPER/Mac commands over the local Wi-Fi/Bonjour network, then transfers each stopped clip back to the Mac.
 
 ## Layout
 
 - `Sources/VideoSyncCore`: shared protocol models, file-state types, and checksum helpers.
-- `Sources/iPhoneVideoSyncKit`: iOS capture, local WebSocket control, and HTTP transfer services.
+- `Sources/ReaShootKit`: iOS capture, local WebSocket control, and HTTP transfer services.
 - `Sources/video-sync-mac`: Mac CLI for discovery/control/download workflows.
-- `Apps/iPhoneVideoSync`: SwiftUI app sources that consume `iPhoneVideoSyncKit`.
+- `Apps/ReaShoot`: SwiftUI app sources that consume `ReaShootKit`.
 - `Tests/VideoSyncCoreTests`: shared protocol tests.
 
 ## Build and test
@@ -17,18 +17,20 @@ swift test
 swift run video-sync-mac --help
 ```
 
-The iPhone app can be built from `iPhoneVideoSync.xcodeproj`. For local device testing on the currently paired phone:
+The iPhone app can be built from `ReaShoot.xcodeproj`. For local device testing on the currently paired phone:
 
 ```sh
 xcodebuild \
-  -project iPhoneVideoSync.xcodeproj \
-  -scheme iPhoneVideoSync \
+  -project ReaShoot.xcodeproj \
+  -scheme ReaShoot \
   -destination 'platform=iOS,id=797DC5E5-610E-5972-9FD3-B0045CA5745F' \
   -configuration Debug \
   DEVELOPMENT_TEAM=6QTJXLJJ62 \
   -allowProvisioningUpdates \
   build
 ```
+
+The bundle identifier is `com.kevinlong.reashoot`. iOS treats this as a separate app from older personal-device installs that used `com.kevinlong.iphonevideosync`, so old pairing state and pending recordings will not migrate automatically.
 
 ## End-to-end smoke test
 

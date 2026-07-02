@@ -14,7 +14,7 @@ This repository contains ReaPhoneVideo: a macOS-only native REAPER extension plu
 - `src/reaper_video_recorder.mm` - Main extension implementation, including REAPER action registration, docked preview UI, iPhone app control, media insertion, playback preview, and post-record audio alignment.
 - `helper/` - Bundled Swift helper package. Builds `video-sync-mac`, shares protocol types with the iPhone app, and fetches/copies `LiveKitWebRTC.framework` for the REAPER plugin.
 - `iphone/` - Consolidated iPhone app project and Swift package.
-- `iphone/Sources/iPhoneVideoSyncKit/` - iOS capture, preview, WebSocket control, HTTP transfer, pairing, and WebRTC sender.
+- `iphone/Sources/ReaShootKit/` - iOS capture, preview, WebSocket control, HTTP transfer, pairing, and WebRTC sender.
 - `iphone/Sources/VideoSyncCore/ControlProtocol.swift` and `helper/Sources/VideoSyncCore/ControlProtocol.swift` - Protocol definitions; keep these in sync when adding commands/events.
 - `Info.plist` - Bundle metadata for the REAPER extension.
 - `Makefile` - Builds and installs `reaper_video_recorder.dylib`, `video-sync-mac`, and `LiveKitWebRTC.framework`.
@@ -41,18 +41,18 @@ Run iPhone commands from `iphone/`:
 ```sh
 cd iphone
 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=all \
-  xcodebuild -project iPhoneVideoSync.xcodeproj \
-  -scheme iPhoneVideoSync \
+  xcodebuild -project ReaShoot.xcodeproj \
+  -scheme ReaShoot \
   -destination 'platform=iOS,id=797DC5E5-610E-5972-9FD3-B0045CA5745F' \
   DEVELOPMENT_TEAM=6QTJXLJJ62 \
   -quiet build
 
-APP_PATH="$(find "$HOME/Library/Developer/Xcode/DerivedData" -path '*Build/Products/*-iphoneos/iPhoneVideoSync.app' -type d -print -quit)"
+APP_PATH="$(find "$HOME/Library/Developer/Xcode/DerivedData" -path '*Build/Products/*-iphoneos/ReaShoot.app' -type d -print -quit)"
 xcrun devicectl device install app --device 797DC5E5-610E-5972-9FD3-B0045CA5745F "$APP_PATH"
 
 xcrun devicectl device process launch \
   --device 797DC5E5-610E-5972-9FD3-B0045CA5745F \
-  com.kevinlong.iphonevideosync
+  com.kevinlong.reashoot
 ```
 
 If DerivedData changes, compute the app path with `xcodebuild -showBuildSettings` instead of hard-coding it.
@@ -77,7 +77,7 @@ rm -rf iphone/Package.resolved iphone/.build helper/.build
 - Video features are off by default. Enabling video shows the floating preview by default and creates/reuses a `Video Recorder` track.
 - The `Video Recorder` track is forced to REAPER record-disabled state: unarmed, no input, record mode `none`, monitoring off, item monitoring off, and auto-recarm off.
 - The extension is iPhone-only. The preview has iPhone setup/profile controls and a format/status area below the video. The format label shows the transport (Wi-Fi), resolution, FPS, orientation, aspect, lens, zoom, selected look, and WebRTC preview state. The look row has `Prev`/`Next` buttons for quick auditioning. Format/status text turns red while recording.
-- For `iPhone Video Sync`, REAPER controls the companion iPhone app over WebSocket port `8787`, downloads recordings over HTTP port `8788`, and uses authenticated WebRTC control messages for preview, all over the local Wi-Fi network using the host saved from setup/discovery (Bonjour).
+- For `ReaShoot`, REAPER controls the companion iPhone app over WebSocket port `8787`, downloads recordings over HTTP port `8788`, and uses authenticated WebRTC control messages for preview, all over the local Wi-Fi network using the host saved from setup/discovery (Bonjour).
 - The helper `stop --progress` command emits `encode percent=...` while preparing non-natural looks and `progress bytes=... total=... percent=...` while downloading; REAPER parses these live and shows progress in the dock status label.
 - REAPER's iPhone stop flow uses helper `stop-only` to receive raw pending recording metadata immediately, prompts for Download vs Delete before look encoding, then calls either `download-recording --progress` or confirmed `delete-recording`. Canceling delete confirmation downloads instead.
 - Failed/canceled downloads remain pending on the phone because the Mac only sends transfer acknowledgement after verifying the downloaded file. The preview window has `Pending...` and `Delete All` buttons. `Pending...` / `Video Recorder: Restore Pending iPhone Recording` calls helper `list-recordings`, prompts for a clip, then can either download/insert with `download-recording --progress` at the current edit cursor or delete the pending recording with `delete-recording`. `Delete All` / `Video Recorder: Delete All Pending iPhone Recordings` lists pending clips, confirms, then deletes them all.
@@ -94,12 +94,13 @@ rm -rf iphone/Package.resolved iphone/.build helper/.build
 ## Design constraints and preferences
 
 - Keep the implementation native; do not move iPhone control, preview, or media insertion into JSFX, VST3, or Lua.
+- WebRTC is required for the REAPER preview window. Do not suggest replacing it with MJPEG, HTTP preview, H.264-over-WebSocket, or any other non-WebRTC preview transport.
 - Preserve the single-item model: one recorded `.mov` item with embedded camera audio. Do not add a separate reference-audio item unless the user explicitly asks.
 - Keep routine status in the preview UI, not REAPER popups. Use REAPER message boxes only for real errors.
 - Avoid enabling REAPER audio recording on the `Video Recorder` track.
 - Be careful editing `~/Library/Application Support/REAPER/reaper-menu.ini`; preserve user toolbar config and avoid duplicate toolbar entries.
 - Keep the iPhone app and REAPER helper protocol definitions aligned. Prefer copying shared protocol/CLI changes both ways or extracting a single shared package before adding divergent behavior.
-- Keep the curated raw look lists aligned between `src/reaper_video_recorder.mm` and `iphone/Sources/iPhoneVideoSyncKit/CaptureRecordingEngine.swift`; saved removed `ci:` looks should fall back to `natural`.
+- Keep the curated raw look lists aligned between `src/reaper_video_recorder.mm` and `iphone/Sources/ReaShootKit/CaptureRecordingEngine.swift`; saved removed `ci:` looks should fall back to `natural`.
 - Do not commit iPhone pairing tokens, downloaded `.mov` files, `test-downloads`, DerivedData, `.DS_Store`, or Xcode `xcuserdata`.
 - The manually generated iPhone Xcode project is fragile; make surgical project-file edits and validate with `xcodebuild`.
 

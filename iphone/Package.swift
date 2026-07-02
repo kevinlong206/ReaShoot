@@ -3,14 +3,14 @@
 import PackageDescription
 
 let package = Package(
-    name: "iPhoneReaperVideoSync",
+    name: "ReaShoot",
     platforms: [
         .iOS(.v17),
         .macOS(.v14)
     ],
     products: [
         .library(name: "VideoSyncCore", targets: ["VideoSyncCore"]),
-        .library(name: "iPhoneVideoSyncKit", targets: ["iPhoneVideoSyncKit"]),
+        .library(name: "ReaShootKit", targets: ["ReaShootKit"]),
         .executable(name: "video-sync-mac", targets: ["video-sync-mac"])
     ],
     dependencies: [
@@ -21,7 +21,7 @@ let package = Package(
             name: "VideoSyncCore"
         ),
         .target(
-            name: "iPhoneVideoSyncKit",
+            name: "ReaShootKit",
             dependencies: [
                 "VideoSyncCore",
                 .product(name: "LiveKitWebRTC", package: "webrtc-xcframework")

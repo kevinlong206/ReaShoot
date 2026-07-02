@@ -5,7 +5,7 @@ import LiveKitWebRTC
 
 final class WebRTCPreviewSession: NSObject {
     private let factory = LKRTCPeerConnectionFactory()
-    private let queue = DispatchQueue(label: "com.kevinlong.iphonevideosync.webrtc-preview")
+    private let queue = DispatchQueue(label: "com.kevinlong.reashoot.webrtc-preview")
     private var peerConnection: LKRTCPeerConnection?
     private var videoSource: LKRTCVideoSource?
     private var capturer: LKRTCVideoCapturer?

@@ -66,15 +66,15 @@ The companion iPhone app is now consolidated in this repository under `iphone/`.
 
 ```sh
 cd iphone
-xcodebuild -project iPhoneVideoSync.xcodeproj -scheme iPhoneVideoSync -destination 'generic/platform=iOS' build
+xcodebuild -project ReaShoot.xcodeproj -scheme ReaShoot -destination 'generic/platform=iOS' build
 ```
 
 For local device iteration, this tested device command is usually more useful:
 
 ```sh
 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=all \
-  xcodebuild -project iphone/iPhoneVideoSync.xcodeproj \
-  -scheme iPhoneVideoSync \
+  xcodebuild -project iphone/ReaShoot.xcodeproj \
+  -scheme ReaShoot \
   -destination 'platform=iOS,id=797DC5E5-610E-5972-9FD3-B0045CA5745F' \
   DEVELOPMENT_TEAM=6QTJXLJJ62 \
   build

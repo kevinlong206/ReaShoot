@@ -7,36 +7,38 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		A00100000000000000000001 /* Apps/iPhoneVideoSync/iPhoneVideoSyncApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200000000000000000001 /* Apps/iPhoneVideoSync/iPhoneVideoSyncApp.swift */; };
-		A00100000000000000000002 /* Apps/iPhoneVideoSync/ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200000000000000000002 /* Apps/iPhoneVideoSync/ContentView.swift */; };
+		A00100000000000000000001 /* Apps/ReaShoot/ReaShootApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200000000000000000001 /* Apps/ReaShoot/ReaShootApp.swift */; };
+		A00100000000000000000002 /* Apps/ReaShoot/ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200000000000000000002 /* Apps/ReaShoot/ContentView.swift */; };
 		A00100000000000000000003 /* Sources/VideoSyncCore/Checksum.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200000000000000000003 /* Sources/VideoSyncCore/Checksum.swift */; };
 		A00100000000000000000004 /* Sources/VideoSyncCore/ControlProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200000000000000000004 /* Sources/VideoSyncCore/ControlProtocol.swift */; };
 		A00100000000000000000005 /* Sources/VideoSyncCore/FileState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200000000000000000005 /* Sources/VideoSyncCore/FileState.swift */; };
-		A00100000000000000000006 /* Sources/iPhoneVideoSyncKit/CaptureRecordingEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200000000000000000006 /* Sources/iPhoneVideoSyncKit/CaptureRecordingEngine.swift */; };
-		A00100000000000000000007 /* Sources/iPhoneVideoSyncKit/HTTPRecordingServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200000000000000000007 /* Sources/iPhoneVideoSyncKit/HTTPRecordingServer.swift */; };
-		A00100000000000000000008 /* Sources/iPhoneVideoSyncKit/iPhoneVideoSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200000000000000000008 /* Sources/iPhoneVideoSyncKit/iPhoneVideoSyncService.swift */; };
-		A00100000000000000000009 /* Sources/iPhoneVideoSyncKit/LocalWebSocketServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200000000000000000009 /* Sources/iPhoneVideoSyncKit/LocalWebSocketServer.swift */; };
-		A0010000000000000000000A /* Sources/iPhoneVideoSyncKit/PairingStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0020000000000000000000A /* Sources/iPhoneVideoSyncKit/PairingStore.swift */; };
-		A0010000000000000000000B /* Sources/iPhoneVideoSyncKit/RecordingStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0020000000000000000000B /* Sources/iPhoneVideoSyncKit/RecordingStore.swift */; };
-		A0010000000000000000000C /* Sources/iPhoneVideoSyncKit/WebRTCPreviewSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0020000000000000000000E /* Sources/iPhoneVideoSyncKit/WebRTCPreviewSession.swift */; };
+		A00100000000000000000006 /* Sources/ReaShootKit/CaptureRecordingEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200000000000000000006 /* Sources/ReaShootKit/CaptureRecordingEngine.swift */; };
+		A00100000000000000000007 /* Sources/ReaShootKit/HTTPRecordingServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200000000000000000007 /* Sources/ReaShootKit/HTTPRecordingServer.swift */; };
+		A00100000000000000000008 /* Sources/ReaShootKit/ReaShootService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200000000000000000008 /* Sources/ReaShootKit/ReaShootService.swift */; };
+		A00100000000000000000009 /* Sources/ReaShootKit/LocalWebSocketServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200000000000000000009 /* Sources/ReaShootKit/LocalWebSocketServer.swift */; };
+		A0010000000000000000000A /* Sources/ReaShootKit/PairingStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0020000000000000000000A /* Sources/ReaShootKit/PairingStore.swift */; };
+		A0010000000000000000000B /* Sources/ReaShootKit/RecordingStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0020000000000000000000B /* Sources/ReaShootKit/RecordingStore.swift */; };
+		A0010000000000000000000C /* Sources/ReaShootKit/WebRTCPreviewSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0020000000000000000000E /* Sources/ReaShootKit/WebRTCPreviewSession.swift */; };
 		A0010000000000000000000D /* LiveKitWebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = A01100000000000000000002 /* LiveKitWebRTC */; };
+		A0010000000000000000000E /* Apps/ReaShoot/Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A0020000000000000000000F /* Apps/ReaShoot/Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		A00200000000000000000001 /* Apps/iPhoneVideoSync/iPhoneVideoSyncApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Apps/iPhoneVideoSync/iPhoneVideoSyncApp.swift; sourceTree = "<group>"; };
-		A00200000000000000000002 /* Apps/iPhoneVideoSync/ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Apps/iPhoneVideoSync/ContentView.swift; sourceTree = "<group>"; };
+		A00200000000000000000001 /* Apps/ReaShoot/ReaShootApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Apps/ReaShoot/ReaShootApp.swift; sourceTree = "<group>"; };
+		A00200000000000000000002 /* Apps/ReaShoot/ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Apps/ReaShoot/ContentView.swift; sourceTree = "<group>"; };
 		A00200000000000000000003 /* Sources/VideoSyncCore/Checksum.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/VideoSyncCore/Checksum.swift; sourceTree = "<group>"; };
 		A00200000000000000000004 /* Sources/VideoSyncCore/ControlProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/VideoSyncCore/ControlProtocol.swift; sourceTree = "<group>"; };
 		A00200000000000000000005 /* Sources/VideoSyncCore/FileState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/VideoSyncCore/FileState.swift; sourceTree = "<group>"; };
-		A00200000000000000000006 /* Sources/iPhoneVideoSyncKit/CaptureRecordingEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/iPhoneVideoSyncKit/CaptureRecordingEngine.swift; sourceTree = "<group>"; };
-		A00200000000000000000007 /* Sources/iPhoneVideoSyncKit/HTTPRecordingServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/iPhoneVideoSyncKit/HTTPRecordingServer.swift; sourceTree = "<group>"; };
-		A00200000000000000000008 /* Sources/iPhoneVideoSyncKit/iPhoneVideoSyncService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/iPhoneVideoSyncKit/iPhoneVideoSyncService.swift; sourceTree = "<group>"; };
-		A00200000000000000000009 /* Sources/iPhoneVideoSyncKit/LocalWebSocketServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/iPhoneVideoSyncKit/LocalWebSocketServer.swift; sourceTree = "<group>"; };
-		A0020000000000000000000A /* Sources/iPhoneVideoSyncKit/PairingStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/iPhoneVideoSyncKit/PairingStore.swift; sourceTree = "<group>"; };
-		A0020000000000000000000B /* Sources/iPhoneVideoSyncKit/RecordingStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/iPhoneVideoSyncKit/RecordingStore.swift; sourceTree = "<group>"; };
-		A0020000000000000000000C /* Apps/iPhoneVideoSync/Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Apps/iPhoneVideoSync/Info.plist; sourceTree = "<group>"; };
-		A0020000000000000000000D /* iPhoneVideoSync.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = iPhoneVideoSync.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		A0020000000000000000000E /* Sources/iPhoneVideoSyncKit/WebRTCPreviewSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/iPhoneVideoSyncKit/WebRTCPreviewSession.swift; sourceTree = "<group>"; };
+		A00200000000000000000006 /* Sources/ReaShootKit/CaptureRecordingEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/ReaShootKit/CaptureRecordingEngine.swift; sourceTree = "<group>"; };
+		A00200000000000000000007 /* Sources/ReaShootKit/HTTPRecordingServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/ReaShootKit/HTTPRecordingServer.swift; sourceTree = "<group>"; };
+		A00200000000000000000008 /* Sources/ReaShootKit/ReaShootService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/ReaShootKit/ReaShootService.swift; sourceTree = "<group>"; };
+		A00200000000000000000009 /* Sources/ReaShootKit/LocalWebSocketServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/ReaShootKit/LocalWebSocketServer.swift; sourceTree = "<group>"; };
+		A0020000000000000000000A /* Sources/ReaShootKit/PairingStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/ReaShootKit/PairingStore.swift; sourceTree = "<group>"; };
+		A0020000000000000000000B /* Sources/ReaShootKit/RecordingStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/ReaShootKit/RecordingStore.swift; sourceTree = "<group>"; };
+		A0020000000000000000000C /* Apps/ReaShoot/Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Apps/ReaShoot/Info.plist; sourceTree = "<group>"; };
+		A0020000000000000000000D /* ReaShoot.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ReaShoot.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A0020000000000000000000E /* Sources/ReaShootKit/WebRTCPreviewSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/ReaShootKit/WebRTCPreviewSession.swift; sourceTree = "<group>"; };
+		A0020000000000000000000F /* Apps/ReaShoot/Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Apps/ReaShoot/Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -64,7 +66,7 @@
 		A00300000000000000000002 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				A0020000000000000000000D /* iPhoneVideoSync.app */,
+				A0020000000000000000000D /* ReaShoot.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -72,9 +74,10 @@
 		A00300000000000000000003 /* App */ = {
 			isa = PBXGroup;
 			children = (
-				A00200000000000000000001 /* Apps/iPhoneVideoSync/iPhoneVideoSyncApp.swift */,
-				A00200000000000000000002 /* Apps/iPhoneVideoSync/ContentView.swift */,
-				A0020000000000000000000C /* Apps/iPhoneVideoSync/Info.plist */,
+				A00200000000000000000001 /* Apps/ReaShoot/ReaShootApp.swift */,
+				A00200000000000000000002 /* Apps/ReaShoot/ContentView.swift */,
+				A0020000000000000000000C /* Apps/ReaShoot/Info.plist */,
+				A0020000000000000000000F /* Apps/ReaShoot/Assets.xcassets */,
 			);
 			name = App;
 			sourceTree = "<group>";
@@ -92,13 +95,13 @@
 		A00300000000000000000005 /* iPhone Kit */ = {
 			isa = PBXGroup;
 			children = (
-				A00200000000000000000006 /* Sources/iPhoneVideoSyncKit/CaptureRecordingEngine.swift */,
-				A00200000000000000000007 /* Sources/iPhoneVideoSyncKit/HTTPRecordingServer.swift */,
-				A00200000000000000000008 /* Sources/iPhoneVideoSyncKit/iPhoneVideoSyncService.swift */,
-				A00200000000000000000009 /* Sources/iPhoneVideoSyncKit/LocalWebSocketServer.swift */,
-				A0020000000000000000000A /* Sources/iPhoneVideoSyncKit/PairingStore.swift */,
-				A0020000000000000000000B /* Sources/iPhoneVideoSyncKit/RecordingStore.swift */,
-				A0020000000000000000000E /* Sources/iPhoneVideoSyncKit/WebRTCPreviewSession.swift */,
+				A00200000000000000000006 /* Sources/ReaShootKit/CaptureRecordingEngine.swift */,
+				A00200000000000000000007 /* Sources/ReaShootKit/HTTPRecordingServer.swift */,
+				A00200000000000000000008 /* Sources/ReaShootKit/ReaShootService.swift */,
+				A00200000000000000000009 /* Sources/ReaShootKit/LocalWebSocketServer.swift */,
+				A0020000000000000000000A /* Sources/ReaShootKit/PairingStore.swift */,
+				A0020000000000000000000B /* Sources/ReaShootKit/RecordingStore.swift */,
+				A0020000000000000000000E /* Sources/ReaShootKit/WebRTCPreviewSession.swift */,
 			);
 			name = "iPhone Kit";
 			sourceTree = "<group>";
@@ -106,9 +109,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		A00400000000000000000001 /* iPhoneVideoSync */ = {
+		A00400000000000000000001 /* ReaShoot */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = A00900000000000000000002 /* Build configuration list for PBXNativeTarget "iPhoneVideoSync" */;
+			buildConfigurationList = A00900000000000000000002 /* Build configuration list for PBXNativeTarget "ReaShoot" */;
 			buildPhases = (
 				A00500000000000000000001 /* Sources */,
 				A00500000000000000000002 /* Frameworks */,
@@ -118,12 +121,12 @@
 			);
 			dependencies = (
 			);
-			name = iPhoneVideoSync;
+			name = ReaShoot;
 			packageProductDependencies = (
 				A01100000000000000000002 /* LiveKitWebRTC */,
 			);
-			productName = iPhoneVideoSync;
-			productReference = A0020000000000000000000D /* iPhoneVideoSync.app */;
+			productName = ReaShoot;
+			productReference = A0020000000000000000000D /* ReaShoot.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -142,7 +145,7 @@
 					};
 				};
 			};
-			buildConfigurationList = A00900000000000000000001 /* Build configuration list for PBXProject "iPhoneVideoSync" */;
+			buildConfigurationList = A00900000000000000000001 /* Build configuration list for PBXProject "ReaShoot" */;
 			compatibilityVersion = "Xcode 15.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
@@ -158,7 +161,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				A00400000000000000000001 /* iPhoneVideoSync */,
+				A00400000000000000000001 /* ReaShoot */,
 			);
 		};
 /* End PBXProject section */
@@ -168,6 +171,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A0010000000000000000000E /* Apps/ReaShoot/Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -178,18 +182,18 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A00100000000000000000001 /* Apps/iPhoneVideoSync/iPhoneVideoSyncApp.swift in Sources */,
-				A00100000000000000000002 /* Apps/iPhoneVideoSync/ContentView.swift in Sources */,
+				A00100000000000000000001 /* Apps/ReaShoot/ReaShootApp.swift in Sources */,
+				A00100000000000000000002 /* Apps/ReaShoot/ContentView.swift in Sources */,
 				A00100000000000000000003 /* Sources/VideoSyncCore/Checksum.swift in Sources */,
 				A00100000000000000000004 /* Sources/VideoSyncCore/ControlProtocol.swift in Sources */,
 				A00100000000000000000005 /* Sources/VideoSyncCore/FileState.swift in Sources */,
-				A00100000000000000000006 /* Sources/iPhoneVideoSyncKit/CaptureRecordingEngine.swift in Sources */,
-				A00100000000000000000007 /* Sources/iPhoneVideoSyncKit/HTTPRecordingServer.swift in Sources */,
-				A00100000000000000000008 /* Sources/iPhoneVideoSyncKit/iPhoneVideoSyncService.swift in Sources */,
-				A00100000000000000000009 /* Sources/iPhoneVideoSyncKit/LocalWebSocketServer.swift in Sources */,
-				A0010000000000000000000A /* Sources/iPhoneVideoSyncKit/PairingStore.swift in Sources */,
-				A0010000000000000000000B /* Sources/iPhoneVideoSyncKit/RecordingStore.swift in Sources */,
-				A0010000000000000000000C /* Sources/iPhoneVideoSyncKit/WebRTCPreviewSession.swift in Sources */,
+				A00100000000000000000006 /* Sources/ReaShootKit/CaptureRecordingEngine.swift in Sources */,
+				A00100000000000000000007 /* Sources/ReaShootKit/HTTPRecordingServer.swift in Sources */,
+				A00100000000000000000008 /* Sources/ReaShootKit/ReaShootService.swift in Sources */,
+				A00100000000000000000009 /* Sources/ReaShootKit/LocalWebSocketServer.swift in Sources */,
+				A0010000000000000000000A /* Sources/ReaShootKit/PairingStore.swift in Sources */,
+				A0010000000000000000000B /* Sources/ReaShootKit/RecordingStore.swift in Sources */,
+				A0010000000000000000000C /* Sources/ReaShootKit/WebRTCPreviewSession.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -316,19 +320,19 @@
 		A00800000000000000000003 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = "";
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 6QTJXLJJ62;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = Apps/iPhoneVideoSync/Info.plist;
+				INFOPLIST_FILE = Apps/ReaShoot/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.kevinlong.iphonevideosync;
+				PRODUCT_BUNDLE_IDENTIFIER = com.kevinlong.reashoot;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
@@ -341,19 +345,19 @@
 		A00800000000000000000004 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = "";
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 6QTJXLJJ62;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = Apps/iPhoneVideoSync/Info.plist;
+				INFOPLIST_FILE = Apps/ReaShoot/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.kevinlong.iphonevideosync;
+				PRODUCT_BUNDLE_IDENTIFIER = com.kevinlong.reashoot;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
@@ -366,7 +370,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		A00900000000000000000001 /* Build configuration list for PBXProject "iPhoneVideoSync" */ = {
+		A00900000000000000000001 /* Build configuration list for PBXProject "ReaShoot" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				A00800000000000000000001 /* Debug */,
@@ -375,7 +379,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		A00900000000000000000002 /* Build configuration list for PBXNativeTarget "iPhoneVideoSync" */ = {
+		A00900000000000000000002 /* Build configuration list for PBXNativeTarget "ReaShoot" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				A00800000000000000000003 /* Debug */,

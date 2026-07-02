@@ -375,7 +375,7 @@ public enum CaptureError: Error, LocalizedError {
 }
 
 private final class PreviewFrameStore: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
-    let queue = DispatchQueue(label: "com.kevinlong.iphonevideosync.preview-frames")
+    let queue = DispatchQueue(label: "com.kevinlong.reashoot.preview-frames")
 
     private let context = CIContext()
     private let lock = NSLock()

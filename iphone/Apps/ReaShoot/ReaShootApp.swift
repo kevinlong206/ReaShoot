@@ -1,11 +1,11 @@
 #if os(iOS)
 import SwiftUI
-#if canImport(iPhoneVideoSyncKit)
-import iPhoneVideoSyncKit
+#if canImport(ReaShootKit)
+import ReaShootKit
 #endif
 
 @main
-struct iPhoneVideoSyncApp: App {
+struct ReaShootApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var service = AppServiceFactory.make()
 
@@ -33,11 +33,11 @@ struct iPhoneVideoSyncApp: App {
 
 @MainActor
 private enum AppServiceFactory {
-    static func make() -> iPhoneVideoSyncService {
+    static func make() -> ReaShootService {
         do {
-            return try iPhoneVideoSyncService()
+            return try ReaShootService()
         } catch {
-            fatalError("Could not create iPhoneVideoSyncService: \(error)")
+            fatalError("Could not create ReaShootService: \(error)")
         }
     }
 }
