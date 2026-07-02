@@ -5,6 +5,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace reaphone {
 
@@ -61,5 +62,66 @@ struct ControlCommand {
 
 // Encodes a control command to sorted-key JSON matching the macOS helper.
 std::string encodeControlCommand(const ControlCommand &command);
+
+enum class EventType {
+  Paired,
+  CaptureConfigured,
+  RecordingStarted,
+  RecordingStopped,
+  RecordingPrepared,
+  RecordingsListed,
+  TransferAcknowledged,
+  RecordingDeleted,
+  WebRTCPreviewAnswer,
+  WebRTCIceCandidateAdded,
+  WebRTCPreviewStopped,
+  Pong,
+  Error,
+  Unknown, // an event type this build does not recognize
+};
+
+// Maps an EventType rawValue string to the enum, or std::nullopt when unknown.
+std::optional<EventType> eventTypeFromRawValue(std::string_view rawValue);
+
+// Mirrors VideoSyncCore.RecordingDescriptor.
+struct RecordingDescriptor {
+  std::string id;
+  std::string filename;
+  std::int64_t byteCount = 0;
+  std::optional<double> durationSeconds;
+  std::optional<std::string> checksumSHA256;
+  std::string downloadPath;
+};
+
+// Mirrors VideoSyncCore.PreviewDescriptor with the same defaults.
+struct PreviewDescriptor {
+  std::string snapshotPath = "/preview.jpg";
+  std::string streamPath = "/preview.mjpg";
+  std::string binaryStreamPath = "/preview.bin";
+  int maximumDimension = 640;
+  double approximateFrameRate = 12.0;
+};
+
+// Mirrors VideoSyncCore.ControlEvent. Decoding is lenient (a client consuming
+// iPhone events): present fields are populated, absent optional fields stay
+// empty, and an unrecognized type maps to EventType::Unknown.
+struct ControlEvent {
+  std::optional<std::string> requestID;
+  EventType type = EventType::Unknown;
+  int protocolVersion = kProtocolVersion;
+  std::optional<std::string> token;
+  std::optional<RecordingDescriptor> recording;
+  std::vector<RecordingDescriptor> recordings;
+  std::optional<PreviewDescriptor> preview;
+  std::optional<CaptureProfile> captureProfile;
+  std::optional<std::string> captureStatus;
+  std::optional<double> captureProgress;
+  std::optional<std::string> webRTCAnswerSDP;
+  std::optional<std::string> message;
+};
+
+// Decodes a control event from JSON. Throws std::invalid_argument on malformed
+// JSON or when the required "type" field is missing or not a string.
+ControlEvent decodeControlEvent(std::string_view json);
 
 } // namespace reaphone

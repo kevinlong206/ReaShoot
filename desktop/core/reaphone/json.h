@@ -28,6 +28,24 @@ public:
 
   std::string dump() const;
 
+  // Read accessors for parsed values.
+  bool isNull() const { return type_ == Type::Null; }
+  bool isBool() const { return type_ == Type::Bool; }
+  bool isNumber() const { return type_ == Type::Integer || type_ == Type::Real; }
+  bool isString() const { return type_ == Type::String; }
+  bool isArray() const { return type_ == Type::Array; }
+  bool isObject() const { return type_ == Type::Object; }
+
+  bool asBool() const;
+  std::int64_t asInt() const;
+  double asDouble() const;
+  const std::string &asString() const;
+  const std::vector<Value> &items() const;
+
+  // Returns a pointer to the object member for key, or nullptr when absent or
+  // when this value is not an object.
+  const Value *find(const std::string &key) const;
+
 private:
   enum class Type { Null, Bool, Integer, Real, String, Array, Object };
 
@@ -44,5 +62,9 @@ private:
 
 // Appends a JSON-escaped, double-quoted string to out.
 void appendEscapedString(std::string &out, std::string_view value);
+
+// Parses a JSON document. Throws std::invalid_argument on malformed input or
+// trailing non-whitespace content.
+Value parse(std::string_view text);
 
 } // namespace reaphone::json

@@ -63,6 +63,12 @@ if(BUILD_TESTING)
   target_link_libraries(reaphone_protocol_tests PRIVATE reaphone_core)
   add_test(NAME reaphone_protocol_tests COMMAND reaphone_protocol_tests)
 
+  add_executable(reaphone_event_tests
+    desktop/core/tests/event_tests.cpp
+  )
+  target_link_libraries(reaphone_event_tests PRIVATE reaphone_core)
+  add_test(NAME reaphone_event_tests COMMAND reaphone_event_tests)
+
   if(WIN32)
     add_executable(reaphone_process_tests
       desktop/core/tests/process_tests.cpp
