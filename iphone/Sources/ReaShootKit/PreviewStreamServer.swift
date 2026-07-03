@@ -2,8 +2,8 @@
 import CryptoKit
 import Foundation
 import Network
-#if canImport(VideoSyncCore)
-import VideoSyncCore
+#if canImport(ReaShootCore)
+import ReaShootCore
 #endif
 
 final class PreviewStreamServer {

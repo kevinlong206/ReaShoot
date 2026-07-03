@@ -1,8 +1,8 @@
 import Foundation
-import VideoSyncCore
+import ReaShootCore
 
 @main
-struct VideoSyncMacCLI {
+struct ReaShootMacCLI {
     static func main() async {
         do {
             DebugLog.write("cli start \(DebugLog.redacted(Array(CommandLine.arguments.dropFirst())))")
@@ -203,7 +203,7 @@ struct VideoSyncMacCLI {
 
     private static func printHelp() {
         print("""
-        video-sync-mac commands:
+        reashoot-mac commands:
           discover [--timeout 3]
           pair --host HOST [--port 8787] --code CODE
           configure --host HOST [--port 8787] --token TOKEN [--resolution 4K] [--fps 30] [--orientation portrait] [--aspect 9:16] [--lens wide] [--zoom 1.0] [--look natural]

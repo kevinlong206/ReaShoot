@@ -3,8 +3,8 @@
 import CoreImage
 import Foundation
 import UIKit
-#if canImport(VideoSyncCore)
-import VideoSyncCore
+#if canImport(ReaShootCore)
+import ReaShootCore
 #endif
 
 private enum VideoLook {

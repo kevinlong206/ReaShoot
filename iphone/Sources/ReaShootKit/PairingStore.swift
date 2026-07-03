@@ -6,7 +6,7 @@ public final class PairingStore: ObservableObject {
     @Published public private(set) var pairingCode: String
     @Published public private(set) var token: String?
 
-    private let service = "iphone-video-sync"
+    private let service = "reashoot"
     private let account = "paired-mac-token"
 
     public init() {

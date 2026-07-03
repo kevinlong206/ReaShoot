@@ -9,28 +9,28 @@ let package = Package(
         .macOS(.v14)
     ],
     products: [
-        .library(name: "VideoSyncCore", targets: ["VideoSyncCore"]),
+        .library(name: "ReaShootCore", targets: ["ReaShootCore"]),
         .library(name: "ReaShootKit", targets: ["ReaShootKit"]),
-        .executable(name: "video-sync-mac", targets: ["video-sync-mac"])
+        .executable(name: "reashoot-mac", targets: ["reashoot-mac"])
     ],
     dependencies: [],
     targets: [
         .target(
-            name: "VideoSyncCore"
+            name: "ReaShootCore"
         ),
         .target(
             name: "ReaShootKit",
             dependencies: [
-                "VideoSyncCore"
+                "ReaShootCore"
             ]
         ),
         .executableTarget(
-            name: "video-sync-mac",
-            dependencies: ["VideoSyncCore"]
+            name: "reashoot-mac",
+            dependencies: ["ReaShootCore"]
         ),
         .testTarget(
-            name: "VideoSyncCoreTests",
-            dependencies: ["VideoSyncCore"]
+            name: "ReaShootCoreTests",
+            dependencies: ["ReaShootCore"]
         )
     ],
     swiftLanguageVersions: [.v5]

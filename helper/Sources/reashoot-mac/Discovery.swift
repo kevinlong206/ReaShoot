@@ -10,7 +10,7 @@ struct DiscoveredPhone {
 
 enum DNSSDDiscovery {
     static func discover(timeout: TimeInterval = 3) -> [DiscoveredPhone] {
-        let browseOutput = runDNSSD(arguments: ["-B", "_iphone-video-sync._tcp", "local"], timeout: timeout)
+        let browseOutput = runDNSSD(arguments: ["-B", "_reashoot._tcp", "local"], timeout: timeout)
         let serviceNames = browseOutput
             .components(separatedBy: .newlines)
             .compactMap(serviceName)
@@ -25,7 +25,7 @@ enum DNSSDDiscovery {
     }
 
     private static func resolve(serviceName: String, timeout: TimeInterval) -> DiscoveredPhone? {
-        let output = runDNSSD(arguments: ["-L", serviceName, "_iphone-video-sync._tcp", "local"], timeout: timeout)
+        let output = runDNSSD(arguments: ["-L", serviceName, "_reashoot._tcp", "local"], timeout: timeout)
         let host = firstMatch(in: output, pattern: #"hostname = ([^,\s]+)"#)
         let port = firstMatch(in: output, pattern: #"port = ([0-9]+)"#).flatMap(Int.init)
         let httpPort = firstMatch(in: output, pattern: #"httpPort=([0-9]+)"#).flatMap(Int.init)
@@ -37,7 +37,7 @@ enum DNSSDDiscovery {
     }
 
     private static func serviceName(from line: String) -> String? {
-        guard line.contains("_iphone-video-sync._tcp.") else {
+        guard line.contains("_reashoot._tcp.") else {
             return nil
         }
         let columns = line.split(separator: " ", omittingEmptySubsequences: true)
@@ -92,7 +92,7 @@ final class BonjourDiscovery: NSObject, NetServiceBrowserDelegate, NetServiceDel
     func discover(timeout: TimeInterval = 3) async -> [DiscoveredPhone] {
         let bonjourResults = await withCheckedContinuation { continuation in
             self.continuation = continuation
-            browser.searchForServices(ofType: "_iphone-video-sync._tcp.", inDomain: "local.")
+            browser.searchForServices(ofType: "_reashoot._tcp.", inDomain: "local.")
             DispatchQueue.main.asyncAfter(deadline: .now() + timeout) {
                 self.finish()
             }

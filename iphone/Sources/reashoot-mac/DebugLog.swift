@@ -2,7 +2,7 @@ import Foundation
 
 enum DebugLog {
     private static let lock = NSLock()
-    private static let url = URL(fileURLWithPath: "/tmp/reaper_video_recorder_debug.log")
+    private static let url = URL(fileURLWithPath: "/tmp/reashoot_debug.log")
     private static let formatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
@@ -10,7 +10,7 @@ enum DebugLog {
     }()
 
     static func write(_ message: String) {
-        let line = "\(formatter.string(from: Date())) video-sync-mac \(message)\n"
+        let line = "\(formatter.string(from: Date())) reashoot-mac \(message)\n"
         guard let data = line.data(using: .utf8) else {
             return
         }

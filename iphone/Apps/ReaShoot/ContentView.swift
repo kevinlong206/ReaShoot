@@ -3,8 +3,8 @@ import SwiftUI
 #if canImport(ReaShootKit)
 import ReaShootKit
 #endif
-#if canImport(VideoSyncCore)
-import VideoSyncCore
+#if canImport(ReaShootCore)
+import ReaShootCore
 #endif
 
 struct ContentView: View {

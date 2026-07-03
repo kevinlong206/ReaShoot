@@ -1,6 +1,6 @@
 import Darwin
 import Foundation
-import VideoSyncCore
+import ReaShootCore
 
 enum DownloadError: Error, LocalizedError {
     case missingResponse

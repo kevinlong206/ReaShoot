@@ -1,7 +1,7 @@
 import Darwin
 import CryptoKit
 import Foundation
-import VideoSyncCore
+import ReaShootCore
 
 enum ControlClientError: Error, LocalizedError {
     case invalidURL

@@ -4,13 +4,13 @@ Guidance for future agents working in this project.
 
 ## Project status
 
-This is the consolidated companion iPhone app for ReaPhoneVideo. It records iPhone video controlled from REAPER over the local Wi-Fi/Bonjour network.
+This is the consolidated companion iPhone app for ReaShoot. It records iPhone video controlled from REAPER over the local Wi-Fi/Bonjour network.
 
-This directory is the source of truth for the iPhone app. Do not use the old `~/iphone_reapervideosync` directory.
+This directory is the source of truth for the iPhone app. Do not use or recreate old external development copies.
 
 The current implementation has been installed and tested on a physical iPhone in foreground mode. The tested flow is:
 
-1. iPhone app advertises `_iphone-video-sync._tcp` with Bonjour.
+1. iPhone app advertises `_reashoot._tcp` with Bonjour.
 2. Mac reaches the device over the local Wi-Fi network using the Bonjour-advertised host.
 3. Mac sends WebSocket control commands on port `8787`.
 4. REAPER uses an authenticated local H.264 WebSocket stream for preview; the iPhone renders the selected look before sending preview frames.
@@ -25,15 +25,15 @@ The app disables the idle timer while ready/listening so foreground preview does
 - `ReaShoot.xcodeproj`: installable iOS app project used for device deployment.
 - `Apps/ReaShoot`: SwiftUI app entry point, UI, and iOS `Info.plist`.
 - `Apps/ReaShoot/Assets.xcassets`: iOS app icon assets, including the ReaShoot camera-and-music-note AppIcon.
-- `Sources/VideoSyncCore`: shared protocol models, transfer state, and checksums.
+- `Sources/ReaShootCore`: shared protocol models, transfer state, and checksums.
 - `Sources/ReaShootKit`: iOS recording engine, pairing, WebSocket server, HTTP server, and orchestration service.
 - `Sources/ReaShootKit/PreviewH264Encoder.swift`: VideoToolbox H.264 encoder for low-resolution dock preview.
 - `Sources/ReaShootKit/PreviewStreamServer.swift`: authenticated binary WebSocket server for preview frames.
-- `Sources/video-sync-mac`: Mac command-line tool. Keep this aligned with `../helper/Sources/video-sync-mac`.
-- `Tests/VideoSyncCoreTests`: shared protocol and state-machine tests.
+- `Sources/reashoot-mac`: Mac command-line tool. Keep this aligned with `../helper/Sources/reashoot-mac`.
+- `Tests/ReaShootCoreTests`: shared protocol and state-machine tests.
 - `test-downloads`: local output directory for downloaded recordings; do not commit it.
 
-The ReaShoot bundle ID is `com.kevinlong.reashoot`. iOS treats it as a separate app from old personal-device installs that used `com.kevinlong.iphonevideosync`; do not assume pairing state or pending recordings migrate automatically.
+The ReaShoot bundle ID is `com.kevinlong.reashoot`. iOS treats it as a separate app from old personal-device installs that used `older bundle identifiers`; do not assume pairing state or pending recordings migrate automatically.
 
 ## Build and test commands
 
@@ -46,7 +46,7 @@ swift test
 Show CLI help:
 
 ```sh
-swift run video-sync-mac --help
+swift run reashoot-mac --help
 ```
 
 When SwiftPM commands need to bypass bare-repository safety checks, prefix commands with:
@@ -115,35 +115,35 @@ rm -rf .build Package.resolved ../helper/.build
 Keep the iPhone unlocked with the ReaShoot app open in the foreground, then run:
 
 ```sh
-swift run video-sync-mac ping --host kevin-long-iphone.local --port 8787
+swift run reashoot-mac ping --host kevin-long-iphone.local --port 8787
 
-swift run video-sync-mac configure \
+swift run reashoot-mac configure \
   --host kevin-long-iphone.local \
   --port 8787 \
-  --token "$VIDEO_SYNC_TOKEN" \
+  --token "$REASHOOT_TOKEN" \
   --lens ultrawide \
   --zoom 0.5 \
   --look ci:CIThermal
 
-swift run video-sync-mac start \
+swift run reashoot-mac start \
   --host kevin-long-iphone.local \
   --port 8787 \
-  --token "$VIDEO_SYNC_TOKEN" \
+  --token "$REASHOOT_TOKEN" \
   --session cli-tool-test
 
 sleep 3
 
-swift run video-sync-mac stop \
+swift run reashoot-mac stop \
   --host kevin-long-iphone.local \
   --port 8787 \
   --http-port 8788 \
-  --token "$VIDEO_SYNC_TOKEN" \
+  --token "$REASHOOT_TOKEN" \
   --download-dir test-downloads
 ```
 
 Expected result: a `.mov` appears in `test-downloads`, and the CLI prints `downloaded ...`.
 
-Add `--progress` to `swift run video-sync-mac stop ...` when testing progress. It emits `encode percent=...` during on-phone look preparation and `progress bytes=... total=... percent=...` lines during the HTTP download.
+Add `--progress` to `swift run reashoot-mac stop ...` when testing progress. It emits `encode percent=...` during on-phone look preparation and `progress bytes=... total=... percent=...` lines during the HTTP download.
 
 For the REAPER prompted stop flow, use `stop-only` to get raw pending recording metadata immediately, then either `download-recording --progress` or `delete-recording`. `download-recording` prepares/encodes non-natural looks only after Download is chosen. If a download fails before acknowledgement, the recording remains pending on the phone; use `list-recordings` plus `download-recording --progress` to restore it, `delete-recording` to remove it, or delete it from the iPhone app's Recordings section.
 
@@ -158,15 +158,15 @@ For the REAPER prompted stop flow, use `stop-only` to get raw pending recording 
 - The app starts control/HTTP listeners before camera preparation so REAPER can reconnect quickly after app launch.
 - The helper validates complete WebSocket handshake headers, including `Sec-WebSocket-Accept`; keep `LocalWebSocketServer.handshakeResponse` terminated with `\r\n\r\n`.
 - Lens selection uses AVFoundation rear camera discovery. Not every iPhone exposes `ultrawide` or `telephoto`; unavailable lens requests should fail clearly instead of silently pretending they worked.
-- Looks include custom names plus a curated raw Core Image subset accepted as `ci:<filterName>`. Keep `VideoLook.rawFilterIDs` aligned with the REAPER dropdown list in `../src/reaper_video_recorder.mm`.
+- Looks include custom names plus a curated raw Core Image subset accepted as `ci:<filterName>`. Keep `VideoLook.rawFilterIDs` aligned with the REAPER dropdown list in `../src/reashoot.mm`.
 
 ## Known issues and next work
 
 - Bonjour discovery in the CLI may be less reliable than `dns-sd`; if discovery fails, verify with:
 
 ```sh
-dns-sd -B _iphone-video-sync._tcp local
-dns-sd -L iPhone _iphone-video-sync._tcp local
+dns-sd -B _reashoot._tcp local
+dns-sd -L iPhone _reashoot._tcp local
 ```
 
 - Background/locked recording is not validated and may not be permitted by iOS.

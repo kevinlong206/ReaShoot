@@ -1,5 +1,5 @@
 import XCTest
-@testable import VideoSyncCore
+@testable import ReaShootCore
 
 final class ControlProtocolTests: XCTestCase {
     func testCommandRoundTrip() throws {

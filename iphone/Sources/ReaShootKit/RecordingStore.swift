@@ -1,7 +1,7 @@
 #if os(iOS)
 import Foundation
-#if canImport(VideoSyncCore)
-import VideoSyncCore
+#if canImport(ReaShootCore)
+import ReaShootCore
 #endif
 
 public final class RecordingStore: ObservableObject {

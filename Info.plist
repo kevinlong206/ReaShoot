@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
   <key>CFBundleIdentifier</key>
-  <string>com.klong.reaper-video-recorder</string>
+  <string>com.klong.reashoot.reaper-extension</string>
   <key>CFBundleName</key>
-  <string>REAPER Video Recorder</string>
+  <string>ReaShoot</string>
   <key>CFBundleVersion</key>
   <string>0.1.0</string>
 </dict>

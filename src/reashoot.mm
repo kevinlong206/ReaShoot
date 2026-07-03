@@ -70,7 +70,8 @@
 
 namespace {
 
-constexpr const char *kExtStateSection = "klong_reaper_video_recorder";
+constexpr const char *kExtStateSection = "klong_reashoot";
+constexpr const char *kLegacyExtStateSection = "klong_reaper_video_recorder";
 constexpr const char *kFollowEnabledKey = "follow_enabled";
 constexpr const char *kPreviewFloatingKey = "preview_floating";
 constexpr const char *kIPhoneHostKey = "iphone_host";
@@ -84,9 +85,8 @@ constexpr const char *kIPhoneAspectKey = "iphone_aspect";
 constexpr const char *kIPhoneLensKey = "iphone_lens";
 constexpr const char *kIPhoneZoomKey = "iphone_zoom";
 constexpr const char *kIPhoneLookKey = "iphone_look";
-constexpr const char *kDockIdent = "klong_reaper_video_recorder_preview";
-constexpr const char *kVideoTrackName = "Video Recorder";
-constexpr const char *kRepoHelperPath = "/Users/klong/reaper_video_recorder/build/video-sync-mac";
+constexpr const char *kDockIdent = "klong_reashoot_preview";
+constexpr const char *kVideoTrackName = "ReaShoot";
 constexpr const char *kDefaultIPhoneHost = "kevin-long-iphone.local";
 constexpr int kRecordBit = 4;
 constexpr double kAlignmentPeakRate = 200.0;
@@ -100,7 +100,38 @@ constexpr double kAlignmentSampleRefineSearchSeconds = 0.030;
 constexpr double kAlignmentSearchSeconds = 5.0;
 constexpr double kAlignmentMinimumScore = 0.15;
 constexpr int kAlignmentRetryLimit = 15;
-NSString *kDebugLogPath = @"/tmp/reaper_video_recorder_debug.log";
+NSString *kDebugLogPath = @"/tmp/reashoot_debug.log";
+
+constexpr const char *kExtStateKeys[] = {
+    kFollowEnabledKey,
+    kPreviewFloatingKey,
+    kIPhoneHostKey,
+    kIPhoneControlPortKey,
+    kIPhoneHttpPortKey,
+    kIPhoneTokenKey,
+    kIPhoneResolutionKey,
+    kIPhoneFPSKey,
+    kIPhoneOrientationKey,
+    kIPhoneAspectKey,
+    kIPhoneLensKey,
+    kIPhoneZoomKey,
+    kIPhoneLookKey,
+};
+
+struct ActionRename {
+  const char *legacy;
+  const char *current;
+};
+
+constexpr ActionRename kActionRenames[] = {
+    {"KLONG_VIDEO_RECORDER_ENABLE", "KLONG_REASHOOT_ENABLE"},
+    {"KLONG_VIDEO_RECORDER_SHOW_PREVIEW", "KLONG_REASHOOT_SHOW_PREVIEW"},
+    {"KLONG_VIDEO_RECORDER_FLOAT_PREVIEW", "KLONG_REASHOOT_FLOAT_PREVIEW"},
+    {"KLONG_VIDEO_RECORDER_ALIGN_SELECTED", "KLONG_REASHOOT_ALIGN_SELECTED"},
+    {"KLONG_VIDEO_RECORDER_RESTORE_IPHONE", "KLONG_REASHOOT_RESTORE_IPHONE"},
+    {"KLONG_VIDEO_RECORDER_DELETE_ALL_IPHONE", "KLONG_REASHOOT_DELETE_ALL_IPHONE"},
+    {"KLONG_VIDEO_RECORDER_TOGGLE_FOLLOW", "KLONG_REASHOOT_TOGGLE_FOLLOW"},
+};
 
 void debugLog(NSString *format, ...) {
   va_list args;
@@ -218,7 +249,7 @@ bool isVideoPath(const std::string &path) {
 
 void showError(const std::string &message) {
   if (ShowMessageBox) {
-    ShowMessageBox(message.c_str(), "REAPER Video Recorder", 0);
+    ShowMessageBox(message.c_str(), "ReaShoot", 0);
   }
 }
 
@@ -302,7 +333,7 @@ std::string captureOutputPath(ReaProject *project) {
     outputRoot = NSHomeDirectory().UTF8String;
   }
 
-  return outputRoot + "/Video Recordings/" + projectName + "_" + timestampString() + ".mov";
+  return outputRoot + "/ReaShoot Recordings/" + projectName + "_" + timestampString() + ".mov";
 }
 
 MediaTrack *findVideoTrack(ReaProject *project) {
@@ -339,7 +370,7 @@ MediaTrack *findOrCreateVideoTrack(ReaProject *project) {
   InsertTrackAtIndex(trackCount, true);
   MediaTrack *track = GetTrack(project, trackCount);
   if (track) {
-    char name[] = "Video Recorder";
+    char name[] = "ReaShoot";
     GetSetMediaTrackInfo_String(track, "P_NAME", name, true);
   }
   return track;
@@ -1403,7 +1434,7 @@ std::string alignmentStatusText(const AlignmentResult &alignment) {
     char message[160] = {};
     std::snprintf(message,
                   sizeof(message),
-                  "Recorded to Video Recorder track; aligned %.0f ms (score %.2f)",
+                  "Recorded to ReaShoot track; aligned %.0f ms (score %.2f)",
                   correctionMs,
                   alignment.score);
     return message;
@@ -1472,7 +1503,7 @@ bool insertRecordedMedia(const std::string &path, double position, bool fromIPho
 
   MediaTrack *track = ensureVideoTrackReady(project, false);
   if (!track) {
-    error = "Recording finished, but REAPER could not create or find the Video Recorder track.";
+    error = "Recording finished, but REAPER could not create or find the ReaShoot track.";
     return false;
   }
 
@@ -1489,7 +1520,7 @@ bool insertRecordedMedia(const std::string &path, double position, bool fromIPho
 
   (void)fromIPhone;
   queuePendingAlignment(project, track, videoItem);
-  g_lastAlignmentStatus = "Recorded to Video Recorder track; aligning audio";
+  g_lastAlignmentStatus = "Recorded to ReaShoot track; aligning audio";
 
   if (UpdateArrange) {
     UpdateArrange();
@@ -1525,7 +1556,7 @@ void setVideoEnabled(bool enabled);
 
 } // namespace
 
-@interface KlongVideoRecorder : NSObject
+@interface ReaShootRecorder : NSObject
 @property(nonatomic, strong) AVPlayer *player;
 @property(nonatomic, strong) AVPlayerLayer *playerLayer;
 @property(nonatomic, copy) NSString *activePlaybackPath;
@@ -1595,19 +1626,19 @@ void setVideoEnabled(bool enabled);
 - (void)stopPreviewStream;
 - (void)receivePreviewStreamMessage;
 - (void)handlePreviewAccessUnit:(NSData *)accessUnit;
-- (NSString *)runVideoSyncCommand:(NSString *)command
+- (NSString *)runReaShootCommand:(NSString *)command
                    extraArguments:(NSArray<NSString *> *)extraArguments
                             error:(NSError **)error;
-- (NSTask *)runVideoSyncCommandAsync:(NSString *)command
+- (NSTask *)runReaShootCommandAsync:(NSString *)command
                       extraArguments:(NSArray<NSString *> *)extraArguments
                           completion:(void (^)(NSString *output, NSError *error))completion;
-- (NSTask *)runVideoSyncCommandAsync:(NSString *)command
+- (NSTask *)runReaShootCommandAsync:(NSString *)command
                       extraArguments:(NSArray<NSString *> *)extraArguments
                        outputHandler:(void (^)(NSString *line))outputHandler
                           completion:(void (^)(NSString *output, NSError *error))completion;
-- (void)handleVideoSyncProgressLine:(NSString *)line;
-- (NSDictionary<NSString *, NSString *> *)recordingDescriptorFromVideoSyncOutput:(NSString *)output;
-- (NSArray<NSDictionary<NSString *, NSString *> *> *)recordingDescriptorsFromVideoSyncOutput:(NSString *)output;
+- (void)handleReaShootProgressLine:(NSString *)line;
+- (NSDictionary<NSString *, NSString *> *)recordingDescriptorFromReaShootOutput:(NSString *)output;
+- (NSArray<NSDictionary<NSString *, NSString *> *> *)recordingDescriptorsFromReaShootOutput:(NSString *)output;
 - (void)promptForStoppedIPhoneRecording:(NSDictionary<NSString *, NSString *> *)recording;
 - (void)deleteIPhoneRecording:(NSDictionary<NSString *, NSString *> *)recording
                    completion:(void (^)(NSError *error))completion;
@@ -1615,7 +1646,7 @@ void setVideoEnabled(bool enabled);
 - (void)finishIPhoneStopWithPath:(NSString *)path error:(NSError *)error;
 @end
 
-@implementation KlongVideoRecorder
+@implementation ReaShootRecorder
 
 - (instancetype)init {
   self = [super init];
@@ -1674,19 +1705,12 @@ void setVideoEnabled(bool enabled);
   return self.remoteRecording;
 }
 
-- (NSString *)videoSyncHelperPath {
-  NSString *installedPath = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/REAPER/UserPlugins/video-sync-mac"];
-  if ([[NSFileManager defaultManager] isExecutableFileAtPath:installedPath]) {
-    return installedPath;
-  }
-  NSString *repoPath = [NSString stringWithUTF8String:kRepoHelperPath];
-  if ([[NSFileManager defaultManager] isExecutableFileAtPath:repoPath]) {
-    return repoPath;
-  }
+- (NSString *)reashootHelperPath {
+  NSString *installedPath = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/REAPER/UserPlugins/reashoot-mac"];
   return installedPath;
 }
 
-- (NSArray<NSString *> *)videoSyncArgumentsForCommand:(NSString *)command extraArguments:(NSArray<NSString *> *)extraArguments {
+- (NSArray<NSString *> *)reashootArgumentsForCommand:(NSString *)command extraArguments:(NSArray<NSString *> *)extraArguments {
   NSMutableArray<NSString *> *arguments = [NSMutableArray arrayWithObject:command];
   if (![command isEqualToString:@"discover"]) {
     [arguments addObjectsFromArray:@[
@@ -1700,21 +1724,21 @@ void setVideoEnabled(bool enabled);
   return arguments;
 }
 
-- (NSString *)runVideoSyncCommand:(NSString *)command
+- (NSString *)runReaShootCommand:(NSString *)command
                    extraArguments:(NSArray<NSString *> *)extraArguments
                            error:(NSError **)error {
   NSTask *task = [[NSTask alloc] init];
-  NSString *helperPath = [self videoSyncHelperPath];
+  NSString *helperPath = [self reashootHelperPath];
   if (![[NSFileManager defaultManager] isExecutableFileAtPath:helperPath]) {
     if (error) {
-      *error = [NSError errorWithDomain:@"KlongVideoRecorder"
+      *error = [NSError errorWithDomain:@"com.klong.reashoot"
                                   code:19
-                              userInfo:@{NSLocalizedDescriptionKey: @"The bundled video-sync-mac helper is missing. Run make install again."}];
+                              userInfo:@{NSLocalizedDescriptionKey: @"The bundled reashoot-mac helper is missing. Run make install again."}];
     }
     return nil;
   }
   task.executableURL = [NSURL fileURLWithPath:helperPath];
-  task.arguments = [self videoSyncArgumentsForCommand:command extraArguments:extraArguments];
+  task.arguments = [self reashootArgumentsForCommand:command extraArguments:extraArguments];
   NSPipe *pipe = [NSPipe pipe];
   task.standardOutput = pipe;
   task.standardError = pipe;
@@ -1753,8 +1777,8 @@ void setVideoEnabled(bool enabled);
   NSString *output = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
   if (task.terminationStatus != 0) {
     if (error) {
-      NSString *message = output.length > 0 ? output : @"video-sync-mac failed.";
-      *error = [NSError errorWithDomain:@"KlongVideoRecorder"
+      NSString *message = output.length > 0 ? output : @"reashoot-mac failed.";
+      *error = [NSError errorWithDomain:@"com.klong.reashoot"
                                   code:20
                               userInfo:@{NSLocalizedDescriptionKey: message}];
     }
@@ -1763,21 +1787,21 @@ void setVideoEnabled(bool enabled);
   return output;
 }
 
-- (NSTask *)runVideoSyncCommandAsync:(NSString *)command
+- (NSTask *)runReaShootCommandAsync:(NSString *)command
                       extraArguments:(NSArray<NSString *> *)extraArguments
                           completion:(void (^)(NSString *output, NSError *error))completion {
-  return [self runVideoSyncCommandAsync:command extraArguments:extraArguments outputHandler:nil completion:completion];
+  return [self runReaShootCommandAsync:command extraArguments:extraArguments outputHandler:nil completion:completion];
 }
 
-- (NSTask *)runVideoSyncCommandAsync:(NSString *)command
+- (NSTask *)runReaShootCommandAsync:(NSString *)command
                       extraArguments:(NSArray<NSString *> *)extraArguments
                        outputHandler:(void (^)(NSString *line))outputHandler
                           completion:(void (^)(NSString *output, NSError *error))completion {
-  NSString *helperPath = [self videoSyncHelperPath];
+  NSString *helperPath = [self reashootHelperPath];
   if (![[NSFileManager defaultManager] isExecutableFileAtPath:helperPath]) {
-    NSError *missingError = [NSError errorWithDomain:@"KlongVideoRecorder"
+    NSError *missingError = [NSError errorWithDomain:@"com.klong.reashoot"
                                                 code:19
-                                            userInfo:@{NSLocalizedDescriptionKey: @"The bundled video-sync-mac helper is missing. Run make install again."}];
+                                            userInfo:@{NSLocalizedDescriptionKey: @"The bundled reashoot-mac helper is missing. Run make install again."}];
     dispatch_async(dispatch_get_main_queue(), ^{
       completion(nil, missingError);
     });
@@ -1786,7 +1810,7 @@ void setVideoEnabled(bool enabled);
 
   NSTask *task = [[NSTask alloc] init];
   task.executableURL = [NSURL fileURLWithPath:helperPath];
-  task.arguments = [self videoSyncArgumentsForCommand:command extraArguments:extraArguments];
+  task.arguments = [self reashootArgumentsForCommand:command extraArguments:extraArguments];
   debugLog(@"helper async start command=%@ args=%@", command ?: @"", redactedArguments(task.arguments));
   NSPipe *pipe = [NSPipe pipe];
   task.standardOutput = pipe;
@@ -1842,8 +1866,8 @@ void setVideoEnabled(bool enabled);
     NSString *output = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
     NSError *commandError = nil;
     if (finishedTask.terminationStatus != 0) {
-      NSString *message = output.length > 0 ? output : @"video-sync-mac failed.";
-      commandError = [NSError errorWithDomain:@"KlongVideoRecorder"
+      NSString *message = output.length > 0 ? output : @"reashoot-mac failed.";
+      commandError = [NSError errorWithDomain:@"com.klong.reashoot"
                                         code:21
                                     userInfo:@{NSLocalizedDescriptionKey: message}];
     }
@@ -1870,7 +1894,7 @@ void setVideoEnabled(bool enabled);
   [self persistIPhoneSettings];
   if (g_iPhoneHost.empty() || g_iPhoneToken.empty()) {
     if (error) {
-      *error = [NSError errorWithDomain:@"KlongVideoRecorder"
+      *error = [NSError errorWithDomain:@"com.klong.reashoot"
                                   code:22
                               userInfo:@{NSLocalizedDescriptionKey: @"Set the iPhone host and pairing token before recording."}];
     }
@@ -1895,7 +1919,7 @@ void setVideoEnabled(bool enabled);
     @"--look",
     [NSString stringWithUTF8String:g_iPhoneLook.c_str()]
   ];
-  if (![self runVideoSyncCommand:@"configure" extraArguments:configureArguments error:error]) {
+  if (![self runReaShootCommand:@"configure" extraArguments:configureArguments error:error]) {
     return NO;
   }
 
@@ -1919,7 +1943,7 @@ void setVideoEnabled(bool enabled);
     @"--session",
     sessionID
   ];
-  if (![self runVideoSyncCommand:@"start" extraArguments:arguments error:error]) {
+  if (![self runReaShootCommand:@"start" extraArguments:arguments error:error]) {
     return NO;
   }
 
@@ -1933,7 +1957,7 @@ void setVideoEnabled(bool enabled);
   return YES;
 }
 
-- (NSString *)downloadedPathFromVideoSyncOutput:(NSString *)output {
+- (NSString *)downloadedPathFromReaShootOutput:(NSString *)output {
   for (NSString *line in [output componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
     if ([line hasPrefix:@"downloaded "]) {
       return [line substringFromIndex:@"downloaded ".length];
@@ -1942,7 +1966,7 @@ void setVideoEnabled(bool enabled);
   return nil;
 }
 
-- (NSDictionary<NSString *, NSString *> *)recordingDescriptorFromVideoSyncOutput:(NSString *)output {
+- (NSDictionary<NSString *, NSString *> *)recordingDescriptorFromReaShootOutput:(NSString *)output {
   for (NSString *line in [output componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
     if ([line hasPrefix:@"recording\t"]) {
       return [self fieldsFromHelperLine:line];
@@ -1951,7 +1975,7 @@ void setVideoEnabled(bool enabled);
   return nil;
 }
 
-- (NSArray<NSDictionary<NSString *, NSString *> *> *)recordingDescriptorsFromVideoSyncOutput:(NSString *)output {
+- (NSArray<NSDictionary<NSString *, NSString *> *> *)recordingDescriptorsFromReaShootOutput:(NSString *)output {
   NSMutableArray<NSDictionary<NSString *, NSString *> *> *recordings = [NSMutableArray array];
   for (NSString *line in [output componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
     if ([line hasPrefix:@"recording\t"]) {
@@ -1961,7 +1985,7 @@ void setVideoEnabled(bool enabled);
   return recordings;
 }
 
-- (void)handleVideoSyncProgressLine:(NSString *)line {
+- (void)handleReaShootProgressLine:(NSString *)line {
   if ([line hasPrefix:@"encode "]) {
     NSMutableDictionary<NSString *, NSString *> *fields = [NSMutableDictionary dictionary];
     for (NSString *part in [line componentsSeparatedByString:@" "]) {
@@ -2049,10 +2073,10 @@ void setVideoEnabled(bool enabled);
     watchdogTimer = nil;
   };
   debugLog(@"download start id=%@ filename=%@ bytes=%@ dir=%@", recording[@"id"] ?: @"", recording[@"filename"] ?: @"", recording[@"byteCount"] ?: @"", directory ?: @"");
-  downloadTask = [self runVideoSyncCommandAsync:@"download-recording" extraArguments:arguments outputHandler:^(NSString *line) {
+  downloadTask = [self runReaShootCommandAsync:@"download-recording" extraArguments:arguments outputHandler:^(NSString *line) {
     lastProgressDate = [NSDate date];
     debugLog(@"download progress line=%@", line ?: @"");
-    [self handleVideoSyncProgressLine:line];
+    [self handleReaShootProgressLine:line];
   } completion:^(NSString *output, NSError *error) {
     cancelWatchdog();
     if (error) {
@@ -2061,12 +2085,12 @@ void setVideoEnabled(bool enabled);
       completion(nil, error);
       return;
     }
-    NSString *path = [self downloadedPathFromVideoSyncOutput:output ?: @""];
+    NSString *path = [self downloadedPathFromReaShootOutput:output ?: @""];
     NSError *missingPathError = nil;
     if (path.length == 0) {
-      missingPathError = [NSError errorWithDomain:@"KlongVideoRecorder"
+      missingPathError = [NSError errorWithDomain:@"com.klong.reashoot"
                                              code:23
-                                         userInfo:@{NSLocalizedDescriptionKey: @"The iPhone recording downloaded, but video-sync-mac did not report a file path."}];
+                                         userInfo:@{NSLocalizedDescriptionKey: @"The iPhone recording downloaded, but reashoot-mac did not report a file path."}];
       debugLog(@"download missing path output=%@", output ?: @"");
     } else {
       debugLog(@"download complete path=%@", path ?: @"");
@@ -2117,9 +2141,9 @@ void setVideoEnabled(bool enabled);
                    completion:(void (^)(NSError *error))completion {
   NSString *recordingID = recording[@"id"];
   if (recordingID.length == 0) {
-    NSError *error = [NSError errorWithDomain:@"KlongVideoRecorder"
+    NSError *error = [NSError errorWithDomain:@"com.klong.reashoot"
                                          code:24
-                                     userInfo:@{NSLocalizedDescriptionKey: @"The iPhone recording stopped, but video-sync-mac did not report a recording ID to delete."}];
+                                     userInfo:@{NSLocalizedDescriptionKey: @"The iPhone recording stopped, but reashoot-mac did not report a recording ID to delete."}];
     if (completion) {
       completion(error);
     }
@@ -2132,7 +2156,7 @@ void setVideoEnabled(bool enabled);
     @"--recording-id",
     recordingID
   ];
-  [self runVideoSyncCommandAsync:@"delete-recording" extraArguments:arguments completion:^(NSString *output, NSError *error) {
+  [self runReaShootCommandAsync:@"delete-recording" extraArguments:arguments completion:^(NSString *output, NSError *error) {
     (void)output;
     if (error) {
       [self setStatus:@"iPhone delete failed"];
@@ -2188,7 +2212,7 @@ void setVideoEnabled(bool enabled);
   }
 
   [self setStatus:@"Checking iPhone recordings"];
-  [self runVideoSyncCommandAsync:@"list-recordings"
+  [self runReaShootCommandAsync:@"list-recordings"
                   extraArguments:@[ @"--token", [NSString stringWithUTF8String:g_iPhoneToken.c_str()] ]
                       completion:^(NSString *output, NSError *error) {
     if (error) {
@@ -2197,7 +2221,7 @@ void setVideoEnabled(bool enabled);
       return;
     }
 
-    NSArray<NSDictionary<NSString *, NSString *> *> *recordings = [self recordingDescriptorsFromVideoSyncOutput:output ?: @""];
+    NSArray<NSDictionary<NSString *, NSString *> *> *recordings = [self recordingDescriptorsFromReaShootOutput:output ?: @""];
     if (recordings.count == 0) {
       [self setStatus:@"No pending iPhone recordings"];
       showError("No pending iPhone recordings were found on the phone.");
@@ -2250,7 +2274,7 @@ void setVideoEnabled(bool enabled);
       double position = GetCursorPositionEx ? GetCursorPositionEx(project) : 0.0;
       std::string insertError;
       if (insertRecordedMedia(path.UTF8String ?: "", position, true, insertError)) {
-        const char *status = g_lastAlignmentStatus.empty() ? "Restored iPhone recording to Video Recorder track" : g_lastAlignmentStatus.c_str();
+        const char *status = g_lastAlignmentStatus.empty() ? "Restored iPhone recording to ReaShoot track" : g_lastAlignmentStatus.c_str();
         [self setStatus:[NSString stringWithUTF8String:status]];
       } else {
         [self setStatus:@"iPhone restore import failed"];
@@ -2287,7 +2311,7 @@ void setVideoEnabled(bool enabled);
   }
 
   [self setStatus:@"Checking iPhone recordings"];
-  [self runVideoSyncCommandAsync:@"list-recordings"
+  [self runReaShootCommandAsync:@"list-recordings"
                   extraArguments:@[ @"--token", [NSString stringWithUTF8String:g_iPhoneToken.c_str()] ]
                       completion:^(NSString *output, NSError *error) {
     if (error) {
@@ -2296,7 +2320,7 @@ void setVideoEnabled(bool enabled);
       return;
     }
 
-    NSArray<NSDictionary<NSString *, NSString *> *> *recordings = [self recordingDescriptorsFromVideoSyncOutput:output ?: @""];
+    NSArray<NSDictionary<NSString *, NSString *> *> *recordings = [self recordingDescriptorsFromReaShootOutput:output ?: @""];
     if (recordings.count == 0) {
       [self setStatus:@"No pending iPhone recordings"];
       showError("No pending iPhone recordings were found on the phone.");
@@ -2363,7 +2387,7 @@ void setVideoEnabled(bool enabled);
     @"--token",
     [NSString stringWithUTF8String:g_iPhoneToken.c_str()]
   ];
-  [self runVideoSyncCommandAsync:@"stop-only" extraArguments:arguments completion:^(NSString *output, NSError *error) {
+  [self runReaShootCommandAsync:@"stop-only" extraArguments:arguments completion:^(NSString *output, NSError *error) {
     self.remoteRecording = NO;
     [self setRecordingVisualState:NO];
     if (error) {
@@ -2371,11 +2395,11 @@ void setVideoEnabled(bool enabled);
       [self finishIPhoneStopWithPath:nil error:error];
       return;
     }
-    NSDictionary<NSString *, NSString *> *recording = [self recordingDescriptorFromVideoSyncOutput:output ?: @""];
+    NSDictionary<NSString *, NSString *> *recording = [self recordingDescriptorFromReaShootOutput:output ?: @""];
     if (!recording) {
-      NSError *descriptorError = [NSError errorWithDomain:@"KlongVideoRecorder"
+      NSError *descriptorError = [NSError errorWithDomain:@"com.klong.reashoot"
                                                      code:25
-                                                 userInfo:@{NSLocalizedDescriptionKey: @"The iPhone recording stopped, but video-sync-mac did not report recording details."}];
+                                                 userInfo:@{NSLocalizedDescriptionKey: @"The iPhone recording stopped, but reashoot-mac did not report recording details."}];
       [self finishIPhoneStopWithPath:nil error:descriptorError];
       return;
     }
@@ -2485,7 +2509,7 @@ void setVideoEnabled(bool enabled);
   ];
   [self setStatus:@"Configuring iPhone profile"];
   self.iPhonePreviewProfileConfiguring = YES;
-  [self runVideoSyncCommandAsync:@"configure" extraArguments:arguments completion:^(NSString *output, NSError *error) {
+  [self runReaShootCommandAsync:@"configure" extraArguments:arguments completion:^(NSString *output, NSError *error) {
     self.iPhonePreviewProfileConfiguring = NO;
     if (error) {
       [self setStatus:@"iPhone profile configure failed"];
@@ -2567,7 +2591,7 @@ void setVideoEnabled(bool enabled);
 - (void)discoverIPhone:(id)sender {
   (void)sender;
   [self setStatus:@"Searching for ReaShoot"];
-  [self runVideoSyncCommandAsync:@"discover" extraArguments:@[ @"--timeout", @"3" ] completion:^(NSString *output, NSError *error) {
+  [self runReaShootCommandAsync:@"discover" extraArguments:@[ @"--timeout", @"3" ] completion:^(NSString *output, NSError *error) {
     if (error) {
       [self setStatus:@"iPhone discovery failed"];
       showError(error.localizedDescription.UTF8String ?: "iPhone discovery failed.");
@@ -2597,7 +2621,7 @@ void setVideoEnabled(bool enabled);
     return;
   }
   [self setStatus:@"Pairing with iPhone"];
-  [self runVideoSyncCommandAsync:@"pair" extraArguments:@[ @"--code", code ] completion:^(NSString *output, NSError *error) {
+  [self runReaShootCommandAsync:@"pair" extraArguments:@[ @"--code", code ] completion:^(NSString *output, NSError *error) {
     if (error) {
       [self setStatus:@"iPhone pairing failed"];
       showError(error.localizedDescription.UTF8String ?: "iPhone pairing failed.");
@@ -2631,7 +2655,7 @@ void setVideoEnabled(bool enabled);
     [arguments addObjectsFromArray:@[ @"--token", [NSString stringWithUTF8String:g_iPhoneToken.c_str()] ]];
   }
   [self setStatus:@"Testing iPhone connection"];
-  [self runVideoSyncCommandAsync:@"ping" extraArguments:arguments completion:^(NSString *output, NSError *error) {
+  [self runReaShootCommandAsync:@"ping" extraArguments:arguments completion:^(NSString *output, NSError *error) {
     if (error) {
       [self setStatus:@"iPhone connection failed"];
       showError(error.localizedDescription.UTF8String ?: "iPhone connection failed.");
@@ -3050,7 +3074,7 @@ void setVideoEnabled(bool enabled);
   if (!g_iPhoneHost.empty() && !g_iPhoneToken.empty()) {
     self.iPhonePreviewProfileConfiguring = YES;
     [self setStatus:@"Configuring iPhone preview"];
-    [self runVideoSyncCommandAsync:@"configure" extraArguments:[self iPhoneConfigureArguments] completion:^(NSString *output, NSError *error) {
+    [self runReaShootCommandAsync:@"configure" extraArguments:[self iPhoneConfigureArguments] completion:^(NSString *output, NSError *error) {
       self.iPhonePreviewProfileConfiguring = NO;
       if (error) {
         [self setStatus:@"iPhone preview configure failed"];
@@ -3060,7 +3084,7 @@ void setVideoEnabled(bool enabled);
       if (message.length > 0 && !self.previewStreamTask && !self.previewStreamStarting) {
         [self setStatus:message];
       }
-      [self runVideoSyncCommandAsync:@"start-preview"
+      [self runReaShootCommandAsync:@"start-preview"
                        extraArguments:@[ @"--token", [NSString stringWithUTF8String:g_iPhoneToken.c_str()] ]
                            completion:^(NSString *previewOutput, NSError *previewError) {
         if (previewError) {
@@ -3084,7 +3108,7 @@ void setVideoEnabled(bool enabled);
   self.previewStreamFailed = NO;
   self.previewStreamFailureReason = nil;
   if (!g_iPhoneHost.empty() && !g_iPhoneToken.empty()) {
-    [self runVideoSyncCommandAsync:@"stop-preview"
+    [self runReaShootCommandAsync:@"stop-preview"
                     extraArguments:@[ @"--token", [NSString stringWithUTF8String:g_iPhoneToken.c_str()] ]
                         completion:^(NSString *output, NSError *error) {
       (void)output;
@@ -3160,10 +3184,10 @@ void setVideoEnabled(bool enabled);
   if (!task) {
     return;
   }
-  __weak KlongVideoRecorder *weakSelf = self;
+  __weak ReaShootRecorder *weakSelf = self;
   [task receiveMessageWithCompletionHandler:^(NSURLSessionWebSocketMessage *message, NSError *error) {
     dispatch_async(dispatch_get_main_queue(), ^{
-      KlongVideoRecorder *strongSelf = weakSelf;
+      ReaShootRecorder *strongSelf = weakSelf;
       if (!strongSelf || task != strongSelf.previewStreamTask) {
         return;
       }
@@ -3396,7 +3420,7 @@ void setVideoEnabled(bool enabled);
   [self hideFloatingPreview];
   HWND hwnd = (__bridge HWND)self.dockView;
   if (!self.docked) {
-    DockWindowAddEx(hwnd, "Video Recorder", kDockIdent, true);
+    DockWindowAddEx(hwnd, "ReaShoot", kDockIdent, true);
     self.docked = YES;
   }
   if (DockWindowActivate) {
@@ -3417,7 +3441,7 @@ void setVideoEnabled(bool enabled);
                                                              styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable
                                                                backing:NSBackingStoreBuffered
                                                                  defer:NO];
-    self.floatingPreviewWindow.title = @"Video Recorder Preview";
+    self.floatingPreviewWindow.title = @"ReaShoot Preview";
     self.floatingPreviewWindow.releasedWhenClosed = NO;
   }
   self.dockView.frame = self.floatingPreviewWindow.contentView.bounds;
@@ -3463,10 +3487,10 @@ void setVideoEnabled(bool enabled);
 
 namespace {
 
-KlongVideoRecorder *recorder() {
-  static KlongVideoRecorder *instance = nil;
+ReaShootRecorder *recorder() {
+  static ReaShootRecorder *instance = nil;
   if (!instance) {
-    instance = [[KlongVideoRecorder alloc] init];
+    instance = [[ReaShootRecorder alloc] init];
   }
   return instance;
 }
@@ -3575,7 +3599,7 @@ void processPendingInsert() {
 
   std::string error;
   if (insertRecordedMedia(path, position, true, error)) {
-    const char *status = g_lastAlignmentStatus.empty() ? "Recorded to Video Recorder track" : g_lastAlignmentStatus.c_str();
+    const char *status = g_lastAlignmentStatus.empty() ? "Recorded to ReaShoot track" : g_lastAlignmentStatus.c_str();
     [recorder() setStatus:[NSString stringWithUTF8String:status]];
   } else {
     [recorder() setStatus:@"Import error"];
@@ -3626,7 +3650,7 @@ void processPendingAlignment() {
   }
 
   g_nextAlignmentAttemptTime = now + 1;
-  [recorder() setStatus:@"Recorded to Video Recorder track; aligning audio"];
+  [recorder() setStatus:@"Recorded to ReaShoot track; aligning audio"];
 }
 
 MediaItem *selectedOrLatestVideoTrackItem(MediaTrack *track) {
@@ -3726,7 +3750,7 @@ void alignSelectedVideoItem() {
     g_lastAlignmentStatus += " using time selection";
   }
   [recorder() setStatus:[NSString stringWithUTF8String:g_lastAlignmentStatus.c_str()]];
-  ShowMessageBox(g_lastAlignmentStatus.c_str(), "Video Recorder Alignment", 0);
+  ShowMessageBox(g_lastAlignmentStatus.c_str(), "ReaShoot Alignment", 0);
 }
 
 void timerPoll() {
@@ -3846,44 +3870,44 @@ void cleanup() {
 bool registerActions(reaper_plugin_info_t *rec) {
   custom_action_register_t videoEnabledAction = {
       0,
-      "KLONG_VIDEO_RECORDER_ENABLE",
-      "Video Recorder: Enable/Disable video features",
+      "KLONG_REASHOOT_ENABLE",
+      "ReaShoot: Enable/Disable ReaShoot",
       nullptr,
   };
   custom_action_register_t showPreviewAction = {
       0,
-      "KLONG_VIDEO_RECORDER_SHOW_PREVIEW",
-      "Video Recorder: Show/Hide Preview",
+      "KLONG_REASHOOT_SHOW_PREVIEW",
+      "ReaShoot: Show/Hide Preview",
       nullptr,
   };
   custom_action_register_t floatPreviewAction = {
       0,
-      "KLONG_VIDEO_RECORDER_FLOAT_PREVIEW",
-      "Video Recorder: Float/Dock Preview",
+      "KLONG_REASHOOT_FLOAT_PREVIEW",
+      "ReaShoot: Float/Dock Preview",
       nullptr,
   };
   custom_action_register_t alignSelectedAction = {
       0,
-      "KLONG_VIDEO_RECORDER_ALIGN_SELECTED",
-      "Video Recorder: Align Selected Video Item",
+      "KLONG_REASHOOT_ALIGN_SELECTED",
+      "ReaShoot: Align Selected Video Item",
       nullptr,
   };
   custom_action_register_t restoreIPhoneAction = {
       0,
-      "KLONG_VIDEO_RECORDER_RESTORE_IPHONE",
-      "Video Recorder: Restore Pending iPhone Recording",
+      "KLONG_REASHOOT_RESTORE_IPHONE",
+      "ReaShoot: Restore Pending iPhone Recording",
       nullptr,
   };
   custom_action_register_t deleteAllIPhoneAction = {
       0,
-      "KLONG_VIDEO_RECORDER_DELETE_ALL_IPHONE",
-      "Video Recorder: Delete All Pending iPhone Recordings",
+      "KLONG_REASHOOT_DELETE_ALL_IPHONE",
+      "ReaShoot: Delete All Pending iPhone Recordings",
       nullptr,
   };
   custom_action_register_t toggleFollowAction = {
       0,
-      "KLONG_VIDEO_RECORDER_TOGGLE_FOLLOW",
-      "Video Recorder: Enable/Disable Transport Follow",
+      "KLONG_REASHOOT_TOGGLE_FOLLOW",
+      "ReaShoot: Enable/Disable Transport Follow",
       nullptr,
   };
 
@@ -3909,6 +3933,58 @@ void unregisterCallbacks(reaper_plugin_info_t *rec) {
   rec->Register("-hookcommand2", reinterpret_cast<void *>(hookCommand2));
   rec->Register("-toggleaction", reinterpret_cast<void *>(toggleActionHook));
   rec->Register("-atexit", reinterpret_cast<void *>(cleanup));
+}
+
+void migrateLegacyExtState() {
+  if (!GetExtState || !SetExtState) {
+    return;
+  }
+  for (const char *key : kExtStateKeys) {
+    const char *current = GetExtState(kExtStateSection, key);
+    if (current && current[0] != '\0') {
+      continue;
+    }
+    const char *legacy = GetExtState(kLegacyExtStateSection, key);
+    if (legacy && legacy[0] != '\0') {
+      SetExtState(kExtStateSection, key, legacy, true);
+    }
+  }
+}
+
+void migrateLegacyToolbarActions() {
+  if (!GetResourcePath) {
+    return;
+  }
+
+  const char *resourcePath = GetResourcePath();
+  if (!resourcePath || resourcePath[0] == '\0') {
+    return;
+  }
+
+  NSString *menuPath = [[NSString stringWithUTF8String:resourcePath] stringByAppendingPathComponent:@"reaper-menu.ini"];
+  NSError *readError = nil;
+  NSMutableString *contents =
+      [NSMutableString stringWithContentsOfFile:menuPath encoding:NSUTF8StringEncoding error:&readError];
+  if (!contents || readError) {
+    return;
+  }
+
+  NSString *original = [contents copy];
+  for (const ActionRename &rename : kActionRenames) {
+    NSString *legacy = [NSString stringWithFormat:@"_%s", rename.legacy];
+    NSString *current = [NSString stringWithFormat:@"_%s", rename.current];
+    [contents replaceOccurrencesOfString:legacy
+                              withString:current
+                                 options:0
+                                   range:NSMakeRange(0, contents.length)];
+  }
+
+  if (![contents isEqualToString:original]) {
+    NSError *writeError = nil;
+    if (![contents writeToFile:menuPath atomically:YES encoding:NSUTF8StringEncoding error:&writeError]) {
+      debugLog(@"Failed to migrate ReaShoot toolbar actions: %@", writeError.localizedDescription);
+    }
+  }
 }
 
 void loadSettings() {
@@ -3991,9 +4067,11 @@ REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hI
       return 0;
     }
 
+    migrateLegacyExtState();
+    migrateLegacyToolbarActions();
     loadSettings();
     if (!registerActions(rec)) {
-      showError("REAPER Video Recorder failed to register its actions.");
+      showError("ReaShoot failed to register its actions.");
       return 0;
     }
 

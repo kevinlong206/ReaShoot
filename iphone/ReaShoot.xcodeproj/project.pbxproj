@@ -9,9 +9,9 @@
 /* Begin PBXBuildFile section */
 		A00100000000000000000001 /* Apps/ReaShoot/ReaShootApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200000000000000000001 /* Apps/ReaShoot/ReaShootApp.swift */; };
 		A00100000000000000000002 /* Apps/ReaShoot/ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200000000000000000002 /* Apps/ReaShoot/ContentView.swift */; };
-		A00100000000000000000003 /* Sources/VideoSyncCore/Checksum.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200000000000000000003 /* Sources/VideoSyncCore/Checksum.swift */; };
-		A00100000000000000000004 /* Sources/VideoSyncCore/ControlProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200000000000000000004 /* Sources/VideoSyncCore/ControlProtocol.swift */; };
-		A00100000000000000000005 /* Sources/VideoSyncCore/FileState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200000000000000000005 /* Sources/VideoSyncCore/FileState.swift */; };
+		A00100000000000000000003 /* Sources/ReaShootCore/Checksum.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200000000000000000003 /* Sources/ReaShootCore/Checksum.swift */; };
+		A00100000000000000000004 /* Sources/ReaShootCore/ControlProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200000000000000000004 /* Sources/ReaShootCore/ControlProtocol.swift */; };
+		A00100000000000000000005 /* Sources/ReaShootCore/FileState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200000000000000000005 /* Sources/ReaShootCore/FileState.swift */; };
 		A00100000000000000000006 /* Sources/ReaShootKit/CaptureRecordingEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200000000000000000006 /* Sources/ReaShootKit/CaptureRecordingEngine.swift */; };
 		A00100000000000000000007 /* Sources/ReaShootKit/HTTPRecordingServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200000000000000000007 /* Sources/ReaShootKit/HTTPRecordingServer.swift */; };
 		A00100000000000000000008 /* Sources/ReaShootKit/ReaShootService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200000000000000000008 /* Sources/ReaShootKit/ReaShootService.swift */; };
@@ -26,9 +26,9 @@
 /* Begin PBXFileReference section */
 		A00200000000000000000001 /* Apps/ReaShoot/ReaShootApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Apps/ReaShoot/ReaShootApp.swift; sourceTree = "<group>"; };
 		A00200000000000000000002 /* Apps/ReaShoot/ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Apps/ReaShoot/ContentView.swift; sourceTree = "<group>"; };
-		A00200000000000000000003 /* Sources/VideoSyncCore/Checksum.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/VideoSyncCore/Checksum.swift; sourceTree = "<group>"; };
-		A00200000000000000000004 /* Sources/VideoSyncCore/ControlProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/VideoSyncCore/ControlProtocol.swift; sourceTree = "<group>"; };
-		A00200000000000000000005 /* Sources/VideoSyncCore/FileState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/VideoSyncCore/FileState.swift; sourceTree = "<group>"; };
+		A00200000000000000000003 /* Sources/ReaShootCore/Checksum.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/ReaShootCore/Checksum.swift; sourceTree = "<group>"; };
+		A00200000000000000000004 /* Sources/ReaShootCore/ControlProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/ReaShootCore/ControlProtocol.swift; sourceTree = "<group>"; };
+		A00200000000000000000005 /* Sources/ReaShootCore/FileState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/ReaShootCore/FileState.swift; sourceTree = "<group>"; };
 		A00200000000000000000006 /* Sources/ReaShootKit/CaptureRecordingEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/ReaShootKit/CaptureRecordingEngine.swift; sourceTree = "<group>"; };
 		A00200000000000000000007 /* Sources/ReaShootKit/HTTPRecordingServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/ReaShootKit/HTTPRecordingServer.swift; sourceTree = "<group>"; };
 		A00200000000000000000008 /* Sources/ReaShootKit/ReaShootService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/ReaShootKit/ReaShootService.swift; sourceTree = "<group>"; };
@@ -85,9 +85,9 @@
 		A00300000000000000000004 /* Core */ = {
 			isa = PBXGroup;
 			children = (
-				A00200000000000000000003 /* Sources/VideoSyncCore/Checksum.swift */,
-				A00200000000000000000004 /* Sources/VideoSyncCore/ControlProtocol.swift */,
-				A00200000000000000000005 /* Sources/VideoSyncCore/FileState.swift */,
+				A00200000000000000000003 /* Sources/ReaShootCore/Checksum.swift */,
+				A00200000000000000000004 /* Sources/ReaShootCore/ControlProtocol.swift */,
+				A00200000000000000000005 /* Sources/ReaShootCore/FileState.swift */,
 			);
 			name = Core;
 			sourceTree = "<group>";
@@ -183,9 +183,9 @@
 			files = (
 				A00100000000000000000001 /* Apps/ReaShoot/ReaShootApp.swift in Sources */,
 				A00100000000000000000002 /* Apps/ReaShoot/ContentView.swift in Sources */,
-				A00100000000000000000003 /* Sources/VideoSyncCore/Checksum.swift in Sources */,
-				A00100000000000000000004 /* Sources/VideoSyncCore/ControlProtocol.swift in Sources */,
-				A00100000000000000000005 /* Sources/VideoSyncCore/FileState.swift in Sources */,
+				A00100000000000000000003 /* Sources/ReaShootCore/Checksum.swift in Sources */,
+				A00100000000000000000004 /* Sources/ReaShootCore/ControlProtocol.swift in Sources */,
+				A00100000000000000000005 /* Sources/ReaShootCore/FileState.swift in Sources */,
 				A00100000000000000000006 /* Sources/ReaShootKit/CaptureRecordingEngine.swift in Sources */,
 				A00100000000000000000007 /* Sources/ReaShootKit/HTTPRecordingServer.swift in Sources */,
 				A00100000000000000000008 /* Sources/ReaShootKit/ReaShootService.swift in Sources */,

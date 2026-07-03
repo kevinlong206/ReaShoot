@@ -3,19 +3,19 @@
 import PackageDescription
 
 let package = Package(
-    name: "ReaperVideoSyncHelper",
+    name: "ReaShootHelper",
     platforms: [
         .macOS(.v14)
     ],
     products: [
-        .executable(name: "video-sync-mac", targets: ["video-sync-mac"])
+        .executable(name: "reashoot-mac", targets: ["reashoot-mac"])
     ],
     dependencies: [],
     targets: [
-        .target(name: "VideoSyncCore"),
+        .target(name: "ReaShootCore"),
         .executableTarget(
-            name: "video-sync-mac",
-            dependencies: ["VideoSyncCore"]
+            name: "reashoot-mac",
+            dependencies: ["ReaShootCore"]
         )
     ],
     swiftLanguageVersions: [.v5]

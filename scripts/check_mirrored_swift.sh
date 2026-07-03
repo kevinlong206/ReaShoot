@@ -15,12 +15,12 @@ check_pair() {
   fi
 }
 
-check_pair "helper/Sources/VideoSyncCore/Checksum.swift" "iphone/Sources/VideoSyncCore/Checksum.swift"
-check_pair "helper/Sources/VideoSyncCore/ControlProtocol.swift" "iphone/Sources/VideoSyncCore/ControlProtocol.swift"
-check_pair "helper/Sources/video-sync-mac/ControlClient.swift" "iphone/Sources/video-sync-mac/ControlClient.swift"
-check_pair "helper/Sources/video-sync-mac/DebugLog.swift" "iphone/Sources/video-sync-mac/DebugLog.swift"
-check_pair "helper/Sources/video-sync-mac/Discovery.swift" "iphone/Sources/video-sync-mac/Discovery.swift"
-check_pair "helper/Sources/video-sync-mac/Downloader.swift" "iphone/Sources/video-sync-mac/Downloader.swift"
-check_pair "helper/Sources/video-sync-mac/VideoSyncMacCLI.swift" "iphone/Sources/video-sync-mac/VideoSyncMacCLI.swift"
+check_pair "helper/Sources/ReaShootCore/Checksum.swift" "iphone/Sources/ReaShootCore/Checksum.swift"
+check_pair "helper/Sources/ReaShootCore/ControlProtocol.swift" "iphone/Sources/ReaShootCore/ControlProtocol.swift"
+check_pair "helper/Sources/reashoot-mac/ControlClient.swift" "iphone/Sources/reashoot-mac/ControlClient.swift"
+check_pair "helper/Sources/reashoot-mac/DebugLog.swift" "iphone/Sources/reashoot-mac/DebugLog.swift"
+check_pair "helper/Sources/reashoot-mac/Discovery.swift" "iphone/Sources/reashoot-mac/Discovery.swift"
+check_pair "helper/Sources/reashoot-mac/Downloader.swift" "iphone/Sources/reashoot-mac/Downloader.swift"
+check_pair "helper/Sources/reashoot-mac/ReaShootMacCLI.swift" "iphone/Sources/reashoot-mac/ReaShootMacCLI.swift"
 
 echo "Mirrored Swift files match."

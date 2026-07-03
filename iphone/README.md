@@ -1,20 +1,20 @@
 # ReaShoot iPhone App
 
-ReaShoot is the companion iPhone app for ReaPhoneVideo. It records 4K video from REAPER/Mac commands over the local Wi-Fi/Bonjour network, then transfers each stopped clip back to the Mac.
+ReaShoot is the companion iPhone app for the ReaShoot REAPER extension. It records 4K video from REAPER/Mac commands over the local Wi-Fi/Bonjour network, then transfers each stopped clip back to the Mac.
 
 ## Layout
 
-- `Sources/VideoSyncCore`: shared protocol models, file-state types, and checksum helpers.
+- `Sources/ReaShootCore`: shared protocol models, file-state types, and checksum helpers.
 - `Sources/ReaShootKit`: iOS capture, local WebSocket control, and HTTP transfer services.
-- `Sources/video-sync-mac`: Mac CLI for discovery/control/download workflows.
+- `Sources/reashoot-mac`: Mac CLI for discovery/control/download workflows.
 - `Apps/ReaShoot`: SwiftUI app sources that consume `ReaShootKit`.
-- `Tests/VideoSyncCoreTests`: shared protocol tests.
+- `Tests/ReaShootCoreTests`: shared protocol tests.
 
 ## Build and test
 
 ```sh
 swift test
-swift run video-sync-mac --help
+swift run reashoot-mac --help
 ```
 
 The iPhone app can be built from `ReaShoot.xcodeproj`. For local device testing on the currently paired phone:
@@ -30,24 +30,24 @@ xcodebuild \
   build
 ```
 
-The bundle identifier is `com.kevinlong.reashoot`. iOS treats this as a separate app from older personal-device installs that used `com.kevinlong.iphonevideosync`, so old pairing state and pending recordings will not migrate automatically.
+The bundle identifier is `com.kevinlong.reashoot`. iOS treats this as a separate app from older personal-device installs, so old pairing state and pending recordings will not migrate automatically.
 
 ## End-to-end smoke test
 
 Keep the iPhone unlocked with the app in the foreground. Set the current pairing token in your shell without committing it:
 
 ```sh
-export VIDEO_SYNC_TOKEN='...'
+export REASHOOT_TOKEN='...'
 ```
 
 Then run:
 
 ```sh
-swift run video-sync-mac ping --host kevin-long-iphone.local --port 8787
-swift run video-sync-mac configure --host kevin-long-iphone.local --port 8787 --token "$VIDEO_SYNC_TOKEN" --lens ultrawide --zoom 0.5 --look warmVintage
-swift run video-sync-mac start --host kevin-long-iphone.local --port 8787 --token "$VIDEO_SYNC_TOKEN" --session smoke-test
+swift run reashoot-mac ping --host kevin-long-iphone.local --port 8787
+swift run reashoot-mac configure --host kevin-long-iphone.local --port 8787 --token "$REASHOOT_TOKEN" --lens ultrawide --zoom 0.5 --look warmVintage
+swift run reashoot-mac start --host kevin-long-iphone.local --port 8787 --token "$REASHOOT_TOKEN" --session smoke-test
 sleep 3
-swift run video-sync-mac stop --host kevin-long-iphone.local --port 8787 --http-port 8788 --token "$VIDEO_SYNC_TOKEN" --download-dir test-downloads
+swift run reashoot-mac stop --host kevin-long-iphone.local --port 8787 --http-port 8788 --token "$REASHOOT_TOKEN" --download-dir test-downloads
 ```
 
 Expected result: the CLI prints a downloaded `.mov` path in `test-downloads`, then acknowledges transfer so the iPhone deletes its local copy. Add `--progress` to the `stop` command to print transfer progress lines during on-phone look encoding and movie download. For REAPER's prompted stop flow, the helper also exposes `stop-only`, `prepare-recording`, `list-recordings`, `download-recording`, and `delete-recording`; `stop-only` returns raw pending recording metadata immediately, while `download-recording` prepares/encodes only after Download is chosen. If a download fails before acknowledgement, the recording remains pending on the phone and can be restored with `list-recordings` plus `download-recording`, deleted through the helper, or deleted directly in the iPhone app's Recordings section.

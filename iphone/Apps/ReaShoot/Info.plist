@@ -28,7 +28,7 @@
 	<string>Local network access is required to receive commands from your Mac and transfer recordings.</string>
 	<key>NSBonjourServices</key>
 	<array>
-		<string>_iphone-video-sync._tcp</string>
+		<string>_reashoot._tcp</string>
 	</array>
 	<key>UILaunchScreen</key>
 	<dict/>

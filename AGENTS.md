@@ -2,22 +2,21 @@
 
 ## Project
 
-This repository contains ReaPhoneVideo: a macOS-only native REAPER extension plus its companion iPhone camera app.
+This repository contains ReaShoot: a macOS-only native REAPER extension plus its companion iPhone camera app.
 
 - The REAPER extension is implemented in Objective-C++ with the REAPER Extension SDK, AVFoundation, Cocoa, and a local H.264 preview stream.
 - The companion iPhone app lives in `iphone/` and records full-quality iPhone video while REAPER controls it over the local Wi-Fi/Bonjour network.
-- The GitHub repository is named `ReaPhoneVideo`; deeper code/action/bundle renames are intentionally deferred.
-- `~/iphone_reapervideosync` was the old development copy and has been moved to Trash. Do not use or recreate it; `reaper_video_recorder/iphone` is the source of truth.
+- `iphone/` is the source of truth for the iPhone app; do not recreate old external development copies.
 
 ## Important files
 
-- `src/reaper_video_recorder.mm` - Main extension implementation, including REAPER action registration, docked preview UI, iPhone app control, media insertion, playback preview, and post-record audio alignment.
-- `helper/` - Bundled Swift helper package. Builds `video-sync-mac` and shares protocol types with the iPhone app.
+- `src/reashoot.mm` - Main extension implementation, including REAPER action registration, docked preview UI, iPhone app control, media insertion, playback preview, and post-record audio alignment.
+- `helper/` - Bundled Swift helper package. Builds `reashoot-mac` and shares protocol types with the iPhone app.
 - `iphone/` - Consolidated iPhone app project and Swift package.
 - `iphone/Sources/ReaShootKit/` - iOS capture, H.264 preview streaming, WebSocket control, HTTP transfer, and pairing.
-- `iphone/Sources/VideoSyncCore/ControlProtocol.swift` and `helper/Sources/VideoSyncCore/ControlProtocol.swift` - Protocol definitions; keep these in sync when adding commands/events.
+- `iphone/Sources/ReaShootCore/ControlProtocol.swift` and `helper/Sources/ReaShootCore/ControlProtocol.swift` - Protocol definitions; keep these in sync when adding commands/events.
 - `Info.plist` - Bundle metadata for the REAPER extension.
-- `Makefile` - Builds and installs `reaper_video_recorder.dylib` and `video-sync-mac`.
+- `Makefile` - Builds and installs `reaper_reashoot.dylib` and `reashoot-mac`.
 - `README.md` - User-facing install and behavior notes.
 
 ## REAPER build and install
@@ -25,8 +24,8 @@ This repository contains ReaPhoneVideo: a macOS-only native REAPER extension plu
 ```sh
 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=all make
 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=all make install
-codesign --verify "$HOME/Library/Application Support/REAPER/UserPlugins/video-sync-mac"
-codesign --verify "$HOME/Library/Application Support/REAPER/UserPlugins/reaper_video_recorder.dylib"
+codesign --verify "$HOME/Library/Application Support/REAPER/UserPlugins/reashoot-mac"
+codesign --verify "$HOME/Library/Application Support/REAPER/UserPlugins/reaper_reashoot.dylib"
 ```
 
 REAPER must be restarted after installing a new dylib.
@@ -65,27 +64,27 @@ rm -rf iphone/Package.resolved iphone/.build helper/.build
 ## Current behavior
 
 - Registers actions:
-  - `Video Recorder: Enable/Disable video features`
-  - `Video Recorder: Show/Hide Preview`
-  - `Video Recorder: Float/Dock Preview`
-  - `Video Recorder: Align Selected Video Item`
-  - `Video Recorder: Restore Pending iPhone Recording`
-  - `Video Recorder: Delete All Pending iPhone Recordings`
-  - `Video Recorder: Enable/Disable Transport Follow`
-- The user has a main-toolbar button wired to `_KLONG_VIDEO_RECORDER_ENABLE` in `~/Library/Application Support/REAPER/reaper-menu.ini`.
-- Video features are off by default. Enabling video shows the floating preview by default and creates/reuses a `Video Recorder` track.
-- The `Video Recorder` track is forced to REAPER record-disabled state: unarmed, no input, record mode `none`, monitoring off, item monitoring off, and auto-recarm off.
+  - `ReaShoot: Enable/Disable ReaShoot`
+  - `ReaShoot: Show/Hide Preview`
+  - `ReaShoot: Float/Dock Preview`
+  - `ReaShoot: Align Selected Video Item`
+  - `ReaShoot: Restore Pending iPhone Recording`
+  - `ReaShoot: Delete All Pending iPhone Recordings`
+  - `ReaShoot: Enable/Disable Transport Follow`
+- The user has a main-toolbar button wired to `_KLONG_REASHOOT_ENABLE` in `~/Library/Application Support/REAPER/reaper-menu.ini`.
+- Video features are off by default. Enabling video shows the floating preview by default and creates/reuses a `ReaShoot` track.
+- The `ReaShoot` track is forced to REAPER record-disabled state: unarmed, no input, record mode `none`, monitoring off, item monitoring off, and auto-recarm off.
 - The extension is iPhone-only. The preview has iPhone setup/profile controls and a format/status area below the video. The format label shows the transport (Wi-Fi), resolution, FPS, orientation, aspect, lens, zoom, selected look, and preview state. The look row has `Prev`/`Next` buttons for quick auditioning. Format/status text turns red while recording.
 - For `ReaShoot`, REAPER controls the companion iPhone app over WebSocket port `8787`, downloads recordings over HTTP port `8788`, and receives preview video over an authenticated H.264 WebSocket stream on port `8789`, all over the local Wi-Fi network using the host saved from setup/discovery (Bonjour).
 - The helper `stop --progress` command emits `encode percent=...` while preparing non-natural looks and `progress bytes=... total=... percent=...` while downloading; REAPER parses these live and shows progress in the dock status label.
 - REAPER's iPhone stop flow uses helper `stop-only` to receive raw pending recording metadata immediately, prompts for Download vs Delete before look encoding, then calls either `download-recording --progress` or confirmed `delete-recording`. Canceling delete confirmation downloads instead.
-- Failed/canceled downloads remain pending on the phone because the Mac only sends transfer acknowledgement after verifying the downloaded file. The preview window has `Pending...` and `Delete All` buttons. `Pending...` / `Video Recorder: Restore Pending iPhone Recording` calls helper `list-recordings`, prompts for a clip, then can either download/insert with `download-recording --progress` at the current edit cursor or delete the pending recording with `delete-recording`. `Delete All` / `Video Recorder: Delete All Pending iPhone Recordings` lists pending clips, confirms, then deletes them all.
+- Failed/canceled downloads remain pending on the phone because the Mac only sends transfer acknowledgement after verifying the downloaded file. The preview window has `Pending...` and `Delete All` buttons. `Pending...` / `ReaShoot: Restore Pending iPhone Recording` calls helper `list-recordings`, prompts for a clip, then can either download/insert with `download-recording --progress` at the current edit cursor or delete the pending recording with `delete-recording`. `Delete All` / `ReaShoot: Delete All Pending iPhone Recordings` lists pending clips, confirms, then deletes them all.
 - After the helper verifies checksum and sends `transferComplete`, the iPhone app deletes the transferred local `.mov` immediately.
 - The current iPhone preview implementation uses a dedicated authenticated binary WebSocket carrying H.264 Annex B access units.
 - The helper validates complete WebSocket handshake headers, including `Sec-WebSocket-Accept`; keep the iPhone server response terminated with `\r\n\r\n`.
 - The iPhone app UI has a `Preview` row showing idle/streaming/failure state.
 - The iPhone capture profile includes resolution, FPS, orientation, aspect, lens, zoom, and look. The look picker keeps custom looks plus a curated raw Core Image subset, not the full Core Image catalog. Lens availability is hardware-dependent; zoom is clamped by AVFoundation on iPhone and is not guaranteed optical for every value.
-- The iPhone app records a single `.mov` with video and camera audio embedded. The extension inserts only one media item on the `Video Recorder` track.
+- The iPhone app records a single `.mov` with video and camera audio embedded. The extension inserts only one media item on the `ReaShoot` track.
 - The docked preview uses an `AVPlayerLayer` for video playback preview but mutes that internal player so audio is heard only through REAPER. Avoid aggressive per-timer exact seeking; the player should seek on source changes/playback start and only correct larger drift.
 - After inserting the movie item, the extension tries to auto-align it to the first non-video track item that overlaps the video item using peak-envelope correlation.
 
@@ -95,10 +94,10 @@ rm -rf iphone/Package.resolved iphone/.build helper/.build
 - Keep the preview transport dependency-light and same-LAN oriented; prefer simple H.264 streaming over heavyweight realtime SDKs unless requirements change.
 - Preserve the single-item model: one recorded `.mov` item with embedded camera audio. Do not add a separate reference-audio item unless the user explicitly asks.
 - Keep routine status in the preview UI, not REAPER popups. Use REAPER message boxes only for real errors.
-- Avoid enabling REAPER audio recording on the `Video Recorder` track.
+- Avoid enabling REAPER audio recording on the `ReaShoot` track.
 - Be careful editing `~/Library/Application Support/REAPER/reaper-menu.ini`; preserve user toolbar config and avoid duplicate toolbar entries.
 - Keep the iPhone app and REAPER helper protocol definitions aligned. Prefer copying shared protocol/CLI changes both ways or extracting a single shared package before adding divergent behavior.
-- Keep the curated raw look lists aligned between `src/reaper_video_recorder.mm` and `iphone/Sources/ReaShootKit/CaptureRecordingEngine.swift`; saved removed `ci:` looks should fall back to `natural`.
+- Keep the curated raw look lists aligned between `src/reashoot.mm` and `iphone/Sources/ReaShootKit/CaptureRecordingEngine.swift`; saved removed `ci:` looks should fall back to `natural`.
 - Do not commit iPhone pairing tokens, downloaded `.mov` files, `test-downloads`, DerivedData, `.DS_Store`, or Xcode `xcuserdata`.
 - The manually generated iPhone Xcode project is fragile; make surgical project-file edits and validate with `xcodebuild`.
 
@@ -108,14 +107,14 @@ Control ping using the installed helper:
 
 ```sh
 TOKEN="$(awk -F= '/^iphone_token=/{print $2}' "$HOME/Library/Application Support/REAPER/reaper-extstate.ini" | tail -1)"
-"$HOME/Library/Application Support/REAPER/UserPlugins/video-sync-mac" \
+"$HOME/Library/Application Support/REAPER/UserPlugins/reashoot-mac" \
   ping --host kevin-long-iphone.local --port 8787 --token "$TOKEN"
 ```
 
 Preview control check:
 
 ```sh
-"$HOME/Library/Application Support/REAPER/UserPlugins/video-sync-mac" \
+"$HOME/Library/Application Support/REAPER/UserPlugins/reashoot-mac" \
   ping --host kevin-long-iphone.local --port 8787 --token "$TOKEN"
 ```
 

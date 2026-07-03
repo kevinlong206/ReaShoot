@@ -3,13 +3,13 @@ import Combine
 import Foundation
 import Network
 import UIKit
-#if canImport(VideoSyncCore)
-import VideoSyncCore
+#if canImport(ReaShootCore)
+import ReaShootCore
 #endif
 
 enum DebugLog {
     private static let lock = NSLock()
-    private static let url = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("reaper_video_recorder_debug.log")
+    private static let url = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("reashoot_debug.log")
     private static let formatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
@@ -326,7 +326,7 @@ public final class ReaShootService: ObservableObject {
     }
 
     private func advertiseBonjour() throws {
-        let service = NetService(domain: "local.", type: "_iphone-video-sync._tcp.", name: UIDevice.current.name, port: Int32(controlPort))
+        let service = NetService(domain: "local.", type: "_reashoot._tcp.", name: UIDevice.current.name, port: Int32(controlPort))
         let txtValues = [
             "version": "\(ProtocolVersion.current)",
             "httpPort": "\(httpPort)",
