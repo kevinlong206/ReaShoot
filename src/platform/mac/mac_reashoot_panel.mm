@@ -7,6 +7,7 @@
 @property(nonatomic, strong) NSButton *iPhonePendingButton;
 @property(nonatomic, strong) NSButton *iPhoneDeleteAllButton;
 @property(nonatomic, strong) NSWindow *iPhoneSetupWindow;
+@property(nonatomic, strong) NSWindow *floatingPreviewWindow;
 @property(nonatomic, strong) NSTextField *iPhoneHostField;
 @property(nonatomic, strong) NSTextField *iPhoneTokenField;
 @property(nonatomic, strong) NSTextField *iPhonePairingCodeField;
@@ -356,6 +357,31 @@ static void addRawCoreImageLookItems(NSPopUpButton *popup) {
   self.iPhoneSetupHostField.stringValue = host ?: @"";
   self.iPhoneSetupTokenField.stringValue = token ?: @"";
   [self.iPhoneSetupWindow makeKeyAndOrderFront:nil];
+}
+
+- (void)showFloatingPreview {
+  if (!self.floatingPreviewWindow) {
+    self.floatingPreviewWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(120, 120, 720, 540)
+                                                             styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable
+                                                               backing:NSBackingStoreBuffered
+                                                                 defer:NO];
+    self.floatingPreviewWindow.title = @"ReaShoot Preview";
+    self.floatingPreviewWindow.releasedWhenClosed = NO;
+  }
+  self.dockView.frame = self.floatingPreviewWindow.contentView.bounds;
+  self.dockView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+  self.floatingPreviewWindow.contentView = self.dockView;
+  [self.floatingPreviewWindow makeKeyAndOrderFront:nil];
+}
+
+- (void)hideFloatingPreview {
+  if (!self.floatingPreviewWindow) {
+    return;
+  }
+  [self.floatingPreviewWindow orderOut:nil];
+  if (self.floatingPreviewWindow.contentView == self.dockView) {
+    self.floatingPreviewWindow.contentView = [[NSView alloc] initWithFrame:self.floatingPreviewWindow.contentView.bounds];
+  }
 }
 
 @end

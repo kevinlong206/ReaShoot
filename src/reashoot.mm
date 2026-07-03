@@ -2269,28 +2269,12 @@ void setVideoEnabled(bool enabled);
     return;
   }
   [self hideDockedPreview];
-  if (!self.floatingPreviewWindow) {
-    self.floatingPreviewWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(120, 120, 720, 540)
-                                                             styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable
-                                                               backing:NSBackingStoreBuffered
-                                                                 defer:NO];
-    self.floatingPreviewWindow.title = @"ReaShoot Preview";
-    self.floatingPreviewWindow.releasedWhenClosed = NO;
-  }
-  self.dockView.frame = self.floatingPreviewWindow.contentView.bounds;
-  self.dockView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-  self.floatingPreviewWindow.contentView = self.dockView;
-  [self.floatingPreviewWindow makeKeyAndOrderFront:nil];
+  [self.dockPanel showFloatingPreview];
+  self.floatingPreviewWindow = self.dockPanel.floatingPreviewWindow;
 }
 
 - (void)hideFloatingPreview {
-  if (!self.floatingPreviewWindow) {
-    return;
-  }
-  [self.floatingPreviewWindow orderOut:nil];
-  if (self.floatingPreviewWindow.contentView == self.dockView) {
-    self.floatingPreviewWindow.contentView = [[NSView alloc] initWithFrame:self.floatingPreviewWindow.contentView.bounds];
-  }
+  [self.dockPanel hideFloatingPreview];
 }
 
 - (void)hideDockedPreview {

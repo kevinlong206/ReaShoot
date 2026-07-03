@@ -9,6 +9,7 @@
 @property(nonatomic, strong, readonly) NSButton *iPhonePendingButton;
 @property(nonatomic, strong, readonly) NSButton *iPhoneDeleteAllButton;
 @property(nonatomic, strong, readonly) NSWindow *iPhoneSetupWindow;
+@property(nonatomic, strong, readonly) NSWindow *floatingPreviewWindow;
 @property(nonatomic, strong, readonly) NSTextField *iPhoneHostField;
 @property(nonatomic, strong, readonly) NSTextField *iPhoneTokenField;
 @property(nonatomic, strong, readonly) NSTextField *iPhonePairingCodeField;
@@ -45,4 +46,6 @@
                           look:(NSString *)look
                     statusText:(NSString *)statusText;
 - (void)showSetupWindowWithTarget:(id)target host:(NSString *)host token:(NSString *)token;
+- (void)showFloatingPreview;
+- (void)hideFloatingPreview;
 @end
