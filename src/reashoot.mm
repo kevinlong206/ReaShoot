@@ -1,5 +1,4 @@
 #import <AVFoundation/AVFoundation.h>
-#import <AudioToolbox/AudioToolbox.h>
 #import <Cocoa/Cocoa.h>
 #import <QuartzCore/QuartzCore.h>
 
@@ -21,6 +20,8 @@
 #include "core/remote_camera.h"
 #import "platform/mac/mac_h264_preview_renderer.h"
 #include "platform/mac/mac_helper_process.h"
+#include "platform/mac/mac_media_audio_reader.h"
+#import "platform/mac/mac_preview_stream_client.h"
 #include "reaper/reaper_host.h"
 
 #define REAPERAPI_IMPLEMENT
@@ -37,8 +38,10 @@
 #define REAPERAPI_WANT_DockWindowAddEx
 #define REAPERAPI_WANT_DockWindowRefreshForHWND
 #define REAPERAPI_WANT_DockWindowRemove
+#define REAPERAPI_WANT_EnumProjects
 #define REAPERAPI_WANT_GetActiveTake
 #define REAPERAPI_WANT_GetAudioAccessorSamples
+#define REAPERAPI_WANT_GetCursorPositionEx
 #define REAPERAPI_WANT_GetExtState
 #define REAPERAPI_WANT_GetSet_LoopTimeRange2
 #define REAPERAPI_WANT_GetMediaItemInfo_Value
@@ -52,6 +55,7 @@
 #define REAPERAPI_WANT_GetMediaSourceFileName
 #define REAPERAPI_WANT_GetPlayPositionEx
 #define REAPERAPI_WANT_GetPlayStateEx
+#define REAPERAPI_WANT_GetProjectPathEx
 #define REAPERAPI_WANT_GetResourcePath
 #define REAPERAPI_WANT_GetSetMediaTrackInfo_String
 #define REAPERAPI_WANT_GetTrack
@@ -69,6 +73,8 @@
 #define REAPERAPI_WANT_SetMediaItemTake_Source
 #define REAPERAPI_WANT_SetMediaTrackInfo_Value
 #define REAPERAPI_WANT_ShowMessageBox
+#define REAPERAPI_WANT_UpdateArrange
+#define REAPERAPI_WANT_UpdateTimeline
 #define REAPERAPI_WANT_ValidatePtr2
 #include "reaper_plugin_functions.h"
 
@@ -204,6 +210,11 @@ reashoot::core::HelperProcess &helperProcess() {
 reashoot::core::RemoteCameraController &remoteCameraController() {
   static reashoot::core::RemoteCameraController controller(helperProcess());
   return controller;
+}
+
+reashoot::core::MediaAudioReader &mediaAudioReader() {
+  static std::unique_ptr<reashoot::core::MediaAudioReader> reader = reashoot::platform::mac::createMediaAudioReader();
+  return *reader;
 }
 
 reaper_plugin_info_t *g_reaper = nullptr;
@@ -519,50 +530,10 @@ std::vector<double> movieAudioEnvelope(const std::string &path, double sourceSta
     return {};
   }
 
-  NSURL *url = [NSURL fileURLWithPath:[NSString stringWithUTF8String:path.c_str()]];
-  AVURLAsset *asset = [AVURLAsset URLAssetWithURL:url options:nil];
-  NSArray<AVAssetTrack *> *audioTracks = [asset tracksWithMediaType:AVMediaTypeAudio];
-  AVAssetTrack *audioTrack = audioTracks.firstObject;
-  if (!audioTrack) {
+  std::vector<double> samples = mediaAudioReader().readMonoSamples(path, sourceStart, duration, kAlignmentSampleRate);
+  if (samples.empty()) {
     if (debug) {
-      *debug = "movie fallback failed: no audio track in " + path;
-    }
-    return {};
-  }
-
-  NSError *error = nil;
-  AVAssetReader *reader = [[AVAssetReader alloc] initWithAsset:asset error:&error];
-  if (!reader || error) {
-    if (debug) {
-      NSString *message = error.localizedDescription ?: @"unknown reader error";
-      *debug = "movie fallback failed: " + std::string(message.UTF8String ?: "reader error");
-    }
-    return {};
-  }
-
-  NSDictionary *settings = @{
-    AVFormatIDKey: @(kAudioFormatLinearPCM),
-    AVLinearPCMIsFloatKey: @YES,
-    AVLinearPCMBitDepthKey: @32,
-    AVLinearPCMIsNonInterleavedKey: @NO,
-    AVLinearPCMIsBigEndianKey: @NO
-  };
-  AVAssetReaderTrackOutput *output = [[AVAssetReaderTrackOutput alloc] initWithTrack:audioTrack outputSettings:settings];
-  output.alwaysCopiesSampleData = NO;
-  if (![reader canAddOutput:output]) {
-    if (debug) {
-      *debug = "movie fallback failed: cannot add audio reader output";
-    }
-    return {};
-  }
-  [reader addOutput:output];
-  reader.timeRange = CMTimeRangeMake(CMTimeMakeWithSeconds((std::max)(0.0, sourceStart), 600),
-                                     CMTimeMakeWithSeconds(duration, 600));
-
-  if (![reader startReading]) {
-    if (debug) {
-      NSString *message = reader.error.localizedDescription ?: @"unknown start error";
-      *debug = "movie fallback failed: " + std::string(message.UTF8String ?: "start error");
+      *debug = "movie fallback failed: no decoded audio samples in " + path;
     }
     return {};
   }
@@ -570,93 +541,19 @@ std::vector<double> movieAudioEnvelope(const std::string &path, double sourceSta
   const int bucketCount = (std::max)(1, static_cast<int>(std::floor(duration * peakRate)));
   std::vector<double> envelope(static_cast<size_t>(bucketCount), 0.0);
   int observedBuckets = 0;
-  int64_t decodedFrames = 0;
-
-  while (reader.status == AVAssetReaderStatusReading) {
-    CMSampleBufferRef sampleBuffer = [output copyNextSampleBuffer];
-    if (!sampleBuffer) {
-      break;
+  for (size_t index = 0; index < samples.size(); ++index) {
+    const int bucket = static_cast<int>(std::floor((static_cast<double>(index) / kAlignmentSampleRate) * peakRate));
+    if (bucket < 0 || bucket >= bucketCount) {
+      continue;
     }
-
-    CMFormatDescriptionRef formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer);
-    const AudioStreamBasicDescription *format =
-        formatDescription ? CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription) : nullptr;
-    const int frameCount = static_cast<int>(CMSampleBufferGetNumSamples(sampleBuffer));
-    size_t audioBufferListSize = 0;
-    CMBlockBufferRef retainedBlockBuffer = nullptr;
-    OSStatus status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
-        sampleBuffer,
-        &audioBufferListSize,
-        nullptr,
-        0,
-        nullptr,
-        nullptr,
-        kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment,
-        nullptr);
-
-    std::unique_ptr<uint8_t[]> audioBufferListStorage;
-    AudioBufferList *audioBufferList = nullptr;
-    if (status == noErr && audioBufferListSize > 0) {
-      audioBufferListStorage.reset(new uint8_t[audioBufferListSize]);
-      audioBufferList = reinterpret_cast<AudioBufferList *>(audioBufferListStorage.get());
-      status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
-          sampleBuffer,
-          nullptr,
-          audioBufferList,
-          audioBufferListSize,
-          nullptr,
-          nullptr,
-          kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment,
-          &retainedBlockBuffer);
-    }
-
-    if (status == noErr && audioBufferList && format && frameCount > 0) {
-      const double sampleRate = format->mSampleRate > 0.0 ? format->mSampleRate : 48000.0;
-      for (int frame = 0; frame < frameCount; ++frame) {
-        const int bucket = static_cast<int>(std::floor(((static_cast<double>(decodedFrames) + static_cast<double>(frame)) / sampleRate) * peakRate));
-        if (bucket < 0 || bucket >= bucketCount) {
-          continue;
-        }
-        double peak = 0.0;
-        for (UInt32 bufferIndex = 0; bufferIndex < audioBufferList->mNumberBuffers; ++bufferIndex) {
-          const AudioBuffer &audioBuffer = audioBufferList->mBuffers[bufferIndex];
-          if (!audioBuffer.mData || audioBuffer.mNumberChannels == 0) {
-            continue;
-          }
-          const float *samples = reinterpret_cast<const float *>(audioBuffer.mData);
-          const UInt32 channelCount = audioBuffer.mNumberChannels;
-          for (UInt32 channel = 0; channel < channelCount; ++channel) {
-            const size_t sampleIndex = audioBufferList->mNumberBuffers == 1
-                                           ? (static_cast<size_t>(frame) * channelCount) + channel
-                                           : static_cast<size_t>(frame);
-            peak = (std::max)(peak, std::fabs(static_cast<double>(samples[sampleIndex])));
-          }
-        }
-        envelope[static_cast<size_t>(bucket)] = (std::max)(envelope[static_cast<size_t>(bucket)], peak);
-        observedBuckets = (std::max)(observedBuckets, bucket + 1);
-      }
-      decodedFrames += frameCount;
-    } else if (debug && debug->empty()) {
-      char message[160] = {};
-      std::snprintf(message,
-                    sizeof(message),
-                    "movie fallback buffer failed: status %d, format %s, frames %d",
-                    static_cast<int>(status),
-                    format ? "yes" : "no",
-                    frameCount);
-      *debug = message;
-    }
-
-    if (retainedBlockBuffer) {
-      CFRelease(retainedBlockBuffer);
-    }
-    CFRelease(sampleBuffer);
+    envelope[static_cast<size_t>(bucket)] =
+        (std::max)(envelope[static_cast<size_t>(bucket)], std::fabs(samples[index]));
+    observedBuckets = (std::max)(observedBuckets, bucket + 1);
   }
 
   if (observedBuckets <= 0) {
     if (debug && debug->empty()) {
-      NSString *message = reader.error.localizedDescription ?: @"no decoded audio buckets";
-      *debug = "movie fallback failed: " + std::string(message.UTF8String ?: "no decoded audio buckets");
+      *debug = "movie fallback failed: decoded samples produced no audio buckets";
     }
     return {};
   }
@@ -747,79 +644,6 @@ std::vector<double> takeEnvelope(MediaItem_Take *take, double sourceStart, doubl
   return envelope;
 }
 
-std::vector<double> movieAudioSamples(const std::string &path, double sourceStart, double duration) {
-  if (path.empty() || duration <= 0.0) {
-    return {};
-  }
-
-  NSURL *url = [NSURL fileURLWithPath:[NSString stringWithUTF8String:path.c_str()]];
-  AVURLAsset *asset = [AVURLAsset URLAssetWithURL:url options:nil];
-  AVAssetTrack *audioTrack = [asset tracksWithMediaType:AVMediaTypeAudio].firstObject;
-  if (!audioTrack) {
-    return {};
-  }
-
-  NSError *error = nil;
-  AVAssetReader *reader = [[AVAssetReader alloc] initWithAsset:asset error:&error];
-  if (!reader || error) {
-    return {};
-  }
-
-  NSDictionary *settings = @{
-    AVFormatIDKey: @(kAudioFormatLinearPCM),
-    AVSampleRateKey: @(kAlignmentSampleRate),
-    AVNumberOfChannelsKey: @1,
-    AVLinearPCMIsFloatKey: @YES,
-    AVLinearPCMBitDepthKey: @32,
-    AVLinearPCMIsNonInterleavedKey: @NO,
-    AVLinearPCMIsBigEndianKey: @NO
-  };
-  AVAssetReaderTrackOutput *output = [[AVAssetReaderTrackOutput alloc] initWithTrack:audioTrack outputSettings:settings];
-  if (![reader canAddOutput:output]) {
-    return {};
-  }
-  [reader addOutput:output];
-  reader.timeRange = CMTimeRangeMake(CMTimeMakeWithSeconds((std::max)(0.0, sourceStart), 600),
-                                     CMTimeMakeWithSeconds(duration, 600));
-  if (![reader startReading]) {
-    return {};
-  }
-
-  std::vector<double> samples;
-  samples.reserve(static_cast<size_t>(std::ceil(duration * kAlignmentSampleRate)));
-  while (reader.status == AVAssetReaderStatusReading) {
-    CMSampleBufferRef sampleBuffer = [output copyNextSampleBuffer];
-    if (!sampleBuffer) {
-      break;
-    }
-
-    CMBlockBufferRef blockBuffer = nullptr;
-    AudioBufferList audioBufferList = {};
-    OSStatus status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
-        sampleBuffer,
-        nullptr,
-        &audioBufferList,
-        sizeof(audioBufferList),
-        nullptr,
-        nullptr,
-        kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment,
-        &blockBuffer);
-    if (status == noErr && audioBufferList.mNumberBuffers > 0 && audioBufferList.mBuffers[0].mData) {
-      const int frameCount = static_cast<int>(CMSampleBufferGetNumSamples(sampleBuffer));
-      const float *buffer = reinterpret_cast<const float *>(audioBufferList.mBuffers[0].mData);
-      for (int i = 0; i < frameCount; ++i) {
-        samples.push_back(static_cast<double>(buffer[i]));
-      }
-    }
-    if (blockBuffer) {
-      CFRelease(blockBuffer);
-    }
-    CFRelease(sampleBuffer);
-  }
-
-  return samples;
-}
-
 std::vector<double> takeAudioAccessorSamples(MediaItem_Take *take, double projectStart, double duration) {
   if (!take || !CreateTakeAudioAccessor || !GetAudioAccessorSamples || !DestroyAudioAccessor || duration <= 0.0) {
     return {};
@@ -873,7 +697,8 @@ bool sampleAccurateRefine(MediaItem_Take *videoTake,
   }
 
   std::vector<double> videoSamples =
-      reashoot::core::normalizedSampleShape(movieAudioSamples(videoPath, videoSourceStart, duration), kAlignmentSampleRate);
+      reashoot::core::normalizedSampleShape(mediaAudioReader().readMonoSamples(videoPath, videoSourceStart, duration, kAlignmentSampleRate),
+                                            kAlignmentSampleRate);
   std::vector<double> referenceSamples = reashoot::core::normalizedSampleShape(
       takeAudioAccessorSamples(referenceTake, referenceWindowProjectPosition, referenceDuration), kAlignmentSampleRate);
   if (videoSamples.empty() || referenceSamples.empty()) {
@@ -1363,8 +1188,7 @@ void setVideoEnabled(bool enabled);
 @property(nonatomic, strong) NSTextField *statusLabel;
 @property(nonatomic, strong) AVSampleBufferDisplayLayer *streamPreviewLayer;
 @property(nonatomic, strong) ReaShootMacH264PreviewRenderer *h264PreviewRenderer;
-@property(nonatomic, strong) NSURLSession *previewStreamSession;
-@property(nonatomic, strong) NSURLSessionWebSocketTask *previewStreamTask;
+@property(nonatomic, strong) ReaShootMacPreviewStreamClient *previewStreamClient;
 @property(nonatomic, assign) BOOL iPhonePreviewProfileConfiguring;
 @property(nonatomic, assign) BOOL previewStreamStarting;
 @property(nonatomic, assign) BOOL previewStreamActive;
@@ -1395,7 +1219,6 @@ void setVideoEnabled(bool enabled);
 - (void)stopRemotePreview;
 - (void)startPreviewStreamWithFields:(NSDictionary<NSString *, NSString *> *)fields;
 - (void)stopPreviewStream;
-- (void)receivePreviewStreamMessage;
 - (void)handlePreviewAccessUnit:(NSData *)accessUnit;
 - (NSString *)runReaShootCommand:(NSString *)command
                    extraArguments:(NSArray<NSString *> *)extraArguments
@@ -2370,6 +2193,7 @@ void setVideoEnabled(bool enabled);
     self.streamPreviewLayer.hidden = YES;
     [self.previewView.layer addSublayer:self.streamPreviewLayer];
     self.h264PreviewRenderer = [[ReaShootMacH264PreviewRenderer alloc] initWithLayer:self.streamPreviewLayer];
+    self.previewStreamClient = [[ReaShootMacPreviewStreamClient alloc] init];
 
     self.iPhoneSetupButton = [[NSButton alloc] initWithFrame:NSMakeRect(frame.size.width - 112, 101, 100, 24)];
     self.iPhoneSetupButton.title = @"iPhone Setup";
@@ -2614,7 +2438,7 @@ void setVideoEnabled(bool enabled);
 
 - (void)startRemotePreview {
   [self persistIPhoneSettings];
-  if (!self.previewStreamTask && !self.previewStreamStarting) {
+  if (!self.previewStreamClient.isRunning && !self.previewStreamStarting) {
     self.previewStreamFailed = NO;
     self.previewStreamFailureReason = nil;
   }
@@ -2631,7 +2455,7 @@ void setVideoEnabled(bool enabled);
         return;
       }
       NSString *message = [output stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-      if (message.length > 0 && !self.previewStreamTask && !self.previewStreamStarting) {
+      if (message.length > 0 && !self.previewStreamClient.isRunning && !self.previewStreamStarting) {
         [self setStatus:message];
       }
       [self runReaShootCommandAsync:@"start-preview"
@@ -2668,7 +2492,7 @@ void setVideoEnabled(bool enabled);
 }
 
 - (void)startPreviewStreamWithFields:(NSDictionary<NSString *, NSString *> *)fields {
-  if (self.showingPlayback || self.previewStreamTask || self.previewStreamStarting || self.previewStreamFailed) {
+  if (self.showingPlayback || self.previewStreamClient.isRunning || self.previewStreamStarting || self.previewStreamFailed) {
     return;
   }
   if (g_iPhoneHost.empty() || g_iPhoneToken.empty()) {
@@ -2688,14 +2512,38 @@ void setVideoEnabled(bool enabled);
     port = 8789;
   }
 
-  NSURLComponents *components = [[NSURLComponents alloc] init];
-  components.scheme = @"ws";
-  components.host = [NSString stringWithUTF8String:g_iPhoneHost.c_str()];
-  components.port = @(port);
-  components.path = streamPath;
-  components.queryItems = @[ [NSURLQueryItem queryItemWithName:@"token" value:[NSString stringWithUTF8String:g_iPhoneToken.c_str()]] ];
-  NSURL *url = components.URL;
-  if (!url) {
+  __weak ReaShootRecorder *weakSelf = self;
+  BOOL started = [self.previewStreamClient startWithHost:[NSString stringWithUTF8String:g_iPhoneHost.c_str()]
+                                                    port:port
+                                                    path:streamPath
+                                                   token:[NSString stringWithUTF8String:g_iPhoneToken.c_str()]
+                                                  onData:^(NSData *accessUnit) {
+    [weakSelf handlePreviewAccessUnit:accessUnit];
+  }
+                                                onActive:^{
+    ReaShootRecorder *strongSelf = weakSelf;
+    if (!strongSelf) {
+      return;
+    }
+    strongSelf.previewStreamStarting = NO;
+    strongSelf.previewStreamActive = YES;
+    [strongSelf setStatus:@"Preview: H.264 stream"];
+    [strongSelf updateCaptureFormatLabel];
+  }
+                                                 onError:^(NSError *error) {
+    ReaShootRecorder *strongSelf = weakSelf;
+    if (!strongSelf) {
+      return;
+    }
+    strongSelf.previewStreamStarting = NO;
+    strongSelf.previewStreamActive = NO;
+    strongSelf.previewStreamFailed = YES;
+    strongSelf.previewStreamFailureReason = error.localizedDescription ?: @"Preview stream failed";
+    if (!strongSelf.showingPlayback && !strongSelf.recordingVisualState) {
+      [strongSelf setStatus:@"Preview: stream disconnected"];
+    }
+  }];
+  if (!started) {
     self.previewStreamFailed = YES;
     self.previewStreamFailureReason = @"Invalid preview URL";
     [self setStatus:@"Preview: invalid stream URL"];
@@ -2707,62 +2555,15 @@ void setVideoEnabled(bool enabled);
   self.previewStreamFailureReason = nil;
   self.streamPreviewLayer.hidden = NO;
   [self.h264PreviewRenderer reset];
-  self.previewStreamSession = [NSURLSession sessionWithConfiguration:NSURLSessionConfiguration.defaultSessionConfiguration];
-  self.previewStreamTask = [self.previewStreamSession webSocketTaskWithURL:url];
-  [self.previewStreamTask resume];
   [self setStatus:@"Preview: connecting H.264 stream"];
-  [self receivePreviewStreamMessage];
 }
 
 - (void)stopPreviewStream {
   self.previewStreamStarting = NO;
   self.previewStreamActive = NO;
-  [self.previewStreamTask cancelWithCloseCode:NSURLSessionWebSocketCloseCodeNormalClosure reason:nil];
-  self.previewStreamTask = nil;
-  [self.previewStreamSession invalidateAndCancel];
-  self.previewStreamSession = nil;
+  [self.previewStreamClient stop];
   self.streamPreviewLayer.hidden = YES;
   [self.h264PreviewRenderer reset];
-}
-
-- (void)receivePreviewStreamMessage {
-  NSURLSessionWebSocketTask *task = self.previewStreamTask;
-  if (!task) {
-    return;
-  }
-  __weak ReaShootRecorder *weakSelf = self;
-  [task receiveMessageWithCompletionHandler:^(NSURLSessionWebSocketMessage *message, NSError *error) {
-    dispatch_async(dispatch_get_main_queue(), ^{
-      ReaShootRecorder *strongSelf = weakSelf;
-      if (!strongSelf || task != strongSelf.previewStreamTask) {
-        return;
-      }
-      if (error) {
-        [strongSelf stopPreviewStream];
-        strongSelf.previewStreamFailed = YES;
-        strongSelf.previewStreamFailureReason = error.localizedDescription ?: @"Preview stream failed";
-        if (!strongSelf.showingPlayback && !strongSelf.recordingVisualState) {
-          [strongSelf setStatus:@"Preview: stream disconnected"];
-        }
-        return;
-      }
-      if (message.type == NSURLSessionWebSocketMessageTypeData) {
-        if (!strongSelf.previewStreamActive) {
-          strongSelf.previewStreamStarting = NO;
-          strongSelf.previewStreamActive = YES;
-          [strongSelf setStatus:@"Preview: H.264 stream"];
-          [strongSelf updateCaptureFormatLabel];
-        }
-        [strongSelf handlePreviewAccessUnit:message.data];
-      } else if (message.type == NSURLSessionWebSocketMessageTypeString && !strongSelf.previewStreamActive) {
-        strongSelf.previewStreamStarting = NO;
-        strongSelf.previewStreamActive = YES;
-        [strongSelf setStatus:@"Preview: H.264 stream"];
-        [strongSelf updateCaptureFormatLabel];
-      }
-      [strongSelf receivePreviewStreamMessage];
-    });
-  }];
 }
 
 - (void)handlePreviewAccessUnit:(NSData *)accessUnit {
