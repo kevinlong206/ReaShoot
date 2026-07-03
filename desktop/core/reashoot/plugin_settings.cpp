@@ -25,6 +25,7 @@ PluginSettings loadSettings(const ISettingsStore &store) {
   settings.look = store.getString(kSection, kLook);
   settings.followEnabled = parseBool(store.getString(kSection, kFollowEnabled));
   settings.previewFloating = parseBool(store.getString(kSection, kPreviewFloating));
+  settings.previewAlwaysOnTop = parseBool(store.getString(kSection, kPreviewAlwaysOnTop));
   return settings;
 }
 
@@ -44,6 +45,7 @@ void saveSettings(ISettingsStore &store, const PluginSettings &settings) {
   store.setString(kSection, kLook, settings.look);
   store.setString(kSection, kFollowEnabled, settings.followEnabled ? "1" : "0");
   store.setString(kSection, kPreviewFloating, settings.previewFloating ? "1" : "0");
+  store.setString(kSection, kPreviewAlwaysOnTop, settings.previewAlwaysOnTop ? "1" : "0");
 }
 
 } // namespace reashoot

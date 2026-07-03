@@ -11,6 +11,9 @@ inline constexpr const char *kShowPreviewName = "ReaShoot: Show/Hide Preview";
 inline constexpr const char *kFloatPreviewId = "KLONG_REASHOOT_FLOAT_PREVIEW";
 inline constexpr const char *kFloatPreviewName = "ReaShoot: Float/Dock Preview";
 
+inline constexpr const char *kPreviewAlwaysOnTopId = "KLONG_REASHOOT_PREVIEW_ON_TOP";
+inline constexpr const char *kPreviewAlwaysOnTopName = "ReaShoot: Toggle Preview Always On Top";
+
 inline constexpr const char *kAlignSelectedId = "KLONG_REASHOOT_ALIGN_SELECTED";
 inline constexpr const char *kAlignSelectedName = "ReaShoot: Align Selected Video Item";
 

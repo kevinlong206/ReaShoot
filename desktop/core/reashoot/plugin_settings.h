@@ -21,6 +21,7 @@ struct PluginSettings {
   std::string look;
   bool followEnabled = false;
   bool previewFloating = false;
+  bool previewAlwaysOnTop = false;
 };
 
 // Abstract key/value store so the plugin can back this with REAPER ExtState while
@@ -42,6 +43,7 @@ namespace settings_keys {
 inline constexpr const char *kSection = "klong_reashoot";
 inline constexpr const char *kFollowEnabled = "follow_enabled";
 inline constexpr const char *kPreviewFloating = "preview_floating";
+inline constexpr const char *kPreviewAlwaysOnTop = "preview_always_on_top";
 inline constexpr const char *kHost = "iphone_host";
 inline constexpr const char *kControlPort = "iphone_control_port";
 inline constexpr const char *kHttpPort = "iphone_http_port";

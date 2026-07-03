@@ -41,6 +41,10 @@
 #define REAPERAPI_WANT_Undo_EndBlock
 #define REAPERAPI_WANT_GetMainHwnd
 #define REAPERAPI_WANT_GetPlayState
+#define REAPERAPI_WANT_DockWindowAddEx
+#define REAPERAPI_WANT_DockWindowActivate
+#define REAPERAPI_WANT_DockWindowRemove
+#define REAPERAPI_WANT_DockWindowRefreshForHWND
 #include "reaper_plugin_functions.h"
 
 #include "reashoot_action_ids.h"
@@ -84,6 +88,7 @@ int g_startCommand = 0;
 int g_stopCommand = 0;
 int g_showPreviewCommand = 0;
 int g_floatPreviewCommand = 0;
+int g_previewOnTopCommand = 0;
 int g_configureCommand = 0;
 int g_toggleFollowCommand = 0;
 
@@ -103,6 +108,10 @@ reashoot::Win32PreviewPanel &previewPanel() {
 // Transient pairing code, read from ExtState so it can be set from a future UI
 // or ReaScript without persisting alongside the durable settings.
 constexpr const char *kPairCodeKey = "iphone_pair_code";
+
+// REAPER docker identifier for the preview panel (matches the macOS plugin so
+// the docked position preference is shared across platforms).
+constexpr const char *kPreviewDockIdent = "klong_reashoot_preview";
 
 reashoot::DebugLogger &logger() {
   static reashoot::DebugLogger instance(reashoot::DebugLogger::defaultPath());
@@ -727,6 +736,8 @@ void applyPanelFields(ReaperExtStateStore &store, const reashoot::PanelControls 
 
 // Wires the preview panel's control strip to the existing action handlers, and
 // routes report() status text into the panel's status line. Runs once.
+void stopWebrtcPreview(); // Defined after the WebRTC controller below.
+
 void ensurePanelConfigured() {
   static bool configured = false;
   reashoot::Win32PreviewPanel &panel = previewPanel();
@@ -767,7 +778,52 @@ void ensurePanelConfigured() {
     report("ReaShoot: Discover needs mDNS and isn't available on Windows yet; enter the host "
            "manually.");
   };
+  callbacks.onFloatingChanged = [](bool floating) {
+    ReaperExtStateStore store;
+    reashoot::PluginSettings settings = reashoot::loadSettings(store);
+    settings.previewFloating = floating;
+    reashoot::saveSettings(store, settings);
+    report(floating ? "ReaShoot: preview set to floating." : "ReaShoot: preview docked.");
+  };
+  callbacks.onAlwaysOnTopChanged = [](bool onTop) {
+    ReaperExtStateStore store;
+    reashoot::PluginSettings settings = reashoot::loadSettings(store);
+    settings.previewAlwaysOnTop = onTop;
+    reashoot::saveSettings(store, settings);
+    report(onTop ? "ReaShoot: preview kept always on top." : "ReaShoot: preview no longer on top.");
+  };
+  callbacks.onClosed = []() {
+    stopWebrtcPreview();
+    report("ReaShoot: preview hidden.");
+  };
   panel.setCallbacks(std::move(callbacks));
+
+  // Docking hooks: the panel stays REAPER-SDK-free, so it calls back here to
+  // dock/undock its content window via REAPER's docker (mirrors macOS).
+  reashoot::DockHooks dockHooks;
+  dockHooks.dockAdd = [](HWND hwnd) {
+    if (DockWindowAddEx) {
+      DockWindowAddEx(hwnd, "ReaShoot", kPreviewDockIdent, true);
+    }
+    if (DockWindowActivate) {
+      DockWindowActivate(hwnd);
+    }
+    if (DockWindowRefreshForHWND) {
+      DockWindowRefreshForHWND(hwnd);
+    }
+  };
+  dockHooks.dockRemove = [](HWND hwnd) {
+    if (DockWindowRemove) {
+      DockWindowRemove(hwnd);
+    }
+  };
+  panel.setDockHooks(std::move(dockHooks));
+
+  // Seed dock/float + always-on-top preferences from persisted settings.
+  ReaperExtStateStore store;
+  const reashoot::PluginSettings settings = reashoot::loadSettings(store);
+  panel.setFloating(settings.previewFloating);
+  panel.setAlwaysOnTop(settings.previewAlwaysOnTop);
 }
 
 // Refreshes the panel's fields from the persisted settings (e.g. after the
@@ -1001,6 +1057,10 @@ void restartPreviewIfVisible() {
   }
 }
 
+// Stops the live preview receiver. Used by the panel's close callback (declared
+// earlier) so closing the floating window also tears the WebRTC session down.
+void stopWebrtcPreview() { g_webrtcPreview.stop(); }
+
 void handleShowPreview() {
   ensurePanelConfigured();
   reashoot::Win32PreviewPanel &panel = previewPanel();
@@ -1017,10 +1077,15 @@ void handleShowPreview() {
 }
 
 void handleFloatPreview() {
+  ensurePanelConfigured();
   reashoot::Win32PreviewPanel &panel = previewPanel();
   panel.setFloating(!panel.isFloating());
-  report(panel.isFloating() ? "ReaShoot: preview set to floating."
-                            : "ReaShoot: preview set to docked.");
+}
+
+void handleTogglePreviewOnTop() {
+  ensurePanelConfigured();
+  reashoot::Win32PreviewPanel &panel = previewPanel();
+  panel.setAlwaysOnTop(!panel.isAlwaysOnTop());
 }
 
 void handleConfigure(ReaperExtStateStore &store) {
@@ -1069,6 +1134,10 @@ bool hookCommand2(KbdSectionInfo *section, int command, int value, int valuehw, 
     handleFloatPreview();
     return true;
   }
+  if (command == g_previewOnTopCommand) {
+    handleTogglePreviewOnTop();
+    return true;
+  }
   if (command == g_configureCommand) {
     handleConfigure(store);
     return true;
@@ -1110,13 +1179,15 @@ bool registerActions(reaper_plugin_info_t *rec) {
   g_stopCommand = registerAction(rec, kStopRecordingId, kStopRecordingName);
   g_showPreviewCommand = registerAction(rec, kShowPreviewId, kShowPreviewName);
   g_floatPreviewCommand = registerAction(rec, kFloatPreviewId, kFloatPreviewName);
+  g_previewOnTopCommand = registerAction(rec, kPreviewAlwaysOnTopId, kPreviewAlwaysOnTopName);
   g_configureCommand = registerAction(rec, kConfigureId, kConfigureName);
   g_toggleFollowCommand = registerAction(rec, kToggleFollowId, kToggleFollowName);
 
   const bool allRegistered = g_diagnosticCommand != 0 && g_pairCommand != 0 &&
                              g_testConnectionCommand != 0 && g_startCommand != 0 &&
                              g_stopCommand != 0 && g_showPreviewCommand != 0 &&
-                             g_floatPreviewCommand != 0 && g_configureCommand != 0 &&
+                             g_floatPreviewCommand != 0 && g_previewOnTopCommand != 0 &&
+                             g_configureCommand != 0 &&
                              g_toggleFollowCommand != 0;
 
   if (!allRegistered || !rec->Register("hookcommand2", reinterpret_cast<void *>(hookCommand2))) {

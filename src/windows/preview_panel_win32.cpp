@@ -10,13 +10,15 @@ namespace reashoot {
 
 namespace {
 
-constexpr wchar_t kWindowClassName[] = L"ReaShootPreviewPanel";
+constexpr wchar_t kContentClassName[] = L"ReaShootPreviewContent";
+constexpr wchar_t kFloatClassName[] = L"ReaShootPreviewFloat";
 constexpr wchar_t kWindowTitle[] = L"ReaShoot Preview";
 constexpr wchar_t kPlaceholder[] = L"Waiting for WebRTC preview\u2026";
 constexpr COLORREF kBackgroundColor = RGB(24, 24, 28);
 constexpr COLORREF kPlaceholderColor = RGB(160, 160, 168);
 
-bool g_classRegistered = false;
+bool g_contentClassRegistered = false;
+bool g_floatClassRegistered = false;
 
 // Control identifiers for the strip's children.
 enum ControlId : int {
@@ -29,6 +31,8 @@ enum ControlId : int {
   kIdTestButton,
   kIdStartButton,
   kIdStopButton,
+  kIdDockButton,
+  kIdPinCheck,
   kIdStatusLabel,
   kIdHostLabel,
   kIdCodeLabel,
@@ -170,41 +174,67 @@ void GdiPreviewRenderer::paint(HWND hwnd, HDC dc, const RECT &videoArea) {
 Win32PreviewPanel::Win32PreviewPanel(HINSTANCE instance) : instance_(instance) {}
 
 Win32PreviewPanel::~Win32PreviewPanel() {
-  if (window_) {
-    DestroyWindow(window_);
-    window_ = nullptr;
+  if (content_) {
+    DestroyWindow(content_);
+    content_ = nullptr;
+  }
+  if (floatWindow_) {
+    DestroyWindow(floatWindow_);
+    floatWindow_ = nullptr;
   }
 }
 
-void Win32PreviewPanel::registerClassOnce() {
-  if (g_classRegistered) {
-    return;
+void Win32PreviewPanel::registerClassesOnce() {
+  if (!g_contentClassRegistered) {
+    WNDCLASSEXW wc{};
+    wc.cbSize = sizeof(wc);
+    wc.lpfnWndProc = &Win32PreviewPanel::contentProc;
+    wc.hInstance = instance_;
+    wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+    wc.lpszClassName = kContentClassName;
+    if (RegisterClassExW(&wc) != 0) {
+      g_contentClassRegistered = true;
+    }
   }
-  WNDCLASSEXW wc{};
-  wc.cbSize = sizeof(wc);
-  wc.lpfnWndProc = &Win32PreviewPanel::windowProc;
-  wc.hInstance = instance_;
-  wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-  wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
-  wc.lpszClassName = kWindowClassName;
-  if (RegisterClassExW(&wc) != 0) {
-    g_classRegistered = true;
+  if (!g_floatClassRegistered) {
+    WNDCLASSEXW wc{};
+    wc.cbSize = sizeof(wc);
+    wc.lpfnWndProc = &Win32PreviewPanel::floatProc;
+    wc.hInstance = instance_;
+    wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);
+    wc.lpszClassName = kFloatClassName;
+    if (RegisterClassExW(&wc) != 0) {
+      g_floatClassRegistered = true;
+    }
   }
 }
 
-void Win32PreviewPanel::ensureWindow() {
-  if (window_) {
+void Win32PreviewPanel::ensureWindows() {
+  if (content_) {
     return;
   }
-  registerClassOnce();
+  registerClassesOnce();
 
-  window_ = CreateWindowExW(0, kWindowClassName, kWindowTitle, WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
-                            760, 560, nullptr, nullptr, instance_, this);
-  if (window_) {
-    renderer_.setWindow(window_);
+  // Top-level float host (kept hidden until floating). Owns the content window
+  // while floating so it can be shown standalone and pinned always-on-top.
+  if (!floatWindow_) {
+    floatWindow_ = CreateWindowExW(0, kFloatClassName, kWindowTitle, WS_OVERLAPPEDWINDOW, CW_USEDEFAULT,
+                                   CW_USEDEFAULT, 760, 560, nullptr, nullptr, instance_, this);
+  }
+
+  // The reparentable content window. Initially a child of the float host; the
+  // REAPER docker reparents it when docked. Its HWND stays constant so the
+  // renderer and control handles remain valid across dock/float transitions.
+  content_ = CreateWindowExW(0, kContentClassName, L"", WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
+                             0, 0, 760, 560, floatWindow_ ? floatWindow_ : GetDesktopWindow(), nullptr,
+                             instance_, this);
+  if (content_) {
+    renderer_.setWindow(content_);
     createControls();
     RECT client{};
-    GetClientRect(window_, &client);
+    GetClientRect(content_, &client);
     layoutControls(client.right - client.left);
   }
 }
@@ -245,6 +275,14 @@ HWND makeCombo(HWND parent, HINSTANCE instance, int id, const wchar_t *const *it
   return combo;
 }
 
+HWND makeCheckBox(HWND parent, HINSTANCE instance, const wchar_t *text, int id) {
+  HWND box = CreateWindowExW(0, L"BUTTON", text, WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 0, 0, 0, 0,
+                             parent, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), instance,
+                             nullptr);
+  applyGuiFont(box);
+  return box;
+}
+
 } // namespace
 
 void Win32PreviewPanel::createControls() {
@@ -252,23 +290,31 @@ void Win32PreviewPanel::createControls() {
     return;
   }
 
-  makeLabel(window_, instance_, L"iPhone host:", kIdHostLabel);
-  hostEdit_ = makeEdit(window_, instance_, kIdHostEdit);
+  makeLabel(content_, instance_, L"iPhone host:", kIdHostLabel);
+  hostEdit_ = makeEdit(content_, instance_, kIdHostEdit);
 
-  makeLabel(window_, instance_, L"Pairing PIN:", kIdCodeLabel);
-  codeEdit_ = makeEdit(window_, instance_, kIdCodeEdit);
-  discoverButton_ = makeButton(window_, instance_, L"Discover", kIdDiscoverButton);
-  pairButton_ = makeButton(window_, instance_, L"Pair", kIdPairButton);
-  testButton_ = makeButton(window_, instance_, L"Test", kIdTestButton);
+  makeLabel(content_, instance_, L"Pairing PIN:", kIdCodeLabel);
+  codeEdit_ = makeEdit(content_, instance_, kIdCodeEdit);
+  discoverButton_ = makeButton(content_, instance_, L"Discover", kIdDiscoverButton);
+  pairButton_ = makeButton(content_, instance_, L"Pair", kIdPairButton);
+  testButton_ = makeButton(content_, instance_, L"Test", kIdTestButton);
 
   static const wchar_t *const kResolutions[] = {L"4K", L"1080p", L"720p"};
   static const wchar_t *const kFps[] = {L"24", L"30", L"60"};
-  resolutionCombo_ = makeCombo(window_, instance_, kIdResolutionCombo, kResolutions, 3);
-  fpsCombo_ = makeCombo(window_, instance_, kIdFpsCombo, kFps, 3);
-  startButton_ = makeButton(window_, instance_, L"Start", kIdStartButton);
-  stopButton_ = makeButton(window_, instance_, L"Stop", kIdStopButton);
+  resolutionCombo_ = makeCombo(content_, instance_, kIdResolutionCombo, kResolutions, 3);
+  fpsCombo_ = makeCombo(content_, instance_, kIdFpsCombo, kFps, 3);
+  startButton_ = makeButton(content_, instance_, L"Start", kIdStartButton);
+  stopButton_ = makeButton(content_, instance_, L"Stop", kIdStopButton);
 
-  statusLabel_ = makeLabel(window_, instance_, L"Ready.", kIdStatusLabel);
+  statusLabel_ = makeLabel(content_, instance_, L"Ready.", kIdStatusLabel);
+  dockButton_ = makeButton(content_, instance_, L"Undock", kIdDockButton);
+  pinCheck_ = makeCheckBox(content_, instance_, L"On top", kIdPinCheck);
+
+  updateDockButtonText();
+  if (pinCheck_) {
+    SendMessageW(pinCheck_, BM_SETCHECK, alwaysOnTop_ ? BST_CHECKED : BST_UNCHECKED, 0);
+    EnableWindow(pinCheck_, floating_ ? TRUE : FALSE);
+  }
 
   // Apply any values captured before the window existed.
   setInitialValues(initialValues_);
@@ -295,11 +341,11 @@ void Win32PreviewPanel::layoutControls(int clientWidth) {
   };
 
   // Row 1: host label + host edit (stretches to the right edge).
-  place(GetDlgItem(window_, kIdHostLabel), kMargin, labelY1, kLabelWidth, kRowHeight);
+  place(GetDlgItem(content_, kIdHostLabel), kMargin, labelY1, kLabelWidth, kRowHeight);
   place(hostEdit_, fieldX, rowY1, (std::max)(80, right - fieldX), kRowHeight);
 
   // Pairing row: code edit + Discover/Pair/Test buttons on the right.
-  place(GetDlgItem(window_, kIdCodeLabel), kMargin, rowY2 + 3, kLabelWidth, kRowHeight);
+  place(GetDlgItem(content_, kIdCodeLabel), kMargin, rowY2 + 3, kLabelWidth, kRowHeight);
   const int buttonsWidth = 3 * kButtonWidth + 2 * kRowGap;
   const int codeWidth = (std::max)(80, right - buttonsWidth - kRowGap - fieldX);
   place(codeEdit_, fieldX, rowY2, codeWidth, kRowHeight);
@@ -317,8 +363,13 @@ void Win32PreviewPanel::layoutControls(int clientWidth) {
   place(startButton_, startX, rowY3, kButtonWidth, kRowHeight);
   place(stopButton_, startX + kButtonWidth + kRowGap, rowY3, kButtonWidth, kRowHeight);
 
-  // Status row spans the full width.
-  place(statusLabel_, kMargin, rowY4 + 3, right - kMargin, kRowHeight);
+  // Status row: Dock button + always-on-top pin on the right, status fills the
+  // remaining space on the left.
+  const int pinWidth = 72;
+  const int dockX = right - kButtonWidth - kRowGap - pinWidth;
+  place(dockButton_, dockX, rowY4, kButtonWidth, kRowHeight);
+  place(pinCheck_, dockX + kButtonWidth + kRowGap, rowY4 + 3, pinWidth, kRowHeight);
+  place(statusLabel_, kMargin, rowY4 + 3, (std::max)(80, dockX - kRowGap - kMargin), kRowHeight);
 }
 
 PanelControls Win32PreviewPanel::readControls() const {
@@ -358,8 +409,76 @@ void Win32PreviewPanel::handleCommand(int controlId) {
       callbacks_.onStop(controls);
     }
     break;
+  case kIdDockButton:
+    setFloating(!floating_);
+    break;
+  case kIdPinCheck: {
+    const bool checked =
+        pinCheck_ && SendMessageW(pinCheck_, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    setAlwaysOnTop(checked);
+    break;
+  }
   default:
     break;
+  }
+}
+
+void Win32PreviewPanel::updateDockButtonText() {
+  if (dockButton_) {
+    SetWindowTextW(dockButton_, floating_ ? L"Dock" : L"Undock");
+  }
+  if (pinCheck_) {
+    EnableWindow(pinCheck_, floating_ ? TRUE : FALSE);
+  }
+}
+
+void Win32PreviewPanel::applyTopmost() {
+  if (floatWindow_) {
+    SetWindowPos(floatWindow_, alwaysOnTop_ ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+  }
+}
+
+void Win32PreviewPanel::showFloating() {
+  if (!content_ || !floatWindow_) {
+    return;
+  }
+  // Undock (if docked) before reparenting the content into the float host.
+  if (dockHooks_.dockRemove) {
+    dockHooks_.dockRemove(content_);
+  }
+  SetParent(content_, floatWindow_);
+  SetWindowLongPtrW(content_, GWL_STYLE, WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN | WS_VISIBLE);
+  RECT client{};
+  GetClientRect(floatWindow_, &client);
+  MoveWindow(content_, 0, 0, client.right - client.left, client.bottom - client.top, TRUE);
+  ShowWindow(content_, SW_SHOW);
+  ShowWindow(floatWindow_, SW_SHOW);
+  applyTopmost();
+  SetForegroundWindow(floatWindow_);
+}
+
+void Win32PreviewPanel::hideFloating() {
+  if (floatWindow_) {
+    ShowWindow(floatWindow_, SW_HIDE);
+  }
+}
+
+void Win32PreviewPanel::applyPresentation() {
+  if (!content_) {
+    return;
+  }
+  if (floating_) {
+    showFloating();
+  } else {
+    // Dock the content window into REAPER's docker (default presentation).
+    hideFloating();
+    if (dockHooks_.dockAdd) {
+      dockHooks_.dockAdd(content_);
+    } else {
+      // No docker available: fall back to floating so the window is reachable.
+      showFloating();
+    }
   }
 }
 
@@ -390,35 +509,64 @@ void Win32PreviewPanel::setStatus(const std::string &message) {
 }
 
 void Win32PreviewPanel::show() {
-  ensureWindow();
-  if (window_) {
-    ShowWindow(window_, SW_SHOW);
-    UpdateWindow(window_);
+  ensureWindows();
+  if (!content_) {
+    return;
   }
+  shown_ = true;
+  applyPresentation();
 }
 
 void Win32PreviewPanel::hide() {
-  if (window_) {
-    ShowWindow(window_, SW_HIDE);
+  if (!shown_) {
+    return;
+  }
+  shown_ = false;
+  if (floating_) {
+    hideFloating();
+  } else if (dockHooks_.dockRemove && content_) {
+    dockHooks_.dockRemove(content_);
+    // Reparent back to the (hidden) float host so the child keeps a stable
+    // parent while docked-away.
+    if (floatWindow_) {
+      SetParent(content_, floatWindow_);
+    }
   }
 }
 
-bool Win32PreviewPanel::isVisible() const {
-  return window_ != nullptr && IsWindowVisible(window_) != FALSE;
-}
+bool Win32PreviewPanel::isVisible() const { return shown_; }
 
 void Win32PreviewPanel::setFloating(bool floating) {
-  // The panel is presented as a floating top-level window today. REAPER docker
-  // integration (DockWindowAddEx / DockWindowActivate) is tracked as follow-up;
-  // the flag is preserved so callers and future docking share one state model.
+  if (floating_ == floating) {
+    return;
+  }
   floating_ = floating;
+  updateDockButtonText();
+  if (shown_) {
+    applyPresentation();
+  }
+  if (callbacks_.onFloatingChanged) {
+    callbacks_.onFloatingChanged(floating_);
+  }
 }
 
 bool Win32PreviewPanel::isFloating() const { return floating_; }
 
-IPreviewRenderer *Win32PreviewPanel::renderer() { return window_ ? &renderer_ : nullptr; }
+void Win32PreviewPanel::setAlwaysOnTop(bool alwaysOnTop) {
+  const bool changed = alwaysOnTop_ != alwaysOnTop;
+  alwaysOnTop_ = alwaysOnTop;
+  if (pinCheck_) {
+    SendMessageW(pinCheck_, BM_SETCHECK, alwaysOnTop_ ? BST_CHECKED : BST_UNCHECKED, 0);
+  }
+  applyTopmost();
+  if (changed && callbacks_.onAlwaysOnTopChanged) {
+    callbacks_.onAlwaysOnTopChanged(alwaysOnTop_);
+  }
+}
 
-LRESULT CALLBACK Win32PreviewPanel::windowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
+IPreviewRenderer *Win32PreviewPanel::renderer() { return content_ ? &renderer_ : nullptr; }
+
+LRESULT CALLBACK Win32PreviewPanel::contentProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
   if (message == WM_CREATE) {
     auto *create = reinterpret_cast<CREATESTRUCTW *>(lParam);
     SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(create->lpCreateParams));
@@ -460,13 +608,59 @@ LRESULT CALLBACK Win32PreviewPanel::windowProc(HWND hwnd, UINT message, WPARAM w
     return 0;
   case WM_ERASEBKGND:
     return 1; // handled in WM_PAINT to avoid flicker
+  case WM_DESTROY:
+    if (panel) {
+      panel->content_ = nullptr;
+      panel->hostEdit_ = nullptr;
+      panel->codeEdit_ = nullptr;
+      panel->resolutionCombo_ = nullptr;
+      panel->fpsCombo_ = nullptr;
+      panel->discoverButton_ = nullptr;
+      panel->pairButton_ = nullptr;
+      panel->testButton_ = nullptr;
+      panel->startButton_ = nullptr;
+      panel->stopButton_ = nullptr;
+      panel->dockButton_ = nullptr;
+      panel->pinCheck_ = nullptr;
+      panel->statusLabel_ = nullptr;
+      panel->renderer_.setWindow(nullptr);
+    }
+    return 0;
+  default:
+    break;
+  }
+  return DefWindowProcW(hwnd, message, wParam, lParam);
+}
+
+LRESULT CALLBACK Win32PreviewPanel::floatProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
+  if (message == WM_CREATE) {
+    auto *create = reinterpret_cast<CREATESTRUCTW *>(lParam);
+    SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(create->lpCreateParams));
+    return 0;
+  }
+
+  auto *panel = reinterpret_cast<Win32PreviewPanel *>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+
+  switch (message) {
+  case WM_SIZE:
+    if (panel && panel->content_) {
+      MoveWindow(panel->content_, 0, 0, LOWORD(lParam), HIWORD(lParam), TRUE);
+    }
+    return 0;
   case WM_CLOSE:
-    ShowWindow(hwnd, SW_HIDE); // hide instead of destroy so state is retained
+    if (panel) {
+      ShowWindow(hwnd, SW_HIDE);
+      panel->shown_ = false;
+      if (panel->callbacks_.onClosed) {
+        panel->callbacks_.onClosed();
+      }
+    } else {
+      ShowWindow(hwnd, SW_HIDE);
+    }
     return 0;
   case WM_DESTROY:
     if (panel) {
-      panel->window_ = nullptr;
-      panel->renderer_.setWindow(nullptr);
+      panel->floatWindow_ = nullptr;
     }
     return 0;
   default:
