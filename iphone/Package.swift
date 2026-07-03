@@ -13,9 +13,7 @@ let package = Package(
         .library(name: "ReaShootKit", targets: ["ReaShootKit"]),
         .executable(name: "video-sync-mac", targets: ["video-sync-mac"])
     ],
-    dependencies: [
-        .package(url: "https://github.com/livekit/webrtc-xcframework.git", branch: "main")
-    ],
+    dependencies: [],
     targets: [
         .target(
             name: "VideoSyncCore"
@@ -23,8 +21,7 @@ let package = Package(
         .target(
             name: "ReaShootKit",
             dependencies: [
-                "VideoSyncCore",
-                .product(name: "LiveKitWebRTC", package: "webrtc-xcframework")
+                "VideoSyncCore"
             ]
         ),
         .executableTarget(

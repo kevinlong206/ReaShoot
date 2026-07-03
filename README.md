@@ -32,8 +32,8 @@ ReaPhoneVideo is a macOS-only REAPER extension for controlling a companion iPhon
 - Can manually re-run alignment for an existing project with `Video Recorder: Align Selected Video Item`; select the item on the `Video Recorder` track first, or it falls back to that track's latest item. If a REAPER time selection is active, only that region is analyzed.
 - Shows load/record/finalize/import state in the preview status label instead of console chatter.
 - Places downloaded iPhone video at the REAPER record-start timeline position.
-- Controls the companion iPhone app for 4K recording, low-latency Wi-Fi WebRTC preview, download/restore, and timeline insertion over the local Wi-Fi/Bonjour network.
-- The iPhone preview uses the bundled `LiveKitWebRTC.framework` as the only preview transport. The iPhone renders the selected look into low-resolution preview frames before sending them to REAPER.
+- Controls the companion iPhone app for 4K recording, low-latency Wi-Fi preview, download/restore, and timeline insertion over the local Wi-Fi/Bonjour network.
+- The iPhone preview uses a low-latency local H.264 stream. The iPhone renders the selected look into low-resolution preview frames before sending them to REAPER.
 - The dock includes capture profile controls for resolution, FPS, orientation, social aspect ratio, lens, zoom, and baked-in artistic look. Changing a profile control sends the new profile to the iPhone immediately when paired.
 - The look picker keeps the custom looks plus a curated Core Image subset for music-video use, including thermal/X-ray, gradients/edges, crystallize/pixel/halftone, and a few kaleidoscope/distortion looks. `Prev` and `Next` buttons beside the picker make it quick to audition looks.
 - During iPhone recording stop, REAPER prompts before any on-phone look encoding so unwanted takes can be deleted without waiting.
@@ -86,10 +86,9 @@ GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=all \
 make install
 codesign --verify "$HOME/Library/Application Support/REAPER/UserPlugins/video-sync-mac"
 codesign --verify "$HOME/Library/Application Support/REAPER/UserPlugins/reaper_video_recorder.dylib"
-codesign --verify "$HOME/Library/Application Support/REAPER/UserPlugins/LiveKitWebRTC.framework"
 ```
 
-`make install` ad-hoc signs the helper, REAPER extension dylib, and bundled WebRTC framework.
+`make install` ad-hoc signs the helper and REAPER extension dylib.
 
 Restart REAPER, then open the Action List and search for `Video Recorder`.
 
@@ -105,7 +104,7 @@ make install
 - REAPER remains responsible for production audio recording and mixing; iPhone camera audio is captured as a sync/alignment reference.
 - macOS camera and microphone permission are not required because capture happens in the iPhone app.
 - The companion iPhone app sources live in `iphone/`; `~/iphone_reapervideosync` was the original development copy and should no longer be treated as the source of truth.
-- The extension builds and installs a bundled `video-sync-mac` helper and `LiveKitWebRTC.framework` next to the REAPER extension dylib.
+- The extension builds and installs a bundled `video-sync-mac` helper next to the REAPER extension dylib.
 - To use the extension, launch the iPhone app, click `iPhone Setup` in the REAPER dock, click `Discover`, enter the pairing code shown on the iPhone, click `Pair`, then click `Test` to verify preview/control before recording.
 - The iPhone app shows the currently configured capture profile and pending recordings. Pending videos can be deleted directly in the app. Aspect ratio is currently metadata/framing intent; resolution, FPS, orientation, lens, zoom, and selected look are applied on the iPhone side. Non-natural looks are applied only after the user chooses to download a stopped clip and are baked into the downloaded movie while preserving the camera audio track.
 - Lens options depend on the connected iPhone hardware. Zoom is clamped to the selected camera's supported range; values beyond a physical lens's native view may be digital crop rather than guaranteed optical zoom.
@@ -116,7 +115,7 @@ make install
 
 ## Iterating locally
 
-- Restart REAPER after every `make install`; the extension dylib and bundled WebRTC framework are loaded at process startup.
+- Restart REAPER after every `make install`; the extension dylib is loaded at process startup.
 - Keep protocol changes mirrored between `helper/Sources/VideoSyncCore/ControlProtocol.swift` and `iphone/Sources/VideoSyncCore/ControlProtocol.swift`.
 - Keep helper CLI behavior mirrored between `helper/Sources/video-sync-mac` and `iphone/Sources/video-sync-mac`.
 - Run `make check` before committing shared Swift changes; it verifies mirrored helper/iPhone files and runs the Swift checks.

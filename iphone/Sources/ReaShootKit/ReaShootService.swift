@@ -51,15 +51,18 @@ public final class ReaShootService: ObservableObject {
 
     private let controlPort: UInt16
     private let httpPort: UInt16
+    private let previewPort: UInt16
     private var webSocketServer: LocalWebSocketServer?
     private var httpServer: HTTPRecordingServer?
-    private var webRTCPreviewSession: WebRTCPreviewSession?
+    private var previewStreamServer: PreviewStreamServer?
+    private var previewEncoder: PreviewH264Encoder?
     private var netService: NetService?
     private var cancellables: Set<AnyCancellable> = []
 
-    public init(controlPort: UInt16 = 8787, httpPort: UInt16 = 8788) throws {
+    public init(controlPort: UInt16 = 8787, httpPort: UInt16 = 8788, previewPort: UInt16 = 8789) throws {
         self.controlPort = controlPort
         self.httpPort = httpPort
+        self.previewPort = previewPort
         let store = try RecordingStore()
         self.store = store
         self.pairingStore = PairingStore()
@@ -110,6 +113,13 @@ public final class ReaShootService: ObservableObject {
             try httpServer.start()
             self.httpServer = httpServer
 
+            let previewDescriptor = PreviewDescriptor(port: Int(previewPort))
+            let previewServer = PreviewStreamServer(port: previewPort, descriptor: previewDescriptor) { [weak self] token in
+                self?.pairingStore.validate(token: token) ?? false
+            }
+            try previewServer.start()
+            self.previewStreamServer = previewServer
+
             let server = LocalWebSocketServer(port: controlPort) { [weak self] data in
                 guard let self else {
                     return try ProtocolCodec.encodeEvent(ControlEvent(type: .error, message: "Service is unavailable."))
@@ -133,6 +143,9 @@ public final class ReaShootService: ObservableObject {
     private func stopNetworkServices(resetStatus: Bool) {
         webSocketServer?.stop()
         webSocketServer = nil
+        stopPreviewStream()
+        previewStreamServer?.stop()
+        previewStreamServer = nil
         httpServer?.stop()
         httpServer = nil
         netService?.stop()
@@ -258,55 +271,58 @@ public final class ReaShootService: ObservableObject {
             }
             try store.deleteRecording(id: id)
             return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .recordingDeleted, message: "Recording deleted from iPhone"))
-        case .startWebRTCPreview:
-            guard pairingStore.validate(token: command.token), let offer = command.webRTCOfferSDP else {
-                return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .error, message: "Unauthorized"))
-            }
-            capture.setPreviewSampleBufferConsumer(nil)
-            webRTCPreviewSession?.stop()
-            let session = WebRTCPreviewSession()
-            webRTCPreviewSession = session
-            capture.setPreviewSampleBufferConsumer { [weak session] pixelBuffer, timestamp in
-                session?.consume(pixelBuffer: pixelBuffer, timestamp: timestamp)
-            }
-            do {
-                let answer = try await session.start(offerSDP: offer)
-                status = "WebRTC preview active"
-                previewStatus = "WebRTC"
-                return try ProtocolCodec.encodeEvent(ControlEvent(
-                    requestID: command.requestID,
-                    type: .webRTCPreviewAnswer,
-                    webRTCAnswerSDP: answer,
-                    message: "WebRTC preview active"
-                ))
-            } catch {
-                capture.setPreviewSampleBufferConsumer(nil)
-                webRTCPreviewSession = nil
-                previewStatus = "WebRTC failed"
-                return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .error, message: error.localizedDescription))
-            }
-        case .addWebRTCIceCandidate:
-            guard pairingStore.validate(token: command.token),
-                  let candidateSDP = command.webRTCIceCandidateSDP else {
-                return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .error, message: "Unauthorized"))
-            }
-            webRTCPreviewSession?.addIceCandidate(
-                sdp: candidateSDP,
-                sdpMid: command.webRTCIceCandidateMid,
-                sdpMLineIndex: command.webRTCIceCandidateMLineIndex ?? 0
-            )
-            return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .webRTCIceCandidateAdded, message: "ICE candidate accepted"))
-        case .stopWebRTCPreview:
+        case .startPreview:
             guard pairingStore.validate(token: command.token) else {
                 return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .error, message: "Unauthorized"))
             }
-            capture.setPreviewSampleBufferConsumer(nil)
-            webRTCPreviewSession?.stop()
-            webRTCPreviewSession = nil
-            status = "WebRTC preview stopped"
+            do {
+                let preview = try startPreviewStream()
+                status = "Preview streaming"
+                previewStatus = "Streaming"
+                return try ProtocolCodec.encodeEvent(ControlEvent(
+                    requestID: command.requestID,
+                    type: .previewStarted,
+                    preview: preview,
+                    message: "Preview streaming"
+                ))
+            } catch {
+                stopPreviewStream()
+                previewStatus = "Preview failed"
+                return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .error, message: error.localizedDescription))
+            }
+        case .stopPreview:
+            guard pairingStore.validate(token: command.token) else {
+                return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .error, message: "Unauthorized"))
+            }
+            stopPreviewStream()
+            status = "Preview stopped"
             previewStatus = "Idle"
-            return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .webRTCPreviewStopped, message: "WebRTC preview stopped"))
+            return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .previewStopped, message: "Preview stopped"))
         }
+    }
+
+    private func startPreviewStream() throws -> PreviewDescriptor {
+        let descriptor = PreviewDescriptor(port: Int(previewPort), orientation: capture.currentProfile.orientation)
+        guard let previewStreamServer else {
+            throw PreviewStreamError.serverUnavailable
+        }
+        capture.setPreviewSampleBufferConsumer(nil)
+        previewEncoder?.stop()
+        let encoder = PreviewH264Encoder { [weak previewStreamServer] accessUnit in
+            previewStreamServer?.broadcast(accessUnit: accessUnit)
+        }
+        try encoder.start()
+        previewEncoder = encoder
+        capture.setPreviewSampleBufferConsumer { [weak encoder] pixelBuffer, timestamp in
+            encoder?.encode(pixelBuffer: pixelBuffer, timestamp: timestamp)
+        }
+        return descriptor
+    }
+
+    private func stopPreviewStream() {
+        capture.setPreviewSampleBufferConsumer(nil)
+        previewEncoder?.stop()
+        previewEncoder = nil
     }
 
     private func advertiseBonjour() throws {
@@ -314,6 +330,7 @@ public final class ReaShootService: ObservableObject {
         let txtValues = [
             "version": "\(ProtocolVersion.current)",
             "httpPort": "\(httpPort)",
+            "previewPort": "\(previewPort)",
             "paired": pairingStore.isPaired ? "true" : "false"
         ].mapValues { Data($0.utf8) }
         let txt = NetService.data(fromTXTRecord: txtValues)
@@ -326,9 +343,21 @@ public final class ReaShootService: ObservableObject {
         let txtValues = [
             "version": "\(ProtocolVersion.current)",
             "httpPort": "\(httpPort)",
+            "previewPort": "\(previewPort)",
             "paired": pairingStore.isPaired ? "true" : "false"
         ].mapValues { Data($0.utf8) }
         netService?.setTXTRecord(NetService.data(fromTXTRecord: txtValues))
+    }
+}
+
+enum PreviewStreamError: Error, LocalizedError {
+    case serverUnavailable
+
+    var errorDescription: String? {
+        switch self {
+        case .serverUnavailable:
+            return "Preview stream server is unavailable."
+        }
     }
 }
 #endif

@@ -13,7 +13,7 @@ The current implementation has been installed and tested on a physical iPhone in
 1. iPhone app advertises `_iphone-video-sync._tcp` with Bonjour.
 2. Mac reaches the device over the local Wi-Fi network using the Bonjour-advertised host.
 3. Mac sends WebSocket control commands on port `8787`.
-4. REAPER uses WebRTC as the only preview path; the iPhone renders the selected look before sending preview frames.
+4. REAPER uses an authenticated local H.264 WebSocket stream for preview; the iPhone renders the selected look before sending preview frames.
 5. iPhone records video with AVFoundation.
 6. Mac sends stop, receives a recording descriptor, downloads the `.mov` over HTTP on port `8788`, verifies checksum, and acknowledges transfer.
 
@@ -27,7 +27,8 @@ The app disables the idle timer while ready/listening so foreground preview does
 - `Apps/ReaShoot/Assets.xcassets`: iOS app icon assets, including the ReaShoot camera-and-music-note AppIcon.
 - `Sources/VideoSyncCore`: shared protocol models, transfer state, and checksums.
 - `Sources/ReaShootKit`: iOS recording engine, pairing, WebSocket server, HTTP server, and orchestration service.
-- `Sources/ReaShootKit/WebRTCPreviewSession.swift`: LiveKit WebRTC sender for the low-resolution dock preview.
+- `Sources/ReaShootKit/PreviewH264Encoder.swift`: VideoToolbox H.264 encoder for low-resolution dock preview.
+- `Sources/ReaShootKit/PreviewStreamServer.swift`: authenticated binary WebSocket server for preview frames.
 - `Sources/video-sync-mac`: Mac command-line tool. Keep this aligned with `../helper/Sources/video-sync-mac`.
 - `Tests/VideoSyncCoreTests`: shared protocol and state-machine tests.
 - `test-downloads`: local output directory for downloaded recordings; do not commit it.
@@ -48,7 +49,7 @@ Show CLI help:
 swift run video-sync-mac --help
 ```
 
-When SwiftPM touches the LiveKit WebRTC package, prefix commands with:
+When SwiftPM commands need to bypass bare-repository safety checks, prefix commands with:
 
 ```sh
 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=all
@@ -146,14 +147,14 @@ Add `--progress` to `swift run video-sync-mac stop ...` when testing progress. I
 
 For the REAPER prompted stop flow, use `stop-only` to get raw pending recording metadata immediately, then either `download-recording --progress` or `delete-recording`. `download-recording` prepares/encodes non-natural looks only after Download is chosen. If a download fails before acknowledgement, the recording remains pending on the phone; use `list-recordings` plus `download-recording --progress` to restore it, `delete-recording` to remove it, or delete it from the iPhone app's Recordings section.
 
-## WebRTC preview notes
+## H.264 preview notes
 
-- REAPER sends `startWebRTCPreview` with an SDP offer.
-- The iPhone creates a send-only video answer from `WebRTCPreviewSession`.
-- The answer may include inline ICE candidates. REAPER is expected to strip and add them separately because the Mac-side parser rejected the full inline-candidate answer during testing.
-- REAPER sends its own candidates back with `addWebRTCIceCandidate`.
-- The iPhone app status UI exposes a `Preview` row so agents/users can see whether WebRTC is active.
-- Keep preview on WebRTC only; HTTP is used for recording downloads, not live preview. Do not suggest MJPEG, HTTP preview, H.264-over-WebSocket, or other non-WebRTC preview transports.
+- REAPER sends `startPreview` over the control WebSocket.
+- The iPhone returns a `PreviewDescriptor` for an authenticated preview WebSocket on port `8789`.
+- The preview server sends an initial JSON descriptor text frame, then binary H.264 Annex B access units.
+- SPS/PPS must be sent before keyframes so REAPER can rebuild its decoder format description after reconnects.
+- The iPhone app status UI exposes a `Preview` row so agents/users can see whether preview streaming is active.
+- HTTP is used for recording downloads, not live preview.
 - The app starts control/HTTP listeners before camera preparation so REAPER can reconnect quickly after app launch.
 - The helper validates complete WebSocket handshake headers, including `Sec-WebSocket-Accept`; keep `LocalWebSocketServer.handshakeResponse` terminated with `\r\n\r\n`.
 - Lens selection uses AVFoundation rear camera discovery. Not every iPhone exposes `ultrawide` or `telephoto`; unavailable lens requests should fail clearly instead of silently pretending they worked.

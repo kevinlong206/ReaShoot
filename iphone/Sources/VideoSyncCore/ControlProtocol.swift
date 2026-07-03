@@ -13,9 +13,8 @@ public enum CommandType: String, Codable, Sendable {
     case listRecordings
     case transferComplete
     case deleteRecording
-    case startWebRTCPreview
-    case addWebRTCIceCandidate
-    case stopWebRTCPreview
+    case startPreview
+    case stopPreview
     case ping
 }
 
@@ -28,9 +27,8 @@ public enum EventType: String, Codable, Sendable {
     case recordingsListed
     case transferAcknowledged
     case recordingDeleted
-    case webRTCPreviewAnswer
-    case webRTCIceCandidateAdded
-    case webRTCPreviewStopped
+    case previewStarted
+    case previewStopped
     case pong
     case error
 }
@@ -44,10 +42,6 @@ public struct ControlCommand: Codable, Equatable, Sendable {
     public var sessionID: String?
     public var recordingID: String?
     public var captureProfile: CaptureProfile?
-    public var webRTCOfferSDP: String?
-    public var webRTCIceCandidateSDP: String?
-    public var webRTCIceCandidateMid: String?
-    public var webRTCIceCandidateMLineIndex: Int32?
     public var metadata: [String: String]
 
     public init(
@@ -59,10 +53,6 @@ public struct ControlCommand: Codable, Equatable, Sendable {
         sessionID: String? = nil,
         recordingID: String? = nil,
         captureProfile: CaptureProfile? = nil,
-        webRTCOfferSDP: String? = nil,
-        webRTCIceCandidateSDP: String? = nil,
-        webRTCIceCandidateMid: String? = nil,
-        webRTCIceCandidateMLineIndex: Int32? = nil,
         metadata: [String: String] = [:]
     ) {
         self.requestID = requestID
@@ -73,10 +63,6 @@ public struct ControlCommand: Codable, Equatable, Sendable {
         self.sessionID = sessionID
         self.recordingID = recordingID
         self.captureProfile = captureProfile
-        self.webRTCOfferSDP = webRTCOfferSDP
-        self.webRTCIceCandidateSDP = webRTCIceCandidateSDP
-        self.webRTCIceCandidateMid = webRTCIceCandidateMid
-        self.webRTCIceCandidateMLineIndex = webRTCIceCandidateMLineIndex
         self.metadata = metadata
     }
 }
@@ -226,24 +212,36 @@ public struct RecordingDescriptor: Codable, Equatable, Sendable {
 }
 
 public struct PreviewDescriptor: Codable, Equatable, Sendable {
-    public var snapshotPath: String
+    public var codec: String
+    public var transport: String
     public var streamPath: String
-    public var binaryStreamPath: String
-    public var maximumDimension: Int
-    public var approximateFrameRate: Double
+    public var port: Int
+    public var width: Int
+    public var height: Int
+    public var fps: Int
+    public var orientation: String
+    public var requiresToken: Bool
 
     public init(
-        snapshotPath: String = "/preview.jpg",
-        streamPath: String = "/preview.mjpg",
-        binaryStreamPath: String = "/preview.bin",
-        maximumDimension: Int = 640,
-        approximateFrameRate: Double = 12.0
+        codec: String = "h264",
+        transport: String = "websocket",
+        streamPath: String = "/preview",
+        port: Int = 8789,
+        width: Int = 640,
+        height: Int = 360,
+        fps: Int = 12,
+        orientation: String = "portrait",
+        requiresToken: Bool = true
     ) {
-        self.snapshotPath = snapshotPath
+        self.codec = codec
+        self.transport = transport
         self.streamPath = streamPath
-        self.binaryStreamPath = binaryStreamPath
-        self.maximumDimension = maximumDimension
-        self.approximateFrameRate = approximateFrameRate
+        self.port = port
+        self.width = width
+        self.height = height
+        self.fps = fps
+        self.orientation = orientation
+        self.requiresToken = requiresToken
     }
 }
 
@@ -258,7 +256,6 @@ public struct ControlEvent: Codable, Equatable, Sendable {
     public var captureProfile: CaptureProfile?
     public var captureStatus: String?
     public var captureProgress: Double?
-    public var webRTCAnswerSDP: String?
     public var message: String?
 
     public init(
@@ -272,7 +269,6 @@ public struct ControlEvent: Codable, Equatable, Sendable {
         captureProfile: CaptureProfile? = nil,
         captureStatus: String? = nil,
         captureProgress: Double? = nil,
-        webRTCAnswerSDP: String? = nil,
         message: String? = nil
     ) {
         self.requestID = requestID
@@ -285,7 +281,6 @@ public struct ControlEvent: Codable, Equatable, Sendable {
         self.captureProfile = captureProfile
         self.captureStatus = captureStatus
         self.captureProgress = captureProgress
-        self.webRTCAnswerSDP = webRTCAnswerSDP
         self.message = message
     }
 }

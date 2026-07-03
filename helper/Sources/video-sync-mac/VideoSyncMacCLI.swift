@@ -155,38 +155,22 @@ struct VideoSyncMacCLI {
                 throw ControlClientError.unexpectedEvent(event)
             }
             print(event.message ?? event.type.rawValue)
-        case "webrtc-answer":
-            let offerPath = required(args.value(after: "--offer-file"), "--offer-file")
-            let offer = try String(contentsOfFile: offerPath, encoding: .utf8)
-            let event = try await send(args, type: .startWebRTCPreview) {
-                ControlCommand(type: .startWebRTCPreview, token: required(args.value(after: "--token"), "--token"), webRTCOfferSDP: offer)
+        case "start-preview":
+            let event = try await send(args, type: .startPreview) {
+                ControlCommand(type: .startPreview, token: required(args.value(after: "--token"), "--token"))
             }
-            guard event.type == .webRTCPreviewAnswer, let answer = event.webRTCAnswerSDP else {
+            guard event.type == .previewStarted, let preview = event.preview else {
                 throw ControlClientError.unexpectedEvent(event)
             }
-            print(answer)
-        case "stop-webrtc":
-            let event = try await send(args, type: .stopWebRTCPreview) {
-                ControlCommand(type: .stopWebRTCPreview, token: required(args.value(after: "--token"), "--token"))
+            printPreview(preview)
+        case "stop-preview":
+            let event = try await send(args, type: .stopPreview) {
+                ControlCommand(type: .stopPreview, token: required(args.value(after: "--token"), "--token"))
             }
-            guard event.type == .webRTCPreviewStopped else {
+            guard event.type == .previewStopped else {
                 throw ControlClientError.unexpectedEvent(event)
             }
             print(event.message ?? event.type.rawValue)
-        case "webrtc-candidate":
-            let event = try await send(args, type: .addWebRTCIceCandidate) {
-                ControlCommand(
-                    type: .addWebRTCIceCandidate,
-                    token: required(args.value(after: "--token"), "--token"),
-                    webRTCIceCandidateSDP: required(args.value(after: "--candidate"), "--candidate"),
-                    webRTCIceCandidateMid: args.value(after: "--mid"),
-                    webRTCIceCandidateMLineIndex: Int32(args.int(after: "--mline", default: 0))
-                )
-            }
-            guard event.type == .webRTCIceCandidateAdded else {
-                throw ControlClientError.unexpectedEvent(event)
-            }
-            print(event.message ?? "candidate accepted")
         case "help", "--help", "-h":
             printHelp()
         default:
@@ -231,9 +215,8 @@ struct VideoSyncMacCLI {
           list-recordings --host HOST [--port 8787] --token TOKEN
           delete-recording --host HOST [--port 8787] --token TOKEN --recording-id ID
           ping --host HOST [--port 8787] [--token TOKEN]
-          webrtc-answer --host HOST [--port 8787] --token TOKEN --offer-file PATH
-          webrtc-candidate --host HOST [--port 8787] --token TOKEN --candidate SDP [--mid MID] [--mline INDEX]
-          stop-webrtc --host HOST [--port 8787] --token TOKEN
+          start-preview --host HOST [--port 8787] --token TOKEN
+          stop-preview --host HOST [--port 8787] --token TOKEN
         """)
     }
 
@@ -296,6 +279,21 @@ struct VideoSyncMacCLI {
         if let checksum = recording.checksumSHA256 {
             fields.append("checksum=\(checksum)")
         }
+        print(fields.joined(separator: "\t"))
+    }
+
+    private static func printPreview(_ preview: PreviewDescriptor) {
+        let fields = [
+            "preview",
+            "codec=\(preview.codec)",
+            "transport=\(preview.transport)",
+            "streamPath=\(preview.streamPath)",
+            "port=\(preview.port)",
+            "width=\(preview.width)",
+            "height=\(preview.height)",
+            "fps=\(preview.fps)",
+            "orientation=\(preview.orientation)"
+        ]
         print(fields.joined(separator: "\t"))
     }
 }

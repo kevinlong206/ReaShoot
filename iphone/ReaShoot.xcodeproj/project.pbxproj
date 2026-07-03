@@ -18,9 +18,9 @@
 		A00100000000000000000009 /* Sources/ReaShootKit/LocalWebSocketServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200000000000000000009 /* Sources/ReaShootKit/LocalWebSocketServer.swift */; };
 		A0010000000000000000000A /* Sources/ReaShootKit/PairingStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0020000000000000000000A /* Sources/ReaShootKit/PairingStore.swift */; };
 		A0010000000000000000000B /* Sources/ReaShootKit/RecordingStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0020000000000000000000B /* Sources/ReaShootKit/RecordingStore.swift */; };
-		A0010000000000000000000C /* Sources/ReaShootKit/WebRTCPreviewSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0020000000000000000000E /* Sources/ReaShootKit/WebRTCPreviewSession.swift */; };
-		A0010000000000000000000D /* LiveKitWebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = A01100000000000000000002 /* LiveKitWebRTC */; };
 		A0010000000000000000000E /* Apps/ReaShoot/Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A0020000000000000000000F /* Apps/ReaShoot/Assets.xcassets */; };
+		A0010000000000000000000F /* Sources/ReaShootKit/PreviewH264Encoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200000000000000000010 /* Sources/ReaShootKit/PreviewH264Encoder.swift */; };
+		A00100000000000000000010 /* Sources/ReaShootKit/PreviewStreamServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200000000000000000011 /* Sources/ReaShootKit/PreviewStreamServer.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -37,8 +37,9 @@
 		A0020000000000000000000B /* Sources/ReaShootKit/RecordingStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/ReaShootKit/RecordingStore.swift; sourceTree = "<group>"; };
 		A0020000000000000000000C /* Apps/ReaShoot/Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Apps/ReaShoot/Info.plist; sourceTree = "<group>"; };
 		A0020000000000000000000D /* ReaShoot.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ReaShoot.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		A0020000000000000000000E /* Sources/ReaShootKit/WebRTCPreviewSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/ReaShootKit/WebRTCPreviewSession.swift; sourceTree = "<group>"; };
 		A0020000000000000000000F /* Apps/ReaShoot/Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Apps/ReaShoot/Assets.xcassets; sourceTree = "<group>"; };
+		A00200000000000000000010 /* Sources/ReaShootKit/PreviewH264Encoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/ReaShootKit/PreviewH264Encoder.swift; sourceTree = "<group>"; };
+		A00200000000000000000011 /* Sources/ReaShootKit/PreviewStreamServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/ReaShootKit/PreviewStreamServer.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -46,7 +47,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A0010000000000000000000D /* LiveKitWebRTC in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -101,7 +101,8 @@
 				A00200000000000000000009 /* Sources/ReaShootKit/LocalWebSocketServer.swift */,
 				A0020000000000000000000A /* Sources/ReaShootKit/PairingStore.swift */,
 				A0020000000000000000000B /* Sources/ReaShootKit/RecordingStore.swift */,
-				A0020000000000000000000E /* Sources/ReaShootKit/WebRTCPreviewSession.swift */,
+				A00200000000000000000010 /* Sources/ReaShootKit/PreviewH264Encoder.swift */,
+				A00200000000000000000011 /* Sources/ReaShootKit/PreviewStreamServer.swift */,
 			);
 			name = "iPhone Kit";
 			sourceTree = "<group>";
@@ -123,7 +124,6 @@
 			);
 			name = ReaShoot;
 			packageProductDependencies = (
-				A01100000000000000000002 /* LiveKitWebRTC */,
 			);
 			productName = ReaShoot;
 			productReference = A0020000000000000000000D /* ReaShoot.app */;
@@ -155,7 +155,6 @@
 			);
 			mainGroup = A00300000000000000000001;
 			packageReferences = (
-				A01000000000000000000001 /* XCRemoteSwiftPackageReference "webrtc-xcframework" */,
 			);
 			productRefGroup = A00300000000000000000002 /* Products */;
 			projectDirPath = "";
@@ -193,7 +192,8 @@
 				A00100000000000000000009 /* Sources/ReaShootKit/LocalWebSocketServer.swift in Sources */,
 				A0010000000000000000000A /* Sources/ReaShootKit/PairingStore.swift in Sources */,
 				A0010000000000000000000B /* Sources/ReaShootKit/RecordingStore.swift in Sources */,
-				A0010000000000000000000C /* Sources/ReaShootKit/WebRTCPreviewSession.swift in Sources */,
+				A0010000000000000000000F /* Sources/ReaShootKit/PreviewH264Encoder.swift in Sources */,
+				A00100000000000000000010 /* Sources/ReaShootKit/PreviewStreamServer.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -390,24 +390,6 @@
 		};
 /* End XCConfigurationList section */
 
-/* Begin XCRemoteSwiftPackageReference section */
-		A01000000000000000000001 /* XCRemoteSwiftPackageReference "webrtc-xcframework" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/livekit/webrtc-xcframework.git";
-			requirement = {
-				branch = main;
-				kind = branch;
-			};
-		};
-/* End XCRemoteSwiftPackageReference section */
-
-/* Begin XCSwiftPackageProductDependency section */
-		A01100000000000000000002 /* LiveKitWebRTC */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = A01000000000000000000001 /* XCRemoteSwiftPackageReference "webrtc-xcframework" */;
-			productName = LiveKitWebRTC;
-		};
-/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = A00600000000000000000001 /* Project object */;
 }

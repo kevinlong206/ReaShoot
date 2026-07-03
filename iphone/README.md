@@ -54,7 +54,7 @@ Expected result: the CLI prints a downloaded `.mov` path in `test-downloads`, th
 
 ## Preview
 
-REAPER uses the authenticated WebRTC offer/answer flow for all iPhone preview. It sends a receive-only SDP offer with `startWebRTCPreview`; the iPhone app answers with a low-resolution video track rendered from the same preview capture output. The iPhone applies the selected look before sending WebRTC frames, so natural and styled previews use the same transport.
+The current preview implementation uses an authenticated local H.264 stream. REAPER sends `startPreview` over the control WebSocket, then connects to the preview WebSocket returned in the descriptor. The iPhone app sends low-resolution H.264 frames rendered from the same preview capture output. The iPhone applies the selected look before encoding preview frames, so natural and styled previews use the same transport.
 
 The app starts its WebSocket control listener and HTTP download listener before camera preparation so REAPER can retry control commands immediately after launch. The WebSocket server must return a complete `\r\n\r\n`-terminated handshake because the bundled helper validates the full `Sec-WebSocket-Accept` response.
 

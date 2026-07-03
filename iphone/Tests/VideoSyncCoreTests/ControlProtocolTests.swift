@@ -27,10 +27,12 @@ final class ControlProtocolTests: XCTestCase {
             downloadPath: "/recordings/clip-1"
         )
         let preview = PreviewDescriptor(
-            snapshotPath: "/preview.jpg",
-            streamPath: "/preview.mjpg",
-            maximumDimension: 640,
-            approximateFrameRate: 5.0
+            streamPath: "/preview",
+            port: 8789,
+            width: 640,
+            height: 360,
+            fps: 12,
+            orientation: "portrait"
         )
         let event = ControlEvent(type: .recordingStopped, recording: recording, preview: preview)
 
