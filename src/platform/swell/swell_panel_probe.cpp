@@ -97,7 +97,7 @@ int g_previewWidth = 320;
 int g_previewHeight = 180;
 bool g_usingLivePreview = false;
 bool g_previewPending = false;
-std::string g_previewMessage = "Preview unavailable: set iPhone host and token, then Test.";
+std::string g_previewMessage = "Preview unavailable: discover the iPhone, enter its pairing code, then Pair or Reconnect.";
 std::string g_host;
 std::string g_token;
 std::string g_resolution = "4K";
@@ -108,6 +108,7 @@ SwellPanelCallbacks g_callbacks;
 HWND g_setupWindow = nullptr;
 HWND g_manageWindow = nullptr;
 HWND g_dragWindow = nullptr;
+HFONT g_statusFont = nullptr;
 POINT g_dragStartCursor = {};
 RECT g_dragStartWindow = {};
 
@@ -156,7 +157,6 @@ void syncSetupFields() {
     return;
   }
   setDlgItemText(g_setupWindow, kSetupHostField, g_host.c_str());
-  setDlgItemText(g_setupWindow, kSetupTokenField, g_token.c_str());
   comboSetCurSel(g_setupWindow, kSetupResolutionCombo, optionIndexForValue(kResolutionOptions, g_resolution.c_str()));
   comboSetCurSel(g_setupWindow, kSetupFPSCombo, optionIndexForValue(kFPSOptions, g_fps.c_str()));
   comboSetCurSel(g_setupWindow, kSetupOrientationCombo, optionIndexForValue(kOrientationOptions, g_orientation.c_str()));
@@ -171,9 +171,6 @@ void captureSetupFields() {
   if (getDlgItemText(g_setupWindow, kSetupHostField, text, sizeof(text))) {
     g_host = text;
   }
-  if (getDlgItemText(g_setupWindow, kSetupTokenField, text, sizeof(text))) {
-    g_token = text;
-  }
   g_resolution = optionValueForSelection(kResolutionOptions, comboGetCurSel(g_setupWindow, kSetupResolutionCombo));
   g_fps = optionValueForSelection(kFPSOptions, comboGetCurSel(g_setupWindow, kSetupFPSCombo));
   g_orientation = optionValueForSelection(kOrientationOptions, comboGetCurSel(g_setupWindow, kSetupOrientationCombo));
@@ -182,6 +179,18 @@ void captureSetupFields() {
 
 void showSetupWindow();
 void showManageWindow();
+
+void applyStatusFont(HWND panel) {
+  if (!panel) {
+    return;
+  }
+  if (!g_statusFont) {
+    g_statusFont = createFont(18, FW_BOLD, "");
+  }
+  if (g_statusFont) {
+    sendMessage(getDlgItem(panel, kStatusLabel), WM_SETFONT, reinterpret_cast<WPARAM>(g_statusFont), 1);
+  }
+}
 
 void updatePlaceholderPreviewFrame() {
   g_previewFrame.resize(static_cast<size_t>(g_previewWidth * g_previewHeight));
@@ -475,17 +484,15 @@ void showSetupWindow() {
     if (!g_setupWindow) {
       return;
     }
-    configurePopupWindow(g_setupWindow, "ReaShoot Setup", 200, 200, 540, 310);
+    configurePopupWindow(g_setupWindow, "ReaShoot Setup", 200, 200, 540, 280);
     makeSetCurParms(1.0f, 1.0f, 0.0f, 0.0f, g_setupWindow, false, false);
-    makeLabel(0, "Host", -1, 12, 224, 80, 18, 0);
-    makeEditField(kSetupHostField, 96, 222, 310, 22, 0);
-    makeButton(0, "Discover", kSetupDiscoverButton, 416, 222, 92, 24, 0);
-    makeLabel(0, "Token", -1, 12, 190, 80, 18, 0);
-    makeEditField(kSetupTokenField, 96, 188, 412, 22, 0);
+    makeLabel(0, "Host", -1, 12, 194, 80, 18, 0);
+    makeEditField(kSetupHostField, 96, 192, 310, 22, 0);
+    makeButton(0, "Discover", kSetupDiscoverButton, 416, 192, 92, 24, 0);
     makeLabel(0, "Pair code", -1, 12, 156, 80, 18, 0);
     makeEditField(kSetupPairingCodeField, 96, 154, 180, 22, 0);
     makeButton(0, "Pair", kSetupPairButton, 284, 154, 70, 24, 0);
-    makeButton(0, "Test", kSetupTestButton, 362, 154, 70, 24, 0);
+    makeButton(0, "Reconnect", kSetupTestButton, 362, 154, 146, 24, 0);
     makeLabel(0, "Resolution", -1, 12, 116, 80, 18, 0);
     makeCombo(kSetupResolutionCombo, 96, 112, 160, 120, CBS_DROPDOWNLIST);
     addOptions(g_setupWindow, kSetupResolutionCombo, kResolutionOptions);
@@ -531,17 +538,18 @@ HWND createSwellPanelProbe(HWND parent, const SwellPanelCallbacks &callbacks) {
   g_callbacks = callbacks;
   updatePlaceholderPreviewFrame();
   makeSetCurParms(1.0f, 1.0f, 0.0f, 0.0f, panel, false, false);
-  makeButton(0, "Setup", kSetupButton, 448, 101, 86, 24, 0);
-  makeButton(0, "Manage Recordings", kManageButton, 542, 101, 126, 24, 0);
-  makeButton(0, "Prev", kPreviousLookButton, 12, 49, 52, 24, 0);
-  makeButton(0, "Next", kNextLookButton, 616, 49, 52, 24, 0);
-  makeCombo(kLookCombo, 70, 49, 540, 200, CBS_DROPDOWNLIST);
+  makeButton(0, "Setup", kSetupButton, 448, 112, 86, 24, 0);
+  makeButton(0, "Manage Recordings", kManageButton, 542, 112, 126, 24, 0);
+  makeButton(0, "Prev", kPreviousLookButton, 12, 60, 52, 24, 0);
+  makeButton(0, "Next", kNextLookButton, 616, 60, 52, 24, 0);
+  makeCombo(kLookCombo, 70, 60, 540, 200, CBS_DROPDOWNLIST);
   for (const auto &look : kLookOptions) {
     comboAddString(panel, kLookCombo, look.title);
   }
   comboSetCurSel(panel, kLookCombo, 0);
-  makeLabel(0, "Format: SWELL production panel", kFormatLabel, 12, 29, 656, 18, 0);
-  makeLabel(0, "Video disabled", kStatusLabel, 12, 9, 600, 18, 0);
+  makeLabel(0, "ReaShoot camera preview", kFormatLabel, 12, 36, 656, 18, 0);
+  makeLabel(0, "Video disabled", kStatusLabel, 12, 7, 656, 26, 0);
+  applyStatusFont(panel);
   invalidateRect(panel, nullptr, false);
   return panel;
 }

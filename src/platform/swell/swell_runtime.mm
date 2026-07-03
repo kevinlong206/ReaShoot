@@ -14,6 +14,7 @@ namespace {
 using SwellGetFunc = void *(*)(const char *);
 using MakeSetCurParmsFn = void (*)(float, float, float, float, HWND, bool, bool);
 using CreateDialogFn = HWND (*)(void *, const char *, HWND, DLGPROC, LPARAM);
+using GetDlgItemFn = HWND (*)(HWND, int);
 using ShowWindowFn = void (*)(HWND, int);
 using SetWindowPosFn = void (*)(HWND, HWND, int, int, int, int, int);
 using GetWindowRectFn = bool (*)(HWND, RECT *);
@@ -43,10 +44,14 @@ using GetCtxFrameBufferFn = void *(*)(HDC);
 using StretchBltFn = void (*)(HDC, int, int, int, int, HDC, int, int, int, int, int);
 using DrawTextFn = int (*)(HDC, const char *, int, RECT *, int);
 using FillDialogBackgroundFn = void (*)(HDC, const RECT *, int);
+using CreateFontFn = HFONT (*)(int, int, int, int, int, char, char, char, char, char, char, char, char, const char *);
+using SendMessageFn = LRESULT (*)(HWND, UINT, WPARAM, LPARAM);
+using DeleteObjectFn = void (*)(HGDIOBJ);
 
 SwellGetFunc g_getFunc = nullptr;
 MakeSetCurParmsFn g_makeSetCurParms = nullptr;
 CreateDialogFn g_createDialog = nullptr;
+GetDlgItemFn g_getDlgItem = nullptr;
 ShowWindowFn g_showWindow = nullptr;
 SetWindowPosFn g_setWindowPos = nullptr;
 GetWindowRectFn g_getWindowRect = nullptr;
@@ -76,6 +81,9 @@ GetCtxFrameBufferFn g_getCtxFrameBuffer = nullptr;
 StretchBltFn g_stretchBlt = nullptr;
 DrawTextFn g_drawText = nullptr;
 FillDialogBackgroundFn g_fillDialogBackground = nullptr;
+CreateFontFn g_createFont = nullptr;
+SendMessageFn g_sendMessage = nullptr;
+DeleteObjectFn g_deleteObject = nullptr;
 
 template <typename T>
 T loadFunction(const char *name) {
@@ -118,6 +126,7 @@ bool initializeSwellRuntime() {
 
   g_makeSetCurParms = loadFunction<MakeSetCurParmsFn>("SWELL_MakeSetCurParms");
   g_createDialog = loadFunction<CreateDialogFn>("SWELL_CreateDialog");
+  g_getDlgItem = loadFunction<GetDlgItemFn>("GetDlgItem");
   g_showWindow = loadFunction<ShowWindowFn>("ShowWindow");
   g_setWindowPos = loadFunction<SetWindowPosFn>("SetWindowPos");
   g_getWindowRect = loadFunction<GetWindowRectFn>("GetWindowRect");
@@ -147,6 +156,9 @@ bool initializeSwellRuntime() {
   g_stretchBlt = loadFunction<StretchBltFn>("StretchBlt");
   g_drawText = loadFunction<DrawTextFn>("SWELL_DrawText");
   g_fillDialogBackground = loadFunction<FillDialogBackgroundFn>("SWELL_FillDialogBackground");
+  g_createFont = loadFunction<CreateFontFn>("CreateFont");
+  g_sendMessage = loadFunction<SendMessageFn>("SendMessage");
+  g_deleteObject = loadFunction<DeleteObjectFn>("DeleteObject");
   return hasSwellRuntime();
 #endif
 }
@@ -168,6 +180,10 @@ void makeSetCurParms(float xscale, float yscale, float xtrans, float ytrans, HWN
 
 HWND createDialog(void *resourceHead, const char *resourceID, HWND parent, DLGPROC proc, LPARAM param) {
   return g_createDialog ? g_createDialog(resourceHead, resourceID, parent, proc, param) : nullptr;
+}
+
+HWND getDlgItem(HWND parent, int controlID) {
+  return g_getDlgItem && parent ? g_getDlgItem(parent, controlID) : nullptr;
 }
 
 void showWindow(HWND hwnd, int command) {
@@ -314,6 +330,20 @@ bool drawText(HDC output, const char *text, RECT *rect, int align) {
     return false;
   }
   return g_drawText(output, text, -1, rect, align) != 0;
+}
+
+HFONT createFont(int height, int weight, const char *faceName) {
+  return g_createFont ? g_createFont(height, 0, 0, 0, weight, 0, 0, 0, 0, 0, 0, 0, 0, faceName ? faceName : "") : nullptr;
+}
+
+LRESULT sendMessage(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
+  return g_sendMessage && hwnd ? g_sendMessage(hwnd, message, wParam, lParam) : 0;
+}
+
+void deleteObject(HGDIOBJ object) {
+  if (g_deleteObject && object) {
+    g_deleteObject(object);
+  }
 }
 
 } // namespace reashoot::platform::swell

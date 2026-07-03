@@ -1213,6 +1213,7 @@ void setVideoEnabled(bool enabled);
 - (void)hideFloatingPreview;
 - (void)hideDockedPreview;
 - (void)setStatus:(NSString *)status;
+- (NSString *)friendlyStatusTextForStatus:(NSString *)status;
 - (void)setRecordingVisualState:(BOOL)recording;
 - (void)updateCaptureFormatLabel;
 - (void)persistIPhoneSettings;
@@ -1225,6 +1226,7 @@ void setVideoEnabled(bool enabled);
 - (void)startRemotePreview;
 - (void)startSwellPreviewPrototype;
 - (void)stopRemotePreview;
+- (void)stopAllPreviewActivity;
 - (void)startPreviewStreamWithFields:(NSDictionary<NSString *, NSString *> *)fields;
 - (void)stopPreviewStream;
 - (void)handlePreviewAccessUnit:(NSData *)accessUnit;
@@ -1818,17 +1820,11 @@ void setVideoEnabled(bool enabled);
     g_iPhoneLens = swellSettings.lens;
   }
   NSTextField *hostField = self.iPhoneSetupWindow.visible && self.iPhoneSetupHostField ? self.iPhoneSetupHostField : self.iPhoneHostField;
-  NSTextField *tokenField = self.iPhoneSetupWindow.visible && self.iPhoneSetupTokenField ? self.iPhoneSetupTokenField : self.iPhoneTokenField;
   if (hostField) {
     g_iPhoneHost = hostField.stringValue.UTF8String ?: "";
   }
-  if (tokenField) {
-    g_iPhoneToken = tokenField.stringValue.UTF8String ?: "";
-  }
   if (self.iPhoneHostField) self.iPhoneHostField.stringValue = [NSString stringWithUTF8String:g_iPhoneHost.c_str()];
-  if (self.iPhoneTokenField) self.iPhoneTokenField.stringValue = [NSString stringWithUTF8String:g_iPhoneToken.c_str()];
   if (self.iPhoneSetupHostField) self.iPhoneSetupHostField.stringValue = [NSString stringWithUTF8String:g_iPhoneHost.c_str()];
-  if (self.iPhoneSetupTokenField) self.iPhoneSetupTokenField.stringValue = [NSString stringWithUTF8String:g_iPhoneToken.c_str()];
   if (self.iPhoneResolutionPopup.selectedItem.title.length > 0) {
     g_iPhoneResolution = self.iPhoneResolutionPopup.selectedItem.title.UTF8String ?: "4K";
   }
@@ -1997,8 +1993,6 @@ void setVideoEnabled(bool enabled);
     for (NSString *line in [output componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
       if ([line hasPrefix:prefix]) {
         NSString *token = [line substringFromIndex:prefix.length];
-        if (self.iPhoneTokenField) self.iPhoneTokenField.stringValue = token;
-        if (self.iPhoneSetupTokenField) self.iPhoneSetupTokenField.stringValue = token;
         g_iPhoneToken = token.UTF8String ?: "";
         // Push the new token into the SWELL setup field before persisting;
         // persistIPhoneSettings re-reads that field, so persisting first would
@@ -2024,19 +2018,21 @@ void setVideoEnabled(bool enabled);
     [self setStatus:@"Enter iPhone host first"];
     return;
   }
-  NSArray<NSString *> *arguments = @[];
-  if (!g_iPhoneToken.empty()) {
-    arguments = stringArrayFromStdVector(reashoot::core::tokenArguments([self remoteCameraSettings]));
+  if (g_iPhoneToken.empty()) {
+    [self setStatus:@"Pair the iPhone first: enter the code shown on the iPhone and press Pair."];
+    return;
   }
-  [self setStatus:@"Testing iPhone connection"];
+  NSArray<NSString *> *arguments = @[];
+  arguments = stringArrayFromStdVector(reashoot::core::tokenArguments([self remoteCameraSettings]));
+  [self setStatus:@"Reconnecting to iPhone"];
   [self runReaShootCommandAsync:@"ping" extraArguments:arguments completion:^(NSString *output, NSError *error) {
     if (error) {
-      [self setStatus:@"iPhone connection failed"];
+      [self setStatus:@"iPhone reconnect failed"];
       showError(error.localizedDescription.UTF8String ?: "iPhone connection failed.");
       return;
     }
     NSString *message = [output stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-    [self setStatus:message.length > 0 ? [@"iPhone: " stringByAppendingString:message] : @"iPhone connection OK"];
+    [self setStatus:message.length > 0 ? [@"iPhone reachable; reconnecting preview: " stringByAppendingString:message] : @"iPhone reachable; reconnecting preview"];
     [self stopRemotePreview];
     self.previewStreamFailed = NO;
     self.previewStreamFailureReason = nil;
@@ -2054,7 +2050,7 @@ void setVideoEnabled(bool enabled);
 - (void)showIPhoneSetup:(id)sender {
   (void)sender;
   [self ensureDockView];
-  [self setStatus:@"Use SWELL host/token/code fields, then Discover, Pair, or Test"];
+  [self setStatus:@"Use Setup to Discover the iPhone, enter the pairing code, then Pair or Reconnect."];
 }
 
 - (void)selectRelativeIPhoneLook:(NSInteger)offset {
@@ -2163,7 +2159,7 @@ void setVideoEnabled(bool enabled);
       ReaShootRecorder *strongSelf = weakSelf;
       if (strongSelf && !strongSelf.swellPreviewReceivedFrame) {
         strongSelf.swellPreviewReceivedFrame = YES;
-        [strongSelf setStatus:@"Preview: SWELL live video"];
+        [strongSelf setStatus:@"ReaShoot live video"];
       }
       if (g_swellPanelPrototypeDocked && g_swellPanelPrototype) {
         reashoot::platform::swell::setSwellPanelPreviewFrame(g_swellPanelPrototype, pixels, width, height, strideBytes);
@@ -2190,7 +2186,7 @@ void setVideoEnabled(bool enabled);
       ReaShootRecorder *strongSelf = weakSelf;
       if (strongSelf && !strongSelf.swellPreviewReceivedFrame) {
         strongSelf.swellPreviewReceivedFrame = YES;
-        [strongSelf setStatus:@"Preview: SWELL live video"];
+        [strongSelf setStatus:@"ReaShoot live video"];
       }
       if (g_swellPanelPrototypeDocked && g_swellPanelPrototype) {
         reashoot::platform::swell::setSwellPanelPreviewFrame(g_swellPanelPrototype, pixels, width, height, strideBytes);
@@ -2226,7 +2222,10 @@ void setVideoEnabled(bool enabled);
         if (previewError) {
           self.previewStreamFailed = YES;
           self.previewStreamFailureReason = previewError.localizedDescription ?: @"Preview start failed";
-          [self setStatus:@"Preview: start failed"];
+          NSString *message = previewError.localizedDescription.length > 0
+                                  ? [NSString stringWithFormat:@"Preview start failed: %@", previewError.localizedDescription]
+                                  : @"Preview start failed";
+          [self setStatus:message];
           return;
         }
         [self startPreviewStreamWithFields:[self fieldsFromHelperLine:previewOutput]];
@@ -2235,8 +2234,8 @@ void setVideoEnabled(bool enabled);
     return;
   }
   self.previewStreamFailed = YES;
-  self.previewStreamFailureReason = @"iPhone host/token missing";
-  [self setStatus:@"Preview: set iPhone host and token"];
+  self.previewStreamFailureReason = @"iPhone host or pairing is missing";
+  [self setStatus:@"Preview unavailable: discover the iPhone, enter its pairing code, then Pair."];
 }
 
 - (void)stopRemotePreview {
@@ -2259,8 +2258,8 @@ void setVideoEnabled(bool enabled);
   }
   if (g_iPhoneHost.empty() || g_iPhoneToken.empty()) {
     self.previewStreamFailed = YES;
-    self.previewStreamFailureReason = @"iPhone host/token missing";
-    [self setStatus:@"Preview: set iPhone host and token"];
+    self.previewStreamFailureReason = @"iPhone host or pairing is missing";
+    [self setStatus:@"Preview unavailable: discover the iPhone, enter its pairing code, then Pair."];
     return;
   }
 
@@ -2377,6 +2376,12 @@ void setVideoEnabled(bool enabled);
   [self setStatus:[NSString stringWithUTF8String:followStatusText().c_str()]];
 }
 
+- (void)stopAllPreviewActivity {
+  self.showingPlayback = NO;
+  [self.playbackPreviewRenderer hide];
+  [self stopRemotePreview];
+}
+
 - (void)showDockedPreview {
   [self ensureDockView];
   if (!DockWindowAddEx || !g_swellPanelPrototype) {
@@ -2397,7 +2402,7 @@ void setVideoEnabled(bool enabled);
 
 - (void)showFloatingPreview {
   [self showDockedPreview];
-  [self setStatus:@"SWELL preview uses REAPER dock"];
+  [self setStatus:@"ReaShoot preview uses the REAPER dock"];
 }
 
 - (void)hideFloatingPreview {
@@ -2412,13 +2417,29 @@ void setVideoEnabled(bool enabled);
   g_swellPanelPrototypeDocked = false;
 }
 
-- (void)setStatus:(NSString *)status {
+- (NSString *)friendlyStatusTextForStatus:(NSString *)status {
   NSString *statusText = status ?: @"Idle";
+  NSString *lowercase = statusText.lowercaseString;
+  if ([lowercase containsString:@"unauthorized"]) {
+    return @"iPhone authorization failed: reset pairing on the iPhone, enter the new code in Setup, then Pair again.";
+  }
+  if ([lowercase containsString:@"invalid pairing code"]) {
+    return @"Invalid pairing code: check the six-digit code on the iPhone and press Pair again.";
+  }
+  if ([lowercase containsString:@"connection closed"]) {
+    return @"iPhone connection closed. If you reset pairing, enter the current code and Pair again.";
+  }
+  return statusText;
+}
+
+- (void)setStatus:(NSString *)status {
+  NSString *statusText = [self friendlyStatusTextForStatus:status];
   if (self.statusLabel) {
+    self.statusLabel.font = [NSFont boldSystemFontOfSize:14.0];
     self.statusLabel.stringValue = statusText;
   }
   if (g_swellPanelPrototype) {
-    if ([statusText hasPrefix:@"Preview:"] && ![statusText isEqualToString:@"Preview: SWELL live video"]) {
+    if ([statusText hasPrefix:@"Preview:"] && ![statusText isEqualToString:@"ReaShoot live video"]) {
       reashoot::platform::swell::setSwellPanelPreviewPending(g_swellPanelPrototype, statusText.UTF8String);
     }
     reashoot::platform::swell::updateSwellPanelProbe(g_swellPanelPrototype,
@@ -2480,7 +2501,7 @@ void setVideoEnabled(bool enabled) {
     if (recorder().isRecording) {
       stopTransportRecording();
     }
-    [recorder() stopPlaybackAndShowLive];
+    [recorder() stopAllPreviewActivity];
     [recorder() hideDockedPreview];
     [recorder() hideFloatingPreview];
   }
@@ -2708,6 +2729,11 @@ void alignSelectedVideoItem() {
 }
 
 void timerPoll() {
+  if (!g_videoEnabled && !g_pendingInsert && !g_pendingAlignment) {
+    g_previousPlayState = 0;
+    return;
+  }
+
   @autoreleasepool {
     processPendingInsert();
     processPendingAlignment();

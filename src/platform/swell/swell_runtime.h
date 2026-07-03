@@ -9,6 +9,7 @@ bool hasSwellRuntime();
 bool hasSwellDrawingRuntime();
 void makeSetCurParms(float xscale, float yscale, float xtrans, float ytrans, HWND parent, bool autoScale, bool sizeToFit);
 HWND createDialog(void *resourceHead, const char *resourceID, HWND parent, DLGPROC proc, LPARAM param);
+HWND getDlgItem(HWND parent, int controlID);
 void showWindow(HWND hwnd, int command);
 void setWindowPos(HWND hwnd, HWND insertAfter, int x, int y, int width, int height, int flags);
 bool getWindowRect(HWND hwnd, RECT *rect);
@@ -35,5 +36,8 @@ bool endPaint(HWND hwnd, PAINTSTRUCT *paint);
 void fillDialogBackground(HDC hdc, const RECT *rect, int level);
 bool drawFrame(HDC output, int x, int y, int width, int height, const void *bits, int sourceWidth, int sourceHeight);
 bool drawText(HDC output, const char *text, RECT *rect, int align);
+HFONT createFont(int height, int weight, const char *faceName);
+LRESULT sendMessage(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
+void deleteObject(HGDIOBJ object);
 
 } // namespace reashoot::platform::swell
