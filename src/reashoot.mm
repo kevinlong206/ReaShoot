@@ -81,6 +81,8 @@
 #define REAPERAPI_WANT_ValidatePtr2
 #include "reaper_plugin_functions.h"
 
+#include "platform/swell/swell_panel_probe.h"
+
 namespace {
 
 constexpr const char *kExtStateSection = "klong_reashoot";
@@ -228,7 +230,10 @@ int g_alignSelectedCommand = 0;
 int g_restoreIPhoneCommand = 0;
 int g_deleteAllIPhoneCommand = 0;
 int g_toggleFollowCommand = 0;
+int g_swellPanelPrototypeCommand = 0;
 int g_previousPlayState = 0;
+HWND g_swellPanelPrototype = nullptr;
+bool g_swellPanelPrototypeDocked = false;
 bool g_videoEnabled = false;
 bool g_followEnabled = true;
 bool g_previewFloating = true;
@@ -1135,6 +1140,7 @@ bool insertRecordedMedia(const std::string &path, double position, std::string &
 void updateFollowStatusText();
 void refreshToolbarState();
 void stopTransportRecording();
+bool toggleSwellPanelPrototype();
 
 std::string followStatusText() {
   if (!g_videoEnabled) {
@@ -2610,6 +2616,38 @@ void timerPoll() {
   }
 }
 
+bool toggleSwellPanelPrototype() {
+  if (!DockWindowAddEx || !DockWindowRemove) {
+    showError("SWELL panel prototype requires REAPER dock window APIs.");
+    return true;
+  }
+  if (!g_swellPanelPrototype) {
+    g_swellPanelPrototype = reashoot::platform::swell::createSwellPanelProbe(nullptr);
+  }
+  if (!g_swellPanelPrototype) {
+    showError("Unable to create the SWELL panel prototype.");
+    return true;
+  }
+  reashoot::platform::swell::updateSwellPanelProbe(g_swellPanelPrototype,
+                                                   followStatusText().c_str(),
+                                                   g_iPhoneHost.c_str(),
+                                                   g_iPhoneToken.c_str());
+  if (g_swellPanelPrototypeDocked) {
+    DockWindowRemove(g_swellPanelPrototype);
+    g_swellPanelPrototypeDocked = false;
+  } else {
+    DockWindowAddEx(g_swellPanelPrototype, "ReaShoot SWELL Prototype", "reashoot_swell_prototype", true);
+    g_swellPanelPrototypeDocked = true;
+    if (DockWindowActivate) {
+      DockWindowActivate(g_swellPanelPrototype);
+    }
+    if (DockWindowRefreshForHWND) {
+      DockWindowRefreshForHWND(g_swellPanelPrototype);
+    }
+  }
+  return true;
+}
+
 bool hookCommand2(KbdSectionInfo *section, int command, int val, int val2, int relmode, HWND hwnd) {
   (void)section;
   (void)val;
@@ -2655,6 +2693,10 @@ bool hookCommand2(KbdSectionInfo *section, int command, int val, int val2, int r
     return true;
   }
 
+  if (command == g_swellPanelPrototypeCommand) {
+    return toggleSwellPanelPrototype();
+  }
+
   return false;
 }
 
@@ -2668,12 +2710,19 @@ int toggleActionHook(int command) {
   if (command == g_floatPreviewCommand) {
     return recorder().floatingPreview ? 1 : 0;
   }
+  if (command == g_swellPanelPrototypeCommand) {
+    return g_swellPanelPrototypeDocked ? 1 : 0;
+  }
   return -1;
 }
 
 void cleanup() {
   if (recorder().isRecording) {
     stopTransportRecording();
+  }
+  if (DockWindowRemove && g_swellPanelPrototypeDocked && g_swellPanelPrototype) {
+    DockWindowRemove(g_swellPanelPrototype);
+    g_swellPanelPrototypeDocked = false;
   }
 }
 
@@ -2720,6 +2769,12 @@ bool registerActions(reaper_plugin_info_t *rec) {
       "ReaShoot: Enable/Disable Transport Follow",
       nullptr,
   };
+  custom_action_register_t swellPanelPrototypeAction = {
+      0,
+      "KLONG_REASHOOT_SWELL",
+      "ReaShoot: SWELL Panel Prototype",
+      nullptr,
+  };
 
   g_videoEnabledCommand = rec->Register("custom_action", &videoEnabledAction);
   g_showPreviewCommand = rec->Register("custom_action", &showPreviewAction);
@@ -2728,6 +2783,10 @@ bool registerActions(reaper_plugin_info_t *rec) {
   g_restoreIPhoneCommand = rec->Register("custom_action", &restoreIPhoneAction);
   g_deleteAllIPhoneCommand = rec->Register("custom_action", &deleteAllIPhoneAction);
   g_toggleFollowCommand = rec->Register("custom_action", &toggleFollowAction);
+  g_swellPanelPrototypeCommand = rec->Register("custom_action", &swellPanelPrototypeAction);
+  if (g_swellPanelPrototypeCommand == 0) {
+    debugLog(@"Failed to register SWELL panel prototype action");
+  }
 
   return g_videoEnabledCommand != 0 && g_showPreviewCommand != 0 && g_floatPreviewCommand != 0 &&
          g_alignSelectedCommand != 0 && g_restoreIPhoneCommand != 0 && g_deleteAllIPhoneCommand != 0 &&

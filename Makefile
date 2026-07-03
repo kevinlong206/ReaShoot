@@ -9,6 +9,8 @@ CORE_SRC := $(wildcard src/core/*.cpp)
 CORE_HEADERS := $(wildcard src/core/*.h)
 MAC_SRC := $(wildcard src/platform/mac/*.mm)
 MAC_HEADERS := $(wildcard src/platform/mac/*.h)
+SWELL_SRC := $(wildcard src/platform/swell/*.cpp) $(wildcard src/platform/swell/*.mm)
+SWELL_HEADERS := $(wildcard src/platform/swell/*.h)
 REAPER_SRC := $(wildcard src/reaper/*.cpp)
 REAPER_HEADERS := $(wildcard src/reaper/*.h)
 WIN32_STUB_SRC := src/platform/win32/win32_portability_stub.cpp
@@ -34,9 +36,9 @@ LDFLAGS := -dynamiclib -undefined dynamic_lookup $(ARCH_FLAGS) \
 
 all: $(TARGET) $(HELPER_TARGET)
 
-$(TARGET): $(SRC) $(CORE_SRC) $(CORE_HEADERS) $(MAC_SRC) $(MAC_HEADERS) $(REAPER_SRC) $(REAPER_HEADERS) Info.plist $(SDK_DIR)/reaper_plugin.h $(SDK_DIR)/reaper_plugin_functions.h
+$(TARGET): $(SRC) $(CORE_SRC) $(CORE_HEADERS) $(MAC_SRC) $(MAC_HEADERS) $(SWELL_SRC) $(SWELL_HEADERS) $(REAPER_SRC) $(REAPER_HEADERS) Info.plist $(SDK_DIR)/reaper_plugin.h $(SDK_DIR)/reaper_plugin_functions.h
 	mkdir -p $(BUILD_DIR)
-	$(CXX) $(CXXFLAGS) $(SRC) $(CORE_SRC) $(MAC_SRC) $(REAPER_SRC) $(LDFLAGS) -o $(TARGET)
+	$(CXX) $(CXXFLAGS) $(SRC) $(CORE_SRC) $(MAC_SRC) $(SWELL_SRC) $(REAPER_SRC) $(LDFLAGS) -o $(TARGET)
 
 $(HELPER_TARGET): $(HELPER_SRC)
 	mkdir -p $(BUILD_DIR)
