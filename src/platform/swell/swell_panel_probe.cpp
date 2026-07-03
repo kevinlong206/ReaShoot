@@ -12,19 +12,22 @@ namespace reashoot::platform::swell {
 
 enum ControlID {
   kSetupButton = 1001,
-  kPendingButton = 1002,
-  kDeleteAllButton = 1003,
-  kHostField = 1004,
-  kTokenField = 1005,
+  kManageButton = 1002,
   kStatusLabel = 1006,
-  kPairingCodeField = 1007,
-  kDiscoverButton = 1008,
-  kPairButton = 1009,
-  kTestButton = 1010,
   kFormatLabel = 1011,
   kPreviousLookButton = 1012,
   kNextLookButton = 1013,
   kLookCombo = 1014,
+  kSetupHostField = 1101,
+  kSetupTokenField = 1102,
+  kSetupPairingCodeField = 1103,
+  kSetupDiscoverButton = 1104,
+  kSetupPairButton = 1105,
+  kSetupTestButton = 1106,
+  kSetupCloseButton = 1107,
+  kManagePendingButton = 1201,
+  kManageDeleteAllButton = 1202,
+  kManageCloseButton = 1203,
 };
 
 struct LookOption {
@@ -61,7 +64,11 @@ int g_previewHeight = 180;
 bool g_usingLivePreview = false;
 bool g_previewPending = false;
 std::string g_previewMessage = "Preview unavailable: set iPhone host and token, then Test.";
+std::string g_host;
+std::string g_token;
 SwellPanelCallbacks g_callbacks;
+HWND g_setupWindow = nullptr;
+HWND g_manageWindow = nullptr;
 
 int lookIndexForID(const char *lookID) {
   if (!lookID || !lookID[0]) {
@@ -74,6 +81,30 @@ int lookIndexForID(const char *lookID) {
   }
   return 0;
 }
+
+void syncSetupFields() {
+  if (!g_setupWindow) {
+    return;
+  }
+  setDlgItemText(g_setupWindow, kSetupHostField, g_host.c_str());
+  setDlgItemText(g_setupWindow, kSetupTokenField, g_token.c_str());
+}
+
+void captureSetupFields() {
+  if (!g_setupWindow) {
+    return;
+  }
+  char text[256] = {};
+  if (getDlgItemText(g_setupWindow, kSetupHostField, text, sizeof(text))) {
+    g_host = text;
+  }
+  if (getDlgItemText(g_setupWindow, kSetupTokenField, text, sizeof(text))) {
+    g_token = text;
+  }
+}
+
+void showSetupWindow(HWND parent);
+void showManageWindow(HWND parent);
 
 void updatePlaceholderPreviewFrame() {
   g_previewFrame.resize(static_cast<size_t>(g_previewWidth * g_previewHeight));
@@ -111,6 +142,86 @@ void paintPreview(HWND hwnd) {
   endPaint(hwnd, &paint);
 }
 
+static LRESULT setupWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+  (void)lParam;
+  if (msg == WM_CLOSE) {
+    captureSetupFields();
+    showWindow(hwnd, SW_HIDE);
+    return 0;
+  }
+  if (msg == WM_DESTROY) {
+    if (g_setupWindow == hwnd) {
+      captureSetupFields();
+      g_setupWindow = nullptr;
+    }
+    return 0;
+  }
+  if (msg == WM_COMMAND) {
+    const int controlID = LOWORD(wParam);
+    if (controlID == kSetupDiscoverButton) {
+      captureSetupFields();
+      if (g_callbacks.discover) {
+        g_callbacks.discover(g_callbacks.context);
+      }
+      return 0;
+    }
+    if (controlID == kSetupPairButton) {
+      captureSetupFields();
+      if (g_callbacks.pair) {
+        g_callbacks.pair(g_callbacks.context);
+      }
+      return 0;
+    }
+    if (controlID == kSetupTestButton) {
+      captureSetupFields();
+      if (g_callbacks.testConnection) {
+        g_callbacks.testConnection(g_callbacks.context);
+      }
+      return 0;
+    }
+    if (controlID == kSetupCloseButton) {
+      captureSetupFields();
+      showWindow(hwnd, SW_HIDE);
+      return 0;
+    }
+  }
+  return 0;
+}
+
+static LRESULT manageWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+  (void)lParam;
+  if (msg == WM_CLOSE) {
+    showWindow(hwnd, SW_HIDE);
+    return 0;
+  }
+  if (msg == WM_DESTROY) {
+    if (g_manageWindow == hwnd) {
+      g_manageWindow = nullptr;
+    }
+    return 0;
+  }
+  if (msg == WM_COMMAND) {
+    const int controlID = LOWORD(wParam);
+    if (controlID == kManagePendingButton) {
+      if (g_callbacks.restorePending) {
+        g_callbacks.restorePending(g_callbacks.context);
+      }
+      return 0;
+    }
+    if (controlID == kManageDeleteAllButton) {
+      if (g_callbacks.deleteAllPending) {
+        g_callbacks.deleteAllPending(g_callbacks.context);
+      }
+      return 0;
+    }
+    if (controlID == kManageCloseButton) {
+      showWindow(hwnd, SW_HIDE);
+      return 0;
+    }
+  }
+  return 0;
+}
+
 static LRESULT swellProbeWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
   (void)lParam;
   if (msg == WM_PAINT) {
@@ -123,39 +234,14 @@ static LRESULT swellProbeWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
   if (msg == WM_COMMAND) {
     const int controlID = LOWORD(wParam);
     if (controlID == kSetupButton) {
+      showSetupWindow(hwnd);
       if (g_callbacks.setup) {
         g_callbacks.setup(g_callbacks.context);
       }
       return 0;
     }
-    if (controlID == kPendingButton) {
-      if (g_callbacks.restorePending) {
-        g_callbacks.restorePending(g_callbacks.context);
-      }
-      return 0;
-    }
-    if (controlID == kDeleteAllButton) {
-      if (g_callbacks.deleteAllPending) {
-        g_callbacks.deleteAllPending(g_callbacks.context);
-      }
-      return 0;
-    }
-    if (controlID == kDiscoverButton) {
-      if (g_callbacks.discover) {
-        g_callbacks.discover(g_callbacks.context);
-      }
-      return 0;
-    }
-    if (controlID == kPairButton) {
-      if (g_callbacks.pair) {
-        g_callbacks.pair(g_callbacks.context);
-      }
-      return 0;
-    }
-    if (controlID == kTestButton) {
-      if (g_callbacks.testConnection) {
-        g_callbacks.testConnection(g_callbacks.context);
-      }
+    if (controlID == kManageButton) {
+      showManageWindow(hwnd);
       return 0;
     }
     if (controlID == kPreviousLookButton) {
@@ -181,6 +267,43 @@ static LRESULT swellProbeWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
   return 0;
 }
 
+void showSetupWindow(HWND parent) {
+  if (!g_setupWindow) {
+    g_setupWindow = createDialog(nullptr, nullptr, parent, reinterpret_cast<DLGPROC>(setupWindowProc), 0);
+    if (!g_setupWindow) {
+      return;
+    }
+    makeSetCurParms(1.0f, 1.0f, 0.0f, 0.0f, g_setupWindow, false, false);
+    makeLabel(0, "Host", -1, 12, 118, 80, 18, 0);
+    makeEditField(kSetupHostField, 96, 116, 300, 22, 0);
+    makeButton(0, "Discover", kSetupDiscoverButton, 404, 116, 82, 24, 0);
+    makeLabel(0, "Token", -1, 12, 84, 80, 18, 0);
+    makeEditField(kSetupTokenField, 96, 82, 390, 22, 0);
+    makeLabel(0, "Pair code", -1, 12, 50, 80, 18, 0);
+    makeEditField(kSetupPairingCodeField, 96, 48, 180, 22, 0);
+    makeButton(0, "Pair", kSetupPairButton, 284, 48, 70, 24, 0);
+    makeButton(0, "Test", kSetupTestButton, 362, 48, 70, 24, 0);
+    makeButton(0, "Close", kSetupCloseButton, 416, 12, 70, 24, 0);
+  }
+  syncSetupFields();
+  showWindow(g_setupWindow, SW_SHOW);
+}
+
+void showManageWindow(HWND parent) {
+  if (!g_manageWindow) {
+    g_manageWindow = createDialog(nullptr, nullptr, parent, reinterpret_cast<DLGPROC>(manageWindowProc), 0);
+    if (!g_manageWindow) {
+      return;
+    }
+    makeSetCurParms(1.0f, 1.0f, 0.0f, 0.0f, g_manageWindow, false, false);
+    makeLabel(0, "Manage recordings stored on the paired iPhone.", -1, 12, 86, 360, 18, 0);
+    makeButton(0, "Pending Videos...", kManagePendingButton, 12, 50, 150, 26, 0);
+    makeButton(0, "Delete All", kManageDeleteAllButton, 172, 50, 110, 26, 0);
+    makeButton(0, "Close", kManageCloseButton, 302, 12, 70, 24, 0);
+  }
+  showWindow(g_manageWindow, SW_SHOW);
+}
+
 HWND createSwellPanelProbe(HWND parent, const SwellPanelCallbacks &callbacks) {
   if (!initializeSwellRuntime()) {
     return nullptr;
@@ -192,15 +315,8 @@ HWND createSwellPanelProbe(HWND parent, const SwellPanelCallbacks &callbacks) {
   g_callbacks = callbacks;
   updatePlaceholderPreviewFrame();
   makeSetCurParms(1.0f, 1.0f, 0.0f, 0.0f, panel, false, false);
-  makeButton(0, "Setup", kSetupButton, 528, 101, 100, 24, 0);
-  makeButton(0, "Pending...", kPendingButton, 312, 101, 104, 24, 0);
-  makeButton(0, "Delete All", kDeleteAllButton, 424, 101, 96, 24, 0);
-  makeEditField(kHostField, 12, 127, 296, 22, 0);
-  makeEditField(kTokenField, 320, 127, 296, 22, 0);
-  makeEditField(kPairingCodeField, 12, 101, 160, 22, 0);
-  makeButton(0, "Discover", kDiscoverButton, 180, 101, 72, 24, 0);
-  makeButton(0, "Pair", kPairButton, 256, 101, 48, 24, 0);
-  makeButton(0, "Test", kTestButton, 616, 101, 52, 24, 0);
+  makeButton(0, "Setup", kSetupButton, 448, 101, 86, 24, 0);
+  makeButton(0, "Manage Recordings", kManageButton, 542, 101, 126, 24, 0);
   makeButton(0, "Prev", kPreviousLookButton, 12, 49, 52, 24, 0);
   makeButton(0, "Next", kNextLookButton, 616, 49, 52, 24, 0);
   makeCombo(kLookCombo, 70, 49, 540, 200, CBS_DROPDOWNLIST);
@@ -222,8 +338,9 @@ void updateSwellPanelProbe(HWND panel, const char *status, const char *format, c
   if (format) {
     setDlgItemText(panel, kFormatLabel, format);
   }
-  setDlgItemText(panel, kHostField, host ? host : "");
-  setDlgItemText(panel, kTokenField, token ? token : "");
+  g_host = host ? host : "";
+  g_token = token ? token : "";
+  syncSetupFields();
   if (!g_usingLivePreview) {
     g_previewMessage = status && status[0] ? status : "Preview unavailable";
     updatePlaceholderPreviewFrame();
@@ -243,9 +360,12 @@ SwellPanelSettings swellPanelSettings(HWND panel) {
   if (!panel) {
     return settings;
   }
-  getDlgItemText(panel, kHostField, settings.host, sizeof(settings.host));
-  getDlgItemText(panel, kTokenField, settings.token, sizeof(settings.token));
-  getDlgItemText(panel, kPairingCodeField, settings.pairingCode, sizeof(settings.pairingCode));
+  if (g_setupWindow) {
+    captureSetupFields();
+    getDlgItemText(g_setupWindow, kSetupPairingCodeField, settings.pairingCode, sizeof(settings.pairingCode));
+  }
+  snprintf(settings.host, sizeof(settings.host), "%s", g_host.c_str());
+  snprintf(settings.token, sizeof(settings.token), "%s", g_token.c_str());
   return settings;
 }
 

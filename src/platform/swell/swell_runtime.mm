@@ -14,6 +14,7 @@ namespace {
 using SwellGetFunc = void *(*)(const char *);
 using MakeSetCurParmsFn = void (*)(float, float, float, float, HWND, bool, bool);
 using CreateDialogFn = HWND (*)(void *, const char *, HWND, DLGPROC, LPARAM);
+using ShowWindowFn = void (*)(HWND, int);
 using MakeButtonFn = HWND (*)(int, const char *, int, int, int, int, int, int);
 using MakeEditFieldFn = HWND (*)(int, int, int, int, int, int);
 using MakeLabelFn = HWND (*)(int, const char *, int, int, int, int, int, int);
@@ -38,6 +39,7 @@ using DrawTextFn = int (*)(HDC, const char *, int, RECT *, int);
 SwellGetFunc g_getFunc = nullptr;
 MakeSetCurParmsFn g_makeSetCurParms = nullptr;
 CreateDialogFn g_createDialog = nullptr;
+ShowWindowFn g_showWindow = nullptr;
 MakeButtonFn g_makeButton = nullptr;
 MakeEditFieldFn g_makeEditField = nullptr;
 MakeLabelFn g_makeLabel = nullptr;
@@ -100,6 +102,7 @@ bool initializeSwellRuntime() {
 
   g_makeSetCurParms = loadFunction<MakeSetCurParmsFn>("SWELL_MakeSetCurParms");
   g_createDialog = loadFunction<CreateDialogFn>("SWELL_CreateDialog");
+  g_showWindow = loadFunction<ShowWindowFn>("ShowWindow");
   g_makeButton = loadFunction<MakeButtonFn>("SWELL_MakeButton");
   g_makeEditField = loadFunction<MakeEditFieldFn>("SWELL_MakeEditField");
   g_makeLabel = loadFunction<MakeLabelFn>("SWELL_MakeLabel");
@@ -141,6 +144,12 @@ void makeSetCurParms(float xscale, float yscale, float xtrans, float ytrans, HWN
 
 HWND createDialog(void *resourceHead, const char *resourceID, HWND parent, DLGPROC proc, LPARAM param) {
   return g_createDialog ? g_createDialog(resourceHead, resourceID, parent, proc, param) : nullptr;
+}
+
+void showWindow(HWND hwnd, int command) {
+  if (g_showWindow && hwnd) {
+    g_showWindow(hwnd, command);
+  }
 }
 
 HWND makeButton(int isDefault, const char *label, int controlID, int x, int y, int width, int height, int flags) {
