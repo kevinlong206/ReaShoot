@@ -149,6 +149,25 @@ std::wstring helperExecutablePath() {
   return (modulePath.parent_path() / L"reashoot-helper.exe").wstring();
 }
 
+#if defined(REASHOOT_WITH_LIBWEBRTC)
+// libwebrtc.dll is delay-loaded and ships beside the plugin in UserPlugins.
+// Windows resolves a plugin's implicit dependencies from reaper.exe's directory,
+// not the plugin's, so we load it explicitly by full path here. Once loaded, the
+// delayed imports resolve to this already-loaded module (matched by base name).
+void preloadLibWebRTC() {
+  wchar_t buffer[MAX_PATH] = {0};
+  const DWORD length = GetModuleFileNameW(g_instance, buffer, MAX_PATH);
+  if (length == 0 || length == MAX_PATH) {
+    return;
+  }
+  std::filesystem::path dllPath =
+      std::filesystem::path(std::wstring(buffer, length)).parent_path() / L"libwebrtc.dll";
+  if (LoadLibraryW(dllPath.c_str()) == nullptr) {
+    logger().log("webrtc: failed to preload libwebrtc.dll from " + dllPath.string());
+  }
+}
+#endif
+
 void report(const std::string &message) {
   logger().log(message);
   if (ShowConsoleMsg) {
@@ -1069,6 +1088,10 @@ REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hI
   if (REAPERAPI_LoadAPI(rec->GetFunc) != 0) {
     return 0;
   }
+
+#if defined(REASHOOT_WITH_LIBWEBRTC)
+  preloadLibWebRTC();
+#endif
 
   return registerActions(rec) ? 1 : 0;
 }

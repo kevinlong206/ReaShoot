@@ -184,6 +184,13 @@ if(WIN32)
     # REASHOOT_WITH_LIBWEBRTC gates the receiver factory in the plugin TU.
     target_compile_definitions(reashoot PRIVATE REASHOOT_WITH_LIBWEBRTC LIB_WEBRTC_API_DLL)
     target_link_libraries(reashoot PRIVATE "${REASHOOT_LIBWEBRTC_IMPLIB}")
+    # Delay-load libwebrtc.dll so REAPER can load the plugin even though its
+    # dependency lives beside the plugin (not in reaper.exe's directory). The
+    # plugin explicitly LoadLibrary's it by full path from its own folder at
+    # startup before any libwebrtc call, so the delayed import resolves to the
+    # already-loaded module.
+    target_link_libraries(reashoot PRIVATE delayimp)
+    target_link_options(reashoot PRIVATE "/DELAYLOAD:libwebrtc.dll")
     # Stage libwebrtc.dll next to the plugin so REAPER can load it at runtime.
     add_custom_command(TARGET reashoot POST_BUILD
       COMMAND "${CMAKE_COMMAND}" -E copy_if_different
