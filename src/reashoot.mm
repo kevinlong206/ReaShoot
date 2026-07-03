@@ -1194,12 +1194,15 @@ void setVideoEnabled(bool enabled);
 @property(nonatomic, strong) NSTextField *statusLabel;
 @property(nonatomic, strong) AVSampleBufferDisplayLayer *streamPreviewLayer;
 @property(nonatomic, strong) ReaShootMacH264PreviewRenderer *h264PreviewRenderer;
+@property(nonatomic, strong) ReaShootMacH264FrameDecoder *swellPreviewDecoder;
 @property(nonatomic, strong) ReaShootMacPlaybackPreviewRenderer *playbackPreviewRenderer;
 @property(nonatomic, strong) ReaShootMacPreviewStreamClient *previewStreamClient;
 @property(nonatomic, assign) BOOL iPhonePreviewProfileConfiguring;
 @property(nonatomic, assign) BOOL previewStreamStarting;
 @property(nonatomic, assign) BOOL previewStreamActive;
 @property(nonatomic, assign) BOOL previewStreamFailed;
+@property(nonatomic, assign) BOOL swellPreviewReceivedAccessUnit;
+@property(nonatomic, assign) BOOL swellPreviewReceivedFrame;
 @property(nonatomic, copy) NSString *previewStreamFailureReason;
 @property(nonatomic, copy) void (^stopCompletion)(NSString *path, NSError *error);
 @property(nonatomic, copy) NSString *activeRemoteDownloadDirectory;
@@ -1219,10 +1222,13 @@ void setVideoEnabled(bool enabled);
 - (void)updateCaptureFormatLabel;
 - (void)persistIPhoneSettings;
 - (void)selectRelativeIPhoneLook:(NSInteger)offset;
+- (void)showIPhoneSetup:(id)sender;
+- (void)restoreIPhoneRecording;
 - (reashoot::core::RemoteCameraSettings)remoteCameraSettings;
 - (NSDictionary<NSString *, NSString *> *)fieldsFromHelperLine:(NSString *)line;
 - (NSArray<NSString *> *)iPhoneConfigureArguments;
 - (void)startRemotePreview;
+- (void)startSwellPreviewPrototype;
 - (void)stopRemotePreview;
 - (void)startPreviewStreamWithFields:(NSDictionary<NSString *, NSString *> *)fields;
 - (void)stopPreviewStream;
@@ -1271,6 +1277,18 @@ void setVideoEnabled(bool enabled);
       [self showDockedPreview];
     }
     [self setStatus:[NSString stringWithUTF8String:followStatusText().c_str()]];
+  });
+}
+
+- (void)startSwellPreviewPrototype {
+  dispatch_async(dispatch_get_main_queue(), ^{
+    [self ensureDockView];
+    self.showingPlayback = NO;
+    [self.playbackPreviewRenderer hide];
+    if (g_swellPanelPrototype) {
+      reashoot::platform::swell::setSwellPanelPreviewPending(g_swellPanelPrototype);
+    }
+    [self startRemotePreview];
   });
 }
 
@@ -2063,6 +2081,17 @@ void setVideoEnabled(bool enabled);
     self.streamPreviewLayer.hidden = YES;
     [self.previewView.layer addSublayer:self.streamPreviewLayer];
     self.h264PreviewRenderer = [[ReaShootMacH264PreviewRenderer alloc] initWithLayer:self.streamPreviewLayer];
+    __weak ReaShootRecorder *weakSelf = self;
+    self.swellPreviewDecoder = [[ReaShootMacH264FrameDecoder alloc] initWithFrameHandler:^(const void *pixels, int width, int height, int strideBytes) {
+      ReaShootRecorder *strongSelf = weakSelf;
+      if (strongSelf && !strongSelf.swellPreviewReceivedFrame) {
+        strongSelf.swellPreviewReceivedFrame = YES;
+        [strongSelf setStatus:@"Preview: SWELL live video"];
+      }
+      if (g_swellPanelPrototypeDocked && g_swellPanelPrototype) {
+        reashoot::platform::swell::setSwellPanelPreviewFrame(g_swellPanelPrototype, pixels, width, height, strideBytes);
+      }
+    }];
     self.playbackPreviewRenderer = [[ReaShootMacPlaybackPreviewRenderer alloc] initWithContainerView:self.previewView];
     self.previewStreamClient = [[ReaShootMacPreviewStreamClient alloc] init];
 
@@ -2092,6 +2121,22 @@ void setVideoEnabled(bool enabled);
 
 - (void)startRemotePreview {
   [self persistIPhoneSettings];
+  if (!self.previewStreamClient) {
+    self.previewStreamClient = [[ReaShootMacPreviewStreamClient alloc] init];
+  }
+  if (!self.swellPreviewDecoder) {
+    __weak ReaShootRecorder *weakSelf = self;
+    self.swellPreviewDecoder = [[ReaShootMacH264FrameDecoder alloc] initWithFrameHandler:^(const void *pixels, int width, int height, int strideBytes) {
+      ReaShootRecorder *strongSelf = weakSelf;
+      if (strongSelf && !strongSelf.swellPreviewReceivedFrame) {
+        strongSelf.swellPreviewReceivedFrame = YES;
+        [strongSelf setStatus:@"Preview: SWELL live video"];
+      }
+      if (g_swellPanelPrototypeDocked && g_swellPanelPrototype) {
+        reashoot::platform::swell::setSwellPanelPreviewFrame(g_swellPanelPrototype, pixels, width, height, strideBytes);
+      }
+    }];
+  }
   if (!self.previewStreamClient.isRunning && !self.previewStreamStarting) {
     self.previewStreamFailed = NO;
     self.previewStreamFailureReason = nil;
@@ -2207,21 +2252,32 @@ void setVideoEnabled(bool enabled);
   self.previewStreamStarting = YES;
   self.previewStreamActive = NO;
   self.previewStreamFailureReason = nil;
+  self.swellPreviewReceivedAccessUnit = NO;
+  self.swellPreviewReceivedFrame = NO;
   self.streamPreviewLayer.hidden = NO;
   [self.h264PreviewRenderer reset];
+  [self.swellPreviewDecoder reset];
   [self setStatus:@"Preview: connecting H.264 stream"];
 }
 
 - (void)stopPreviewStream {
   self.previewStreamStarting = NO;
   self.previewStreamActive = NO;
+  self.swellPreviewReceivedAccessUnit = NO;
+  self.swellPreviewReceivedFrame = NO;
   [self.previewStreamClient stop];
   self.streamPreviewLayer.hidden = YES;
   [self.h264PreviewRenderer reset];
+  [self.swellPreviewDecoder reset];
 }
 
 - (void)handlePreviewAccessUnit:(NSData *)accessUnit {
+  if (!self.swellPreviewReceivedAccessUnit) {
+    self.swellPreviewReceivedAccessUnit = YES;
+    [self setStatus:@"Preview: H.264 received; decoding for SWELL"];
+  }
   [self.h264PreviewRenderer renderAccessUnit:accessUnit];
+  [self.swellPreviewDecoder decodeAccessUnit:accessUnit];
 }
 
 - (void)showLivePreview {
@@ -2292,6 +2348,12 @@ void setVideoEnabled(bool enabled);
 
 - (void)setStatus:(NSString *)status {
   self.statusLabel.stringValue = status ?: @"Idle";
+  if (g_swellPanelPrototypeDocked && g_swellPanelPrototype) {
+    reashoot::platform::swell::updateSwellPanelProbe(g_swellPanelPrototype,
+                                                     (status ?: @"Idle").UTF8String,
+                                                     g_iPhoneHost.c_str(),
+                                                     g_iPhoneToken.c_str());
+  }
   [self updateRecordingTextColor];
 }
 
@@ -2622,7 +2684,23 @@ bool toggleSwellPanelPrototype() {
     return true;
   }
   if (!g_swellPanelPrototype) {
-    g_swellPanelPrototype = reashoot::platform::swell::createSwellPanelProbe(nullptr);
+    reashoot::platform::swell::SwellPanelCallbacks callbacks;
+    callbacks.setup = [](void *) {
+      dispatch_async(dispatch_get_main_queue(), ^{
+        [recorder() showIPhoneSetup:nil];
+      });
+    };
+    callbacks.restorePending = [](void *) {
+      dispatch_async(dispatch_get_main_queue(), ^{
+        [recorder() restoreIPhoneRecording];
+      });
+    };
+    callbacks.deleteAllPending = [](void *) {
+      dispatch_async(dispatch_get_main_queue(), ^{
+        [recorder() deleteAllPendingIPhoneRecordings];
+      });
+    };
+    g_swellPanelPrototype = reashoot::platform::swell::createSwellPanelProbe(nullptr, callbacks);
   }
   if (!g_swellPanelPrototype) {
     showError("Unable to create the SWELL panel prototype.");
@@ -2638,6 +2716,7 @@ bool toggleSwellPanelPrototype() {
   } else {
     DockWindowAddEx(g_swellPanelPrototype, "ReaShoot SWELL Prototype", "reashoot_swell_prototype", true);
     g_swellPanelPrototypeDocked = true;
+    [recorder() startSwellPreviewPrototype];
     if (DockWindowActivate) {
       DockWindowActivate(g_swellPanelPrototype);
     }

@@ -29,6 +29,7 @@ LDFLAGS := -dynamiclib -undefined dynamic_lookup $(ARCH_FLAGS) \
   -framework Cocoa \
   -framework AVFoundation \
   -framework QuartzCore \
+  -framework VideoToolbox \
   -Wl,-rpath,@loader_path \
   -sectcreate __TEXT __info_plist Info.plist
 
