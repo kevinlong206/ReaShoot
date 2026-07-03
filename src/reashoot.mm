@@ -21,7 +21,10 @@
 #import "platform/mac/mac_h264_preview_renderer.h"
 #include "platform/mac/mac_helper_process.h"
 #include "platform/mac/mac_media_audio_reader.h"
+#import "platform/mac/mac_modal_prompts.h"
+#import "platform/mac/mac_playback_preview_renderer.h"
 #import "platform/mac/mac_preview_stream_client.h"
+#import "platform/mac/mac_reashoot_panel.h"
 #include "reaper/reaper_host.h"
 
 #define REAPERAPI_IMPLEMENT
@@ -1152,12 +1155,9 @@ void setVideoEnabled(bool enabled);
 } // namespace
 
 @interface ReaShootRecorder : NSObject
-@property(nonatomic, strong) AVPlayer *player;
-@property(nonatomic, strong) AVPlayerLayer *playerLayer;
-@property(nonatomic, copy) NSString *activePlaybackPath;
-@property(nonatomic, assign) CFTimeInterval lastPlaybackSeekHostTime;
 @property(nonatomic, strong) NSView *dockView;
 @property(nonatomic, strong) NSView *previewView;
+@property(nonatomic, strong) ReaShootMacDockPanel *dockPanel;
 @property(nonatomic, strong) NSWindow *floatingPreviewWindow;
 @property(nonatomic, strong) NSButton *iPhoneSetupButton;
 @property(nonatomic, strong) NSButton *iPhonePendingButton;
@@ -1188,6 +1188,7 @@ void setVideoEnabled(bool enabled);
 @property(nonatomic, strong) NSTextField *statusLabel;
 @property(nonatomic, strong) AVSampleBufferDisplayLayer *streamPreviewLayer;
 @property(nonatomic, strong) ReaShootMacH264PreviewRenderer *h264PreviewRenderer;
+@property(nonatomic, strong) ReaShootMacPlaybackPreviewRenderer *playbackPreviewRenderer;
 @property(nonatomic, strong) ReaShootMacPreviewStreamClient *previewStreamClient;
 @property(nonatomic, assign) BOOL iPhonePreviewProfileConfiguring;
 @property(nonatomic, assign) BOOL previewStreamStarting;
@@ -1573,38 +1574,6 @@ void setVideoEnabled(bool enabled);
   }];
 }
 
-- (NSDictionary<NSString *, id> *)choosePendingIPhoneRecordingAction:(NSArray<NSDictionary<NSString *, NSString *> *> *)recordings {
-  if (recordings.count == 0) {
-    return nil;
-  }
-
-  NSAlert *alert = [[NSAlert alloc] init];
-  alert.messageText = @"Pending iPhone Recordings";
-  alert.informativeText = @"Choose a pending iPhone recording to download and insert at the current edit cursor, or delete it from the phone.";
-  [alert addButtonWithTitle:@"Download"];
-  [alert addButtonWithTitle:@"Delete"];
-  [alert addButtonWithTitle:@"Cancel"];
-
-  NSPopUpButton *popup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 420, 26) pullsDown:NO];
-  for (NSDictionary<NSString *, NSString *> *recording in recordings) {
-    NSString *filename = recording[@"filename"] ?: recording[@"id"] ?: @"recording.mov";
-    NSString *byteCount = recording[@"byteCount"] ?: @"0";
-    [popup addItemWithTitle:[NSString stringWithFormat:@"%@ (%@ bytes)", filename, byteCount]];
-    popup.lastItem.representedObject = recording;
-  }
-  alert.accessoryView = popup;
-  NSModalResponse response = [alert runModal];
-  if (response == NSAlertThirdButtonReturn) {
-    return nil;
-  }
-  NSDictionary<NSString *, NSString *> *recording = popup.selectedItem.representedObject;
-  if (!recording) {
-    return nil;
-  }
-  NSString *action = response == NSAlertSecondButtonReturn ? @"delete" : @"download";
-  return @{@"action": action, @"recording": recording};
-}
-
 - (void)restoreIPhoneRecording {
   [self persistIPhoneSettings];
   if (g_iPhoneHost.empty() || g_iPhoneToken.empty()) {
@@ -1629,7 +1598,7 @@ void setVideoEnabled(bool enabled);
       return;
     }
 
-    NSDictionary<NSString *, id> *choice = [self choosePendingIPhoneRecordingAction:recordings];
+    NSDictionary<NSString *, id> *choice = [ReaShootMacModalPrompts choosePendingRecordingAction:recordings];
     if (!choice) {
       [self setStatus:@"Restore canceled"];
       return;
@@ -1638,12 +1607,7 @@ void setVideoEnabled(bool enabled);
     NSString *action = choice[@"action"];
     if ([action isEqualToString:@"delete"]) {
       NSString *filename = recording[@"filename"] ?: recording[@"id"] ?: @"the selected iPhone video";
-      NSAlert *confirm = [[NSAlert alloc] init];
-      confirm.messageText = @"Delete pending iPhone recording?";
-      confirm.informativeText = [NSString stringWithFormat:@"Delete %@ from the iPhone without downloading it?", filename];
-      [confirm addButtonWithTitle:@"Delete"];
-      [confirm addButtonWithTitle:@"Cancel"];
-      if ([confirm runModal] != NSAlertFirstButtonReturn) {
+      if (![ReaShootMacModalPrompts confirmDeleteRecordingNamed:filename]) {
         [self setStatus:@"Delete canceled"];
         return;
       }
@@ -1728,12 +1692,7 @@ void setVideoEnabled(bool enabled);
       return;
     }
 
-    NSAlert *confirm = [[NSAlert alloc] init];
-    confirm.messageText = @"Delete all pending iPhone recordings?";
-    confirm.informativeText = [NSString stringWithFormat:@"Delete %lu pending video(s) from the iPhone without downloading them?", (unsigned long)recordings.count];
-    [confirm addButtonWithTitle:@"Delete All"];
-    [confirm addButtonWithTitle:@"Cancel"];
-    if ([confirm runModal] != NSAlertFirstButtonReturn) {
+    if (![ReaShootMacModalPrompts confirmDeleteAllRecordingsCount:recordings.count]) {
       [self setStatus:@"Delete all canceled"];
       return;
     }
@@ -1744,28 +1703,12 @@ void setVideoEnabled(bool enabled);
 
 - (void)promptForStoppedIPhoneRecording:(NSDictionary<NSString *, NSString *> *)recording {
   NSString *filename = recording[@"filename"] ?: @"the stopped iPhone video";
-  NSAlert *alert = [[NSAlert alloc] init];
-  alert.messageText = @"Download iPhone video?";
-  alert.informativeText = [NSString stringWithFormat:@"Download %@ into the REAPER project, or delete it from the iPhone without downloading?", filename];
-  [alert addButtonWithTitle:@"Download"];
-  [alert addButtonWithTitle:@"Delete from iPhone"];
-  NSModalResponse response = [alert runModal];
-  if (response == NSAlertFirstButtonReturn) {
+  ReaShootStoppedRecordingChoice choice = [ReaShootMacModalPrompts chooseStoppedRecordingActionForFilename:filename];
+  if (choice == ReaShootStoppedRecordingChoiceDownload) {
     [self downloadStoppedIPhoneRecording:recording];
     return;
   }
-
-  NSAlert *confirm = [[NSAlert alloc] init];
-  confirm.alertStyle = NSAlertStyleWarning;
-  confirm.messageText = @"Delete iPhone recording?";
-  confirm.informativeText = [NSString stringWithFormat:@"This will permanently delete %@ from the iPhone without downloading it.", filename];
-  [confirm addButtonWithTitle:@"Delete"];
-  [confirm addButtonWithTitle:@"Cancel"];
-  if ([confirm runModal] == NSAlertFirstButtonReturn) {
-    [self deleteStoppedIPhoneRecording:recording];
-  } else {
-    [self downloadStoppedIPhoneRecording:recording];
-  }
+  [self deleteStoppedIPhoneRecording:recording];
 }
 
 - (BOOL)startRecordingToPath:(const std::string &)path
@@ -2051,100 +1994,17 @@ void setVideoEnabled(bool enabled);
 
 - (void)showIPhoneSetup:(id)sender {
   (void)sender;
-  if (!self.iPhoneSetupWindow) {
-    NSRect frame = NSMakeRect(0, 0, 520, 150);
-    self.iPhoneSetupWindow = [[NSWindow alloc] initWithContentRect:frame
-                                                         styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
-                                                           backing:NSBackingStoreBuffered
-                                                             defer:NO];
-    self.iPhoneSetupWindow.releasedWhenClosed = NO;
-    self.iPhoneSetupWindow.title = @"ReaShoot Setup";
-    NSView *content = self.iPhoneSetupWindow.contentView;
-
-    self.iPhoneSetupHostField = [[NSTextField alloc] initWithFrame:NSMakeRect(12, 112, 240, 22)];
-    self.iPhoneSetupHostField.placeholderString = @"iPhone host, e.g. kevin-long-iphone.local";
-    self.iPhoneSetupHostField.target = self;
-    self.iPhoneSetupHostField.action = @selector(iPhoneSettingsChanged:);
-    [content addSubview:self.iPhoneSetupHostField];
-
-    self.iPhoneSetupTokenField = [[NSTextField alloc] initWithFrame:NSMakeRect(268, 112, 240, 22)];
-    self.iPhoneSetupTokenField.placeholderString = @"Pairing token";
-    self.iPhoneSetupTokenField.target = self;
-    self.iPhoneSetupTokenField.action = @selector(iPhoneSettingsChanged:);
-    [content addSubview:self.iPhoneSetupTokenField];
-
-    self.iPhoneSetupPairingCodeField = [[NSTextField alloc] initWithFrame:NSMakeRect(12, 78, 220, 22)];
-    self.iPhoneSetupPairingCodeField.placeholderString = @"Pairing code from iPhone";
-    [content addSubview:self.iPhoneSetupPairingCodeField];
-
-    self.iPhoneSetupDiscoverButton = [[NSButton alloc] initWithFrame:NSMakeRect(244, 77, 82, 24)];
-    self.iPhoneSetupDiscoverButton.title = @"Discover";
-    self.iPhoneSetupDiscoverButton.bezelStyle = NSBezelStyleRounded;
-    self.iPhoneSetupDiscoverButton.target = self;
-    self.iPhoneSetupDiscoverButton.action = @selector(discoverIPhone:);
-    [content addSubview:self.iPhoneSetupDiscoverButton];
-
-    self.iPhoneSetupPairButton = [[NSButton alloc] initWithFrame:NSMakeRect(338, 77, 76, 24)];
-    self.iPhoneSetupPairButton.title = @"Pair";
-    self.iPhoneSetupPairButton.bezelStyle = NSBezelStyleRounded;
-    self.iPhoneSetupPairButton.target = self;
-    self.iPhoneSetupPairButton.action = @selector(pairIPhone:);
-    [content addSubview:self.iPhoneSetupPairButton];
-
-    self.iPhoneSetupTestButton = [[NSButton alloc] initWithFrame:NSMakeRect(426, 77, 76, 24)];
-    self.iPhoneSetupTestButton.title = @"Test";
-    self.iPhoneSetupTestButton.bezelStyle = NSBezelStyleRounded;
-    self.iPhoneSetupTestButton.target = self;
-    self.iPhoneSetupTestButton.action = @selector(testIPhoneConnection:);
-    [content addSubview:self.iPhoneSetupTestButton];
-
-    NSTextField *hint = [NSTextField labelWithString:@"Launch the iPhone app, Discover, enter pairing code, Pair, then Test."];
-    hint.frame = NSMakeRect(12, 24, 496, 36);
-    hint.lineBreakMode = NSLineBreakByWordWrapping;
-    [content addSubview:hint];
-  }
-  self.iPhoneSetupHostField.stringValue = [NSString stringWithUTF8String:g_iPhoneHost.c_str()];
-  self.iPhoneSetupTokenField.stringValue = [NSString stringWithUTF8String:g_iPhoneToken.c_str()];
-  [self.iPhoneSetupWindow makeKeyAndOrderFront:nil];
-}
-
-- (NSString *)displayTitleForRawFilterID:(NSString *)filterID {
-  NSString *name = [filterID hasPrefix:@"CI"] ? [filterID substringFromIndex:2] : filterID;
-  NSMutableString *title = [NSMutableString stringWithString:@"CI: "];
-  for (NSUInteger index = 0; index < name.length; ++index) {
-    unichar character = [name characterAtIndex:index];
-    if (index > 0) {
-      unichar previous = [name characterAtIndex:index - 1];
-      const BOOL previousIsLower = previous >= 'a' && previous <= 'z';
-      const BOOL previousIsDigit = previous >= '0' && previous <= '9';
-      const BOOL currentIsUpper = character >= 'A' && character <= 'Z';
-      const BOOL currentIsDigit = character >= '0' && character <= '9';
-      const BOOL currentIsLetter = (character >= 'A' && character <= 'Z') || (character >= 'a' && character <= 'z');
-      if ((previousIsLower && currentIsUpper) ||
-          (!previousIsDigit && currentIsDigit) ||
-          (previousIsDigit && currentIsLetter)) {
-        [title appendString:@" "];
-      }
-    }
-    [title appendFormat:@"%C", character];
-  }
-  return title;
-}
-
-- (void)addRawCoreImageLookItems {
-  NSArray<NSString *> *rawFilterIDs = @[
-    @"CIThermal", @"CIXRay", @"CIFalseColor", @"CIColorInvert", @"CIColorPosterize",
-    @"CIColorThreshold", @"CIColorThresholdOtsu", @"CIVibrance", @"CIHueAdjust", @"CITemperatureAndTint",
-    @"CIGloom", @"CISobelGradients", @"CIGaborGradients", @"CIMorphologyGradient", @"CIEdges",
-    @"CIEdgeWork", @"CILineOverlay", @"CICannyEdgeDetector", @"CICrystallize", @"CIHexagonalPixellate",
-    @"CIPixellate", @"CIPointillize", @"CIDotScreen", @"CICircularScreen", @"CILineScreen",
-    @"CIHatchedScreen", @"CICMYKHalftone", @"CIKaleidoscope", @"CITriangleKaleidoscope", @"CITwirlDistortion",
-    @"CIVortexDistortion", @"CILightTunnel", @"CIGlassDistortion", @"CIDisplacementDistortion"
-  ];
-  for (NSString *filterID in rawFilterIDs) {
-    [self.iPhoneLookPopup addItemWithTitle:[self displayTitleForRawFilterID:filterID]];
-    self.iPhoneLookPopup.lastItem.representedObject = [@"ci:" stringByAppendingString:filterID];
-  }
+  [self ensureDockView];
+  [self.dockPanel showSetupWindowWithTarget:self
+                                       host:[NSString stringWithUTF8String:g_iPhoneHost.c_str()]
+                                      token:[NSString stringWithUTF8String:g_iPhoneToken.c_str()]];
+  self.iPhoneSetupWindow = self.dockPanel.iPhoneSetupWindow;
+  self.iPhoneSetupHostField = self.dockPanel.iPhoneSetupHostField;
+  self.iPhoneSetupTokenField = self.dockPanel.iPhoneSetupTokenField;
+  self.iPhoneSetupPairingCodeField = self.dockPanel.iPhoneSetupPairingCodeField;
+  self.iPhoneSetupDiscoverButton = self.dockPanel.iPhoneSetupDiscoverButton;
+  self.iPhoneSetupPairButton = self.dockPanel.iPhoneSetupPairButton;
+  self.iPhoneSetupTestButton = self.dockPanel.iPhoneSetupTestButton;
 }
 
 - (void)selectRelativeIPhoneLook:(NSInteger)offset {
@@ -2176,15 +2036,19 @@ void setVideoEnabled(bool enabled);
 
 - (void)ensureDockView {
   if (!self.dockView) {
-    NSRect frame = NSMakeRect(0, 0, 640, 480);
-    self.dockView = [[NSView alloc] initWithFrame:frame];
-    self.dockView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-    self.dockView.wantsLayer = YES;
-
-    self.previewView = [[NSView alloc] initWithFrame:NSMakeRect(0, 130, frame.size.width, frame.size.height - 130)];
-    self.previewView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-    self.previewView.wantsLayer = YES;
-    [self.dockView addSubview:self.previewView];
+    self.dockPanel = [[ReaShootMacDockPanel alloc] initWithTarget:self
+                                                            host:[NSString stringWithUTF8String:g_iPhoneHost.c_str()]
+                                                           token:[NSString stringWithUTF8String:g_iPhoneToken.c_str()]
+                                                      resolution:[NSString stringWithUTF8String:g_iPhoneResolution.c_str()]
+                                                             fps:[NSString stringWithUTF8String:g_iPhoneFPS.c_str()]
+                                                     orientation:[NSString stringWithUTF8String:g_iPhoneOrientation.c_str()]
+                                                          aspect:[NSString stringWithUTF8String:g_iPhoneAspect.c_str()]
+                                                            lens:[NSString stringWithUTF8String:g_iPhoneLens.c_str()]
+                                                            zoom:[NSString stringWithUTF8String:g_iPhoneZoom.c_str()]
+                                                            look:[NSString stringWithUTF8String:g_iPhoneLook.c_str()]
+                                                      statusText:[NSString stringWithUTF8String:followStatusText().c_str()]];
+    self.dockView = self.dockPanel.dockView;
+    self.previewView = self.dockPanel.previewView;
 
     self.streamPreviewLayer = [AVSampleBufferDisplayLayer layer];
     self.streamPreviewLayer.videoGravity = AVLayerVideoGravityResizeAspect;
@@ -2193,245 +2057,29 @@ void setVideoEnabled(bool enabled);
     self.streamPreviewLayer.hidden = YES;
     [self.previewView.layer addSublayer:self.streamPreviewLayer];
     self.h264PreviewRenderer = [[ReaShootMacH264PreviewRenderer alloc] initWithLayer:self.streamPreviewLayer];
+    self.playbackPreviewRenderer = [[ReaShootMacPlaybackPreviewRenderer alloc] initWithContainerView:self.previewView];
     self.previewStreamClient = [[ReaShootMacPreviewStreamClient alloc] init];
 
-    self.iPhoneSetupButton = [[NSButton alloc] initWithFrame:NSMakeRect(frame.size.width - 112, 101, 100, 24)];
-    self.iPhoneSetupButton.title = @"iPhone Setup";
-    self.iPhoneSetupButton.bezelStyle = NSBezelStyleRounded;
-    self.iPhoneSetupButton.autoresizingMask = NSViewMinXMargin | NSViewMaxYMargin;
-    self.iPhoneSetupButton.target = self;
-    self.iPhoneSetupButton.action = @selector(showIPhoneSetup:);
-    [self.dockView addSubview:self.iPhoneSetupButton];
-
-    self.iPhoneDeleteAllButton = [[NSButton alloc] initWithFrame:NSMakeRect(frame.size.width - 216, 101, 96, 24)];
-    self.iPhoneDeleteAllButton.title = @"Delete All";
-    self.iPhoneDeleteAllButton.bezelStyle = NSBezelStyleRounded;
-    self.iPhoneDeleteAllButton.autoresizingMask = NSViewMinXMargin | NSViewMaxYMargin;
-    self.iPhoneDeleteAllButton.target = self;
-    self.iPhoneDeleteAllButton.action = @selector(deleteAllPendingIPhoneRecordings);
-    [self.dockView addSubview:self.iPhoneDeleteAllButton];
-
-    self.iPhonePendingButton = [[NSButton alloc] initWithFrame:NSMakeRect(frame.size.width - 328, 101, 104, 24)];
-    self.iPhonePendingButton.title = @"Pending...";
-    self.iPhonePendingButton.bezelStyle = NSBezelStyleRounded;
-    self.iPhonePendingButton.autoresizingMask = NSViewMinXMargin | NSViewMaxYMargin;
-    self.iPhonePendingButton.target = self;
-    self.iPhonePendingButton.action = @selector(restoreIPhoneRecording);
-    [self.dockView addSubview:self.iPhonePendingButton];
-
-    self.iPhoneHostField = [[NSTextField alloc] initWithFrame:NSMakeRect(12, 127, (frame.size.width - 36) / 2.0, 22)];
-    self.iPhoneHostField.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
-    self.iPhoneHostField.placeholderString = @"iPhone host, e.g. kevin-long-iphone.local";
-    self.iPhoneHostField.stringValue = [NSString stringWithUTF8String:g_iPhoneHost.c_str()];
-    self.iPhoneHostField.target = self;
-    self.iPhoneHostField.action = @selector(iPhoneSettingsChanged:);
-    self.iPhoneHostField.hidden = YES;
-    [self.dockView addSubview:self.iPhoneHostField];
-
-    self.iPhoneTokenField = [[NSTextField alloc] initWithFrame:NSMakeRect(NSMaxX(self.iPhoneHostField.frame) + 12, 127, (frame.size.width - 36) / 2.0, 22)];
-    self.iPhoneTokenField.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
-    self.iPhoneTokenField.placeholderString = @"Pairing token";
-    self.iPhoneTokenField.stringValue = [NSString stringWithUTF8String:g_iPhoneToken.c_str()];
-    self.iPhoneTokenField.target = self;
-    self.iPhoneTokenField.action = @selector(iPhoneSettingsChanged:);
-    self.iPhoneTokenField.hidden = YES;
-    [self.dockView addSubview:self.iPhoneTokenField];
-
-    const CGFloat buttonWidth = 88.0;
-    self.iPhonePairingCodeField = [[NSTextField alloc] initWithFrame:NSMakeRect(12, 101, frame.size.width - 24 - (buttonWidth * 3.0) - 18.0, 22)];
-    self.iPhonePairingCodeField.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
-    self.iPhonePairingCodeField.placeholderString = @"Pairing code from iPhone";
-    self.iPhonePairingCodeField.hidden = YES;
-    [self.dockView addSubview:self.iPhonePairingCodeField];
-
-    CGFloat buttonX = NSMaxX(self.iPhonePairingCodeField.frame) + 6.0;
-    self.iPhoneDiscoverButton = [[NSButton alloc] initWithFrame:NSMakeRect(buttonX, 101, buttonWidth, 22)];
-    self.iPhoneDiscoverButton.title = @"Discover";
-    self.iPhoneDiscoverButton.bezelStyle = NSBezelStyleRounded;
-    self.iPhoneDiscoverButton.target = self;
-    self.iPhoneDiscoverButton.action = @selector(discoverIPhone:);
-    self.iPhoneDiscoverButton.hidden = YES;
-    [self.dockView addSubview:self.iPhoneDiscoverButton];
-
-    buttonX += buttonWidth + 6.0;
-    self.iPhonePairButton = [[NSButton alloc] initWithFrame:NSMakeRect(buttonX, 101, buttonWidth, 22)];
-    self.iPhonePairButton.title = @"Pair";
-    self.iPhonePairButton.bezelStyle = NSBezelStyleRounded;
-    self.iPhonePairButton.target = self;
-    self.iPhonePairButton.action = @selector(pairIPhone:);
-    self.iPhonePairButton.hidden = YES;
-    [self.dockView addSubview:self.iPhonePairButton];
-
-    buttonX += buttonWidth + 6.0;
-    self.iPhoneTestButton = [[NSButton alloc] initWithFrame:NSMakeRect(buttonX, 101, buttonWidth, 22)];
-    self.iPhoneTestButton.title = @"Test";
-    self.iPhoneTestButton.bezelStyle = NSBezelStyleRounded;
-    self.iPhoneTestButton.target = self;
-    self.iPhoneTestButton.action = @selector(testIPhoneConnection:);
-    self.iPhoneTestButton.hidden = YES;
-    [self.dockView addSubview:self.iPhoneTestButton];
-
-    self.iPhoneDiscoverButton.autoresizingMask = NSViewMinXMargin | NSViewMaxYMargin;
-    self.iPhonePairButton.autoresizingMask = NSViewMinXMargin | NSViewMaxYMargin;
-    self.iPhoneTestButton.autoresizingMask = NSViewMinXMargin | NSViewMaxYMargin;
-
-    const CGFloat popupWidth = (frame.size.width - 64.0) / 6.0;
-    self.iPhoneResolutionPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(12, 75, popupWidth, 24) pullsDown:NO];
-    [self.iPhoneResolutionPopup addItemsWithTitles:@[ @"4K", @"1080p", @"720p" ]];
-    [self.iPhoneResolutionPopup selectItemWithTitle:[NSString stringWithUTF8String:g_iPhoneResolution.c_str()]];
-    self.iPhoneResolutionPopup.target = self;
-    self.iPhoneResolutionPopup.action = @selector(profileSelectionChanged:);
-    [self.dockView addSubview:self.iPhoneResolutionPopup];
-
-    self.iPhoneFPSPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(NSMaxX(self.iPhoneResolutionPopup.frame) + 8, 75, popupWidth, 24) pullsDown:NO];
-    [self.iPhoneFPSPopup addItemsWithTitles:@[ @"24", @"30", @"60" ]];
-    [self.iPhoneFPSPopup selectItemWithTitle:[NSString stringWithUTF8String:g_iPhoneFPS.c_str()]];
-    self.iPhoneFPSPopup.target = self;
-    self.iPhoneFPSPopup.action = @selector(profileSelectionChanged:);
-    [self.dockView addSubview:self.iPhoneFPSPopup];
-
-    self.iPhoneOrientationPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(NSMaxX(self.iPhoneFPSPopup.frame) + 8, 75, popupWidth, 24) pullsDown:NO];
-    [self.iPhoneOrientationPopup addItemWithTitle:@"Portrait"];
-    self.iPhoneOrientationPopup.lastItem.representedObject = @"portrait";
-    [self.iPhoneOrientationPopup addItemWithTitle:@"Landscape R"];
-    self.iPhoneOrientationPopup.lastItem.representedObject = @"landscapeRight";
-    [self.iPhoneOrientationPopup addItemWithTitle:@"Landscape L"];
-    self.iPhoneOrientationPopup.lastItem.representedObject = @"landscapeLeft";
-    NSInteger orientationIndex = [self.iPhoneOrientationPopup indexOfItemWithRepresentedObject:[NSString stringWithUTF8String:g_iPhoneOrientation.c_str()]];
-    if (orientationIndex >= 0) {
-      [self.iPhoneOrientationPopup selectItemAtIndex:orientationIndex];
-    }
-    self.iPhoneOrientationPopup.target = self;
-    self.iPhoneOrientationPopup.action = @selector(profileSelectionChanged:);
-    [self.dockView addSubview:self.iPhoneOrientationPopup];
-
-    self.iPhoneAspectPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(NSMaxX(self.iPhoneOrientationPopup.frame) + 8, 75, popupWidth, 24) pullsDown:NO];
-    [self.iPhoneAspectPopup addItemsWithTitles:@[ @"9:16", @"16:9", @"1:1", @"4:5" ]];
-    [self.iPhoneAspectPopup selectItemWithTitle:[NSString stringWithUTF8String:g_iPhoneAspect.c_str()]];
-    self.iPhoneAspectPopup.target = self;
-    self.iPhoneAspectPopup.action = @selector(profileSelectionChanged:);
-    [self.dockView addSubview:self.iPhoneAspectPopup];
-
-    self.iPhoneLensPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(NSMaxX(self.iPhoneAspectPopup.frame) + 8, 75, popupWidth, 24) pullsDown:NO];
-    [self.iPhoneLensPopup addItemWithTitle:@"Wide"];
-    self.iPhoneLensPopup.lastItem.representedObject = @"wide";
-    [self.iPhoneLensPopup addItemWithTitle:@"Ultra Wide"];
-    self.iPhoneLensPopup.lastItem.representedObject = @"ultrawide";
-    [self.iPhoneLensPopup addItemWithTitle:@"Tele"];
-    self.iPhoneLensPopup.lastItem.representedObject = @"telephoto";
-    [self.iPhoneLensPopup addItemWithTitle:@"Auto"];
-    self.iPhoneLensPopup.lastItem.representedObject = @"auto";
-    NSInteger lensIndex = [self.iPhoneLensPopup indexOfItemWithRepresentedObject:[NSString stringWithUTF8String:g_iPhoneLens.c_str()]];
-    if (lensIndex >= 0) {
-      [self.iPhoneLensPopup selectItemAtIndex:lensIndex];
-    }
-    self.iPhoneLensPopup.target = self;
-    self.iPhoneLensPopup.action = @selector(profileSelectionChanged:);
-    [self.dockView addSubview:self.iPhoneLensPopup];
-
-    self.iPhoneZoomPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(NSMaxX(self.iPhoneLensPopup.frame) + 8, 75, popupWidth, 24) pullsDown:NO];
-    [self.iPhoneZoomPopup addItemWithTitle:@"0.5x"];
-    self.iPhoneZoomPopup.lastItem.representedObject = @"0.5";
-    [self.iPhoneZoomPopup addItemWithTitle:@"1x"];
-    self.iPhoneZoomPopup.lastItem.representedObject = @"1.0";
-    [self.iPhoneZoomPopup addItemWithTitle:@"2x"];
-    self.iPhoneZoomPopup.lastItem.representedObject = @"2.0";
-    [self.iPhoneZoomPopup addItemWithTitle:@"3x"];
-    self.iPhoneZoomPopup.lastItem.representedObject = @"3.0";
-    NSInteger zoomIndex = [self.iPhoneZoomPopup indexOfItemWithRepresentedObject:[NSString stringWithUTF8String:g_iPhoneZoom.c_str()]];
-    if (zoomIndex >= 0) {
-      [self.iPhoneZoomPopup selectItemAtIndex:zoomIndex];
-    }
-    self.iPhoneZoomPopup.target = self;
-    self.iPhoneZoomPopup.action = @selector(profileSelectionChanged:);
-    [self.dockView addSubview:self.iPhoneZoomPopup];
-
-    self.iPhonePreviousLookButton = [[NSButton alloc] initWithFrame:NSMakeRect(12, 49, 52, 24)];
-    self.iPhonePreviousLookButton.title = @"Prev";
-    self.iPhonePreviousLookButton.bezelStyle = NSBezelStyleRounded;
-    self.iPhonePreviousLookButton.target = self;
-    self.iPhonePreviousLookButton.action = @selector(previousIPhoneLook:);
-    [self.dockView addSubview:self.iPhonePreviousLookButton];
-
-    self.iPhoneLookPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(70, 49, frame.size.width - 140, 24) pullsDown:NO];
-    [self.iPhoneLookPopup addItemWithTitle:@"Natural"];
-    self.iPhoneLookPopup.lastItem.representedObject = @"natural";
-    [self.iPhoneLookPopup addItemWithTitle:@"Warm Vintage"];
-    self.iPhoneLookPopup.lastItem.representedObject = @"warmVintage";
-    [self.iPhoneLookPopup addItemWithTitle:@"Cool Blue"];
-    self.iPhoneLookPopup.lastItem.representedObject = @"coolBlue";
-    [self.iPhoneLookPopup addItemWithTitle:@"High Contrast B&W"];
-    self.iPhoneLookPopup.lastItem.representedObject = @"highContrastBW";
-    [self.iPhoneLookPopup addItemWithTitle:@"Faded Film"];
-    self.iPhoneLookPopup.lastItem.representedObject = @"fadedFilm";
-    [self.iPhoneLookPopup addItemWithTitle:@"Dream Glow"];
-    self.iPhoneLookPopup.lastItem.representedObject = @"dreamGlow";
-    [self.iPhoneLookPopup addItemWithTitle:@"Noir"];
-    self.iPhoneLookPopup.lastItem.representedObject = @"noir";
-    [self.iPhoneLookPopup addItemWithTitle:@"Saturated Pop"];
-    self.iPhoneLookPopup.lastItem.representedObject = @"saturatedPop";
-    [self.iPhoneLookPopup addItemWithTitle:@"Bleach Bypass"];
-    self.iPhoneLookPopup.lastItem.representedObject = @"bleachBypass";
-    [self.iPhoneLookPopup addItemWithTitle:@"Sepia"];
-    self.iPhoneLookPopup.lastItem.representedObject = @"sepia";
-    [self.iPhoneLookPopup addItemWithTitle:@"Instant Photo"];
-    self.iPhoneLookPopup.lastItem.representedObject = @"instantPhoto";
-    [self.iPhoneLookPopup addItemWithTitle:@"Chrome"];
-    self.iPhoneLookPopup.lastItem.representedObject = @"chrome";
-    [self.iPhoneLookPopup addItemWithTitle:@"Tonal"];
-    self.iPhoneLookPopup.lastItem.representedObject = @"tonal";
-    [self.iPhoneLookPopup addItemWithTitle:@"Silvertone"];
-    self.iPhoneLookPopup.lastItem.representedObject = @"silvertone";
-    [self.iPhoneLookPopup addItemWithTitle:@"Dramatic Warm"];
-    self.iPhoneLookPopup.lastItem.representedObject = @"dramaticWarm";
-    [self.iPhoneLookPopup addItemWithTitle:@"Dramatic Cool"];
-    self.iPhoneLookPopup.lastItem.representedObject = @"dramaticCool";
-    [self.iPhoneLookPopup addItemWithTitle:@"Soft Matte"];
-    self.iPhoneLookPopup.lastItem.representedObject = @"softMatte";
-    [self.iPhoneLookPopup addItemWithTitle:@"Comic Book"];
-    self.iPhoneLookPopup.lastItem.representedObject = @"comicBook";
-    [self.iPhoneLookPopup addItemWithTitle:@"VHS"];
-    self.iPhoneLookPopup.lastItem.representedObject = @"vhs";
-    [self.iPhoneLookPopup addItemWithTitle:@"Music Video Pop"];
-    self.iPhoneLookPopup.lastItem.representedObject = @"musicVideoPop";
-    [self addRawCoreImageLookItems];
-    NSInteger lookIndex = [self.iPhoneLookPopup indexOfItemWithRepresentedObject:[NSString stringWithUTF8String:g_iPhoneLook.c_str()]];
-    if (lookIndex >= 0) {
-      [self.iPhoneLookPopup selectItemAtIndex:lookIndex];
-    } else {
-      [self.iPhoneLookPopup selectItemAtIndex:0];
-      g_iPhoneLook = "natural";
-    }
-    self.iPhoneLookPopup.target = self;
-    self.iPhoneLookPopup.action = @selector(profileSelectionChanged:);
-    [self.dockView addSubview:self.iPhoneLookPopup];
-
-    self.iPhoneNextLookButton = [[NSButton alloc] initWithFrame:NSMakeRect(frame.size.width - 64, 49, 52, 24)];
-    self.iPhoneNextLookButton.title = @"Next";
-    self.iPhoneNextLookButton.bezelStyle = NSBezelStyleRounded;
-    self.iPhoneNextLookButton.target = self;
-    self.iPhoneNextLookButton.action = @selector(nextIPhoneLook:);
-    [self.dockView addSubview:self.iPhoneNextLookButton];
-
-    self.iPhoneResolutionPopup.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
-    self.iPhoneFPSPopup.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
-    self.iPhoneOrientationPopup.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
-    self.iPhoneAspectPopup.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
-    self.iPhoneLensPopup.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
-    self.iPhoneZoomPopup.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
-    self.iPhoneLookPopup.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
-    self.iPhonePreviousLookButton.autoresizingMask = NSViewMaxXMargin | NSViewMaxYMargin;
-    self.iPhoneNextLookButton.autoresizingMask = NSViewMinXMargin | NSViewMaxYMargin;
-
-    self.formatLabel = [NSTextField labelWithString:@"Format: unavailable"];
-    self.formatLabel.frame = NSMakeRect(12, 29, frame.size.width - 24, 18);
-    self.formatLabel.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
-    [self.dockView addSubview:self.formatLabel];
-
-    self.statusLabel = [NSTextField labelWithString:[NSString stringWithUTF8String:followStatusText().c_str()]];
-    self.statusLabel.frame = NSMakeRect(12, 9, frame.size.width - 24, 18);
-    self.statusLabel.autoresizingMask = NSViewWidthSizable | NSViewMaxYMargin;
-    [self.dockView addSubview:self.statusLabel];
+    self.iPhoneSetupButton = self.dockPanel.iPhoneSetupButton;
+    self.iPhonePendingButton = self.dockPanel.iPhonePendingButton;
+    self.iPhoneDeleteAllButton = self.dockPanel.iPhoneDeleteAllButton;
+    self.iPhoneHostField = self.dockPanel.iPhoneHostField;
+    self.iPhoneTokenField = self.dockPanel.iPhoneTokenField;
+    self.iPhonePairingCodeField = self.dockPanel.iPhonePairingCodeField;
+    self.iPhoneDiscoverButton = self.dockPanel.iPhoneDiscoverButton;
+    self.iPhonePairButton = self.dockPanel.iPhonePairButton;
+    self.iPhoneTestButton = self.dockPanel.iPhoneTestButton;
+    self.iPhoneResolutionPopup = self.dockPanel.iPhoneResolutionPopup;
+    self.iPhoneFPSPopup = self.dockPanel.iPhoneFPSPopup;
+    self.iPhoneOrientationPopup = self.dockPanel.iPhoneOrientationPopup;
+    self.iPhoneAspectPopup = self.dockPanel.iPhoneAspectPopup;
+    self.iPhoneLensPopup = self.dockPanel.iPhoneLensPopup;
+    self.iPhoneZoomPopup = self.dockPanel.iPhoneZoomPopup;
+    self.iPhoneLookPopup = self.dockPanel.iPhoneLookPopup;
+    self.iPhonePreviousLookButton = self.dockPanel.iPhonePreviousLookButton;
+    self.iPhoneNextLookButton = self.dockPanel.iPhoneNextLookButton;
+    self.formatLabel = self.dockPanel.formatLabel;
+    self.statusLabel = self.dockPanel.statusLabel;
     [self updateCaptureFormatLabel];
   }
 }
@@ -2572,8 +2220,7 @@ void setVideoEnabled(bool enabled);
 
 - (void)showLivePreview {
   self.showingPlayback = NO;
-  [self.player pause];
-  self.playerLayer.hidden = YES;
+  [self.playbackPreviewRenderer hide];
   [self startRemotePreview];
 }
 
@@ -2582,44 +2229,12 @@ void setVideoEnabled(bool enabled);
                    sourceOffset:(double)sourceOffset
                 projectPosition:(double)projectPosition {
   [self ensureDockView];
-  NSString *playbackPath = [NSString stringWithUTF8String:path.c_str()];
-  const BOOL switchedSource = !self.player || ![self.activePlaybackPath isEqualToString:playbackPath];
-  const BOOL startingPlayback = !self.showingPlayback;
-  if (switchedSource) {
-    self.activePlaybackPath = playbackPath;
-    self.player = [AVPlayer playerWithURL:[NSURL fileURLWithPath:playbackPath]];
-    self.player.automaticallyWaitsToMinimizeStalling = NO;
-    if (!self.playerLayer) {
-      self.playerLayer = [AVPlayerLayer playerLayerWithPlayer:self.player];
-      self.playerLayer.videoGravity = AVLayerVideoGravityResizeAspect;
-      self.playerLayer.frame = self.previewView.bounds;
-      self.playerLayer.autoresizingMask = kCALayerWidthSizable | kCALayerHeightSizable;
-      [self.previewView.layer addSublayer:self.playerLayer];
-    } else {
-      self.playerLayer.player = self.player;
-    }
-    self.player.muted = YES;
-    self.player.volume = 0.0f;
-  }
-
   self.showingPlayback = YES;
   [self stopRemotePreview];
-  self.playerLayer.hidden = NO;
-
-  const double sourceTime = projectPosition - itemStart + sourceOffset;
-  CMTime targetTime = CMTimeMakeWithSeconds(sourceTime > 0.0 ? sourceTime : 0.0, 600);
-  const double currentTime = CMTimeGetSeconds(self.player.currentTime);
-  const CFTimeInterval now = CACurrentMediaTime();
-  const bool forceSeek = switchedSource || startingPlayback || !std::isfinite(currentTime);
-  const bool drifted = std::isfinite(currentTime) && std::fabs(currentTime - sourceTime) > 0.50;
-  if (forceSeek || (drifted && now - self.lastPlaybackSeekHostTime > 1.0)) {
-    const CMTime tolerance = forceSeek ? kCMTimeZero : CMTimeMakeWithSeconds(0.05, 600);
-    [self.player seekToTime:targetTime toleranceBefore:tolerance toleranceAfter:tolerance];
-    self.lastPlaybackSeekHostTime = now;
-  }
-  if (self.player.rate != 1.0f) {
-    [self.player play];
-  }
+  [self.playbackPreviewRenderer showPath:[NSString stringWithUTF8String:path.c_str()]
+                               itemStart:itemStart
+                            sourceOffset:sourceOffset
+                         projectPosition:projectPosition];
   [self setStatus:@"Playback"];
 }
 

@@ -12,8 +12,10 @@ MAC_HEADERS := $(wildcard src/platform/mac/*.h)
 REAPER_SRC := $(wildcard src/reaper/*.cpp)
 REAPER_HEADERS := $(wildcard src/reaper/*.h)
 WIN32_STUB_SRC := src/platform/win32/win32_portability_stub.cpp
+SWELL_PROBE_SRC := src/platform/swell/swell_panel_probe.cpp
 CORE_TEST_TARGET := $(BUILD_DIR)/core_tests
 WIN32_STUB_TARGET := $(BUILD_DIR)/win32_portability_stub.o
+SWELL_PROBE_TARGET := $(BUILD_DIR)/swell_panel_probe.o
 HELPER_SRC := $(shell find $(HELPER_PACKAGE) -type f -name '*.swift' -o -name 'Package.swift')
 SWIFT_GIT_ENV := GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=all
 
@@ -56,6 +58,7 @@ check:
 	$(CXX) $(CORE_TEST_CXXFLAGS) tests/core_tests.cpp $(CORE_SRC) -o $(CORE_TEST_TARGET)
 	$(CORE_TEST_TARGET)
 	$(CXX) $(CORE_TEST_CXXFLAGS) -c $(WIN32_STUB_SRC) -o $(WIN32_STUB_TARGET)
+	$(CXX) $(CORE_TEST_CXXFLAGS) -isystem $(SDK_DIR) -c $(SWELL_PROBE_SRC) -o $(SWELL_PROBE_TARGET)
 	./scripts/check_mirrored_swift.sh
 	$(SWIFT_GIT_ENV) swift test --package-path iphone
 	$(SWIFT_GIT_ENV) swift build --package-path helper

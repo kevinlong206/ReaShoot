@@ -4,6 +4,7 @@
 #include "../src/core/helper_output_parser.h"
 #include "../src/core/path_utils.h"
 #include "../src/core/remote_camera.h"
+#include "../src/core/ui_interfaces.h"
 
 #include <cassert>
 #include <cmath>
