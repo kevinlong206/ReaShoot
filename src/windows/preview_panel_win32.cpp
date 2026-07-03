@@ -255,7 +255,7 @@ void Win32PreviewPanel::createControls() {
   makeLabel(window_, instance_, L"iPhone host:", kIdHostLabel);
   hostEdit_ = makeEdit(window_, instance_, kIdHostEdit);
 
-  makeLabel(window_, instance_, L"Pairing code:", kIdCodeLabel);
+  makeLabel(window_, instance_, L"Pairing PIN:", kIdCodeLabel);
   codeEdit_ = makeEdit(window_, instance_, kIdCodeEdit);
   discoverButton_ = makeButton(window_, instance_, L"Discover", kIdDiscoverButton);
   pairButton_ = makeButton(window_, instance_, L"Pair", kIdPairButton);

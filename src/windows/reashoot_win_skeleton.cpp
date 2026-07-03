@@ -178,28 +178,6 @@ void report(const std::string &message) {
   }
 }
 
-// Runs a helper command with the persisted connection and reports its output.
-// Returns the ProcessResult so callers can post-process stdout (e.g. pairing).
-reashoot::ProcessResult runCommand(const std::string &command,
-                                   const reashoot::PluginSettings &settings,
-                                   const std::vector<std::wstring> &extraArguments) {
-  const reashoot::HelperConnection connection =
-      reashoot::makeConnection(settings.host, settings.controlPort, settings.httpPort);
-  const std::wstring helper = helperExecutablePath();
-
-  logger().log("running helper command: " + command);
-  reashoot::ProcessResult result = reashoot::runVideoSyncCommand(helper, command, connection, extraArguments);
-
-  if (!result.standardOutput.empty()) {
-    report(result.standardOutput);
-  }
-  if (!result.standardError.empty()) {
-    report(std::string("helper stderr: ") + result.standardError);
-  }
-  logger().log("helper command " + command + " exited " + std::to_string(result.exitCode));
-  return result;
-}
-
 // ---- REAPER media insertion + audio alignment -----------------------------
 
 constexpr const char *kVideoTrackName = "ReaShoot";
@@ -475,10 +453,23 @@ std::wstring downloadDirectory() {
 
 constexpr int kRecordBit = 4;
 
+// Identifies which panel/action helper command produced a result, so the
+// main-thread timer can perform the right REAPER-side follow-up (token save,
+// media insert, status text) after the worker finishes the network round-trip.
+enum class HelperAction { Pair, Test, Start, Stop };
+
+struct HelperCommandResult {
+  HelperAction action;
+  int exitCode = 0;
+  std::string standardOutput;
+  std::string standardError;
+};
+
 struct FollowState {
   std::mutex mutex;
-  std::vector<std::string> completedPaths; // guarded by mutex
-  std::vector<std::thread> workers;        // guarded by mutex
+  std::vector<std::string> completedPaths;              // guarded by mutex
+  std::vector<HelperCommandResult> completedCommands;   // guarded by mutex
+  std::vector<std::thread> workers;                     // guarded by mutex
   bool recording = false;                  // main thread only
   bool enabled = false;                    // main thread only
 };
@@ -518,15 +509,92 @@ void launchStopWorker(const reashoot::PluginSettings &settings, const std::wstri
   });
 }
 
+// Runs a helper command on a worker thread (never blocking the REAPER UI thread)
+// and hands the result back to the main-thread timer via completedCommands. This
+// mirrors the macOS runVideoSyncCommandAsync flow; a blocking network round-trip
+// here would otherwise freeze REAPER (e.g. a bad host stalls the TCP connect).
+void launchHelperCommand(HelperAction action, const std::string &command,
+                         const reashoot::PluginSettings &settings,
+                         const std::vector<std::wstring> &extraArguments) {
+  std::lock_guard<std::mutex> lock(g_follow.mutex);
+  g_follow.workers.emplace_back([action, command, settings, extraArguments]() {
+    const reashoot::ProcessResult result = runCommandSilent(command, settings, extraArguments);
+    HelperCommandResult outcome;
+    outcome.action = action;
+    outcome.exitCode = result.exitCode;
+    outcome.standardOutput = result.standardOutput;
+    outcome.standardError = result.standardError;
+    std::lock_guard<std::mutex> lock(g_follow.mutex);
+    g_follow.completedCommands.push_back(std::move(outcome));
+  });
+}
+
+// Applies the REAPER-side follow-up for a finished helper command. Runs on the
+// main thread (from onTimer) so REAPER API calls (ExtState, media insert) and
+// status reporting are safe.
+std::string trimWhitespace(const std::string &value);
+
+void dispatchHelperResult(const HelperCommandResult &result) {
+  const std::string trimmedOut = trimWhitespace(result.standardOutput);
+  if (!result.standardError.empty()) {
+    report("ReaShoot helper: " + trimWhitespace(result.standardError));
+  }
+
+  switch (result.action) {
+  case HelperAction::Pair:
+    if (result.exitCode != 0) {
+      report("ReaShoot: pairing failed. Check the host and pairing PIN, then try again.");
+      return;
+    }
+    if (const auto token = reashoot::parsePairedToken(result.standardOutput)) {
+      ReaperExtStateStore store;
+      reashoot::PluginSettings settings = reashoot::loadSettings(store);
+      settings.token = *token;
+      reashoot::saveSettings(store, settings);
+      report("ReaShoot: paired and saved token.");
+    } else {
+      report("ReaShoot: pairing succeeded but no token was returned.");
+    }
+    return;
+  case HelperAction::Test:
+    if (result.exitCode != 0) {
+      report("ReaShoot: iPhone connection failed. Check the host address and pairing.");
+    } else {
+      report(trimmedOut.empty() ? "ReaShoot: iPhone connection OK." : ("ReaShoot: " + trimmedOut));
+    }
+    return;
+  case HelperAction::Start:
+    report(result.exitCode == 0 ? "ReaShoot: iPhone recording started."
+                                : "ReaShoot: failed to start the iPhone recording.");
+    return;
+  case HelperAction::Stop:
+    if (result.exitCode != 0) {
+      report("ReaShoot: failed to stop the iPhone recording.");
+      return;
+    }
+    if (const auto path = reashoot::parseDownloadedPath(result.standardOutput)) {
+      insertAndAlign(*path);
+    } else {
+      report("ReaShoot: stop completed but no downloaded file was reported.");
+    }
+    return;
+  }
+}
+
 void onTimer() {
   // Insert any downloads finished by worker threads (main thread => REAPER-safe).
   std::vector<std::string> ready;
+  std::vector<HelperCommandResult> commandResults;
   {
     std::lock_guard<std::mutex> lock(g_follow.mutex);
     ready.swap(g_follow.completedPaths);
+    commandResults.swap(g_follow.completedCommands);
   }
   for (const std::string &path : ready) {
     insertAndAlign(path);
+  }
+  for (const HelperCommandResult &result : commandResults) {
+    dispatchHelperResult(result);
   }
 
   if (!GetPlayState) {
@@ -586,23 +654,12 @@ void handlePair(ReaperExtStateStore &store) {
   }
   const std::string code = store.getString(reashoot::settings_keys::kSection, kPairCodeKey);
   if (code.empty()) {
-    report("ReaShoot: set the pairing code (ExtState iphone_pair_code) before pairing.");
+    report("ReaShoot: enter the pairing PIN shown on the iPhone before pairing.");
     return;
   }
 
-  const reashoot::ProcessResult result = runCommand("pair", settings, {L"--code", widen(code)});
-  if (result.exitCode != 0) {
-    return;
-  }
-
-  if (const auto token = reashoot::parsePairedToken(result.standardOutput)) {
-    reashoot::PluginSettings updated = settings;
-    updated.token = *token;
-    reashoot::saveSettings(store, updated);
-    report("ReaShoot: paired and saved token.");
-  } else {
-    report("ReaShoot: pairing succeeded but no token was returned.");
-  }
+  report("ReaShoot: pairing with iPhone\u2026");
+  launchHelperCommand(HelperAction::Pair, "pair", settings, {L"--code", widen(code)});
 }
 
 void handleTestConnection(ReaperExtStateStore &store) {
@@ -615,12 +672,13 @@ void handleTestConnection(ReaperExtStateStore &store) {
   if (!settings.token.empty()) {
     extra = {L"--token", widen(settings.token)};
   }
-  runCommand("ping", settings, extra);
+  report("ReaShoot: testing iPhone connection\u2026");
+  launchHelperCommand(HelperAction::Test, "ping", settings, extra);
 }
 
 bool requireHostAndToken(const reashoot::PluginSettings &settings, const char *verb) {
   if (settings.host.empty() || settings.token.empty()) {
-    report(std::string("ReaShoot: set the iPhone host and token before ") + verb + ".");
+    report(std::string("ReaShoot: pair with the iPhone before ") + verb + ".");
     return false;
   }
   return true;
@@ -631,7 +689,8 @@ void handleStart(ReaperExtStateStore &store) {
   if (!requireHostAndToken(settings, "starting a recording")) {
     return;
   }
-  runCommand("start", settings, {L"--token", widen(settings.token)});
+  report("ReaShoot: starting iPhone recording\u2026");
+  launchHelperCommand(HelperAction::Start, "start", settings, {L"--token", widen(settings.token)});
 }
 
 void handleStop(ReaperExtStateStore &store) {
@@ -640,16 +699,9 @@ void handleStop(ReaperExtStateStore &store) {
     return;
   }
   const std::wstring dir = downloadDirectory();
-  const reashoot::ProcessResult result =
-      runCommand("stop", settings, {L"--token", widen(settings.token), L"--download-dir", dir});
-  if (result.exitCode != 0) {
-    return;
-  }
-  if (const auto path = reashoot::parseDownloadedPath(result.standardOutput)) {
-    insertAndAlign(*path);
-  } else {
-    report("ReaShoot: stop completed but no downloaded file was reported.");
-  }
+  report("ReaShoot: stopping iPhone recording\u2026");
+  launchHelperCommand(HelperAction::Stop, "stop", settings,
+                      {L"--token", widen(settings.token), L"--download-dir", dir});
 }
 
 // Persists the panel's editable fields into the durable settings before an

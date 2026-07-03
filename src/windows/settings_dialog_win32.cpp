@@ -15,24 +15,26 @@ constexpr wchar_t kDialogClassName[] = L"ReaShootSettingsDialog";
 
 enum ControlId : int {
   kIdHost = 1001,
-  kIdToken,
   kIdControlPort,
   kIdHttpPort,
   kIdResolution,
   kIdFps,
   kIdOk,
   kIdCancel,
-  kFieldCount = 6,
 };
+
+constexpr int kFieldCount = 5;
 
 struct Field {
   const wchar_t *label;
   std::string PluginSettings::*member;
 };
 
+// The pairing token is intentionally omitted: it is obtained by pairing (via the
+// preview panel's Pairing PIN + Pair) and must never be shown to or edited by the
+// user. It is preserved untouched across saves from this dialog.
 const Field kFields[kFieldCount] = {
     {L"iPhone host:", &PluginSettings::host},
-    {L"Pairing token:", &PluginSettings::token},
     {L"Control port:", &PluginSettings::controlPort},
     {L"HTTP port:", &PluginSettings::httpPort},
     {L"Resolution:", &PluginSettings::resolution},
@@ -91,9 +93,9 @@ void createControls(HWND dialog, HINSTANCE instance, DialogState *state) {
                                  dialog, nullptr, instance, nullptr);
     SendMessageW(label, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
 
-    const DWORD extra = (i == kIdToken - kIdHost) ? ES_PASSWORD : 0;
+    const DWORD extra = ES_AUTOHSCROLL;
     HWND edit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", widen(state->settings->*(kFields[i].member)).c_str(),
-                                WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL | extra, editX, y, editWidth, 22,
+                                WS_CHILD | WS_VISIBLE | WS_TABSTOP | extra, editX, y, editWidth, 22,
                                 dialog, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdHost + i)), instance,
                                 nullptr);
     SendMessageW(edit, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
