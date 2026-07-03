@@ -1,8 +1,6 @@
 SDK_DIR := vendor/reaper-sdk/sdk
 BUILD_DIR := build
 TARGET := $(BUILD_DIR)/reaper_reashoot.dylib
-HELPER_PACKAGE := helper
-HELPER_BUILD_DIR := $(BUILD_DIR)/helper-build
 HELPER_TARGET := $(BUILD_DIR)/reashoot-mac
 SRC := src/reashoot.mm
 CORE_SRC := $(wildcard src/core/*.cpp)
@@ -15,10 +13,10 @@ REAPER_SRC := $(wildcard src/reaper/*.cpp)
 REAPER_HEADERS := $(wildcard src/reaper/*.h)
 WIN32_STUB_SRC := src/platform/win32/win32_portability_stub.cpp
 SWELL_PROBE_SRC := src/platform/swell/swell_panel_probe.cpp
+HELPER_CPP_SRC := $(wildcard src/helper/*.cpp)
 CORE_TEST_TARGET := $(BUILD_DIR)/core_tests
 WIN32_STUB_TARGET := $(BUILD_DIR)/win32_portability_stub.o
 SWELL_PROBE_TARGET := $(BUILD_DIR)/swell_panel_probe.o
-HELPER_SRC := $(shell find $(HELPER_PACKAGE) -type f -name '*.swift' -o -name 'Package.swift')
 SWIFT_GIT_ENV := GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=all
 
 CXX ?= clang++
@@ -41,10 +39,9 @@ $(TARGET): $(SRC) $(CORE_SRC) $(CORE_HEADERS) $(MAC_SRC) $(MAC_HEADERS) $(SWELL_
 	mkdir -p $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) $(SRC) $(CORE_SRC) $(MAC_SRC) $(SWELL_SRC) $(REAPER_SRC) $(LDFLAGS) -o $(TARGET)
 
-$(HELPER_TARGET): $(HELPER_SRC)
+$(HELPER_TARGET): $(HELPER_CPP_SRC) $(CORE_SRC) $(CORE_HEADERS)
 	mkdir -p $(BUILD_DIR)
-	$(SWIFT_GIT_ENV) swift build --package-path $(HELPER_PACKAGE) --configuration release --scratch-path $(HELPER_BUILD_DIR)
-	cp $(HELPER_BUILD_DIR)/release/reashoot-mac $(HELPER_TARGET)
+	$(CXX) $(CORE_TEST_CXXFLAGS) $(HELPER_CPP_SRC) $(CORE_SRC) -o $(HELPER_TARGET)
 
 install: $(TARGET) $(HELPER_TARGET)
 	mkdir -p "$(HOME)/Library/Application Support/REAPER/UserPlugins"
@@ -62,9 +59,8 @@ check:
 	$(CORE_TEST_TARGET)
 	$(CXX) $(CORE_TEST_CXXFLAGS) -c $(WIN32_STUB_SRC) -o $(WIN32_STUB_TARGET)
 	$(CXX) $(CORE_TEST_CXXFLAGS) -isystem $(SDK_DIR) -c $(SWELL_PROBE_SRC) -o $(SWELL_PROBE_TARGET)
-	./scripts/check_mirrored_swift.sh
+	$(CXX) $(CORE_TEST_CXXFLAGS) $(HELPER_CPP_SRC) $(CORE_SRC) -o $(HELPER_TARGET)
 	$(SWIFT_GIT_ENV) swift test --package-path iphone
-	$(SWIFT_GIT_ENV) swift build --package-path helper
 
 clean:
 	rm -rf $(BUILD_DIR)

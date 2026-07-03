@@ -1,5 +1,6 @@
 #include "../src/core/alignment_math.h"
 #include "../src/core/capture_profile.h"
+#include "../src/core/control_protocol.h"
 #include "../src/core/h264_annex_b.h"
 #include "../src/core/helper_output_parser.h"
 #include "../src/core/path_utils.h"
@@ -74,6 +75,54 @@ void testRemoteCameraArguments() {
   assert(download[7] == "recording.mov");
 }
 
+void testJsonValue() {
+  JsonValue value = parseJson(R"({"name":"phone","port":8787,"flags":[true,false],"nested":{"x":"y"}})");
+  assert(value.stringValue("name") == "phone");
+  assert(value.intValue("port") == 8787);
+  assert(value.find("flags")->asArray().size() == 2);
+  assert(value.find("nested")->stringValue("x") == "y");
+  assert(parseJson(value.serialize()).stringValue("name") == "phone");
+}
+
+void testControlProtocol() {
+  ProtocolCommand command;
+  command.requestID = "00000000-0000-0000-0000-000000000001";
+  command.type = "configureCapture";
+  command.token = "secret";
+  command.hasCaptureProfile = true;
+  command.captureProfile.resolution = "1080p";
+  command.captureProfile.fps = 30;
+  command.captureProfile.look = "warmVintage";
+  const std::string commandJson = encodeCommandJson(command);
+  JsonValue encoded = parseJson(commandJson);
+  assert(encoded.stringValue("type") == "configureCapture");
+  assert(encoded.stringValue("token") == "secret");
+  assert(encoded.find("metadata")->asObject().empty());
+  assert(encoded.find("captureProfile")->stringValue("look") == "warmVintage");
+
+  const std::string eventJson = R"({
+    "type":"recordingsListed",
+    "protocolVersion":1,
+    "recordings":[
+      {"id":"one","filename":"take.mov","byteCount":42,"checksumSHA256":"abc","downloadPath":"/recordings/one"},
+      {"id":"two","filename":"take2.mov","byteCount":84,"downloadPath":"/recordings/two"}
+    ],
+    "preview":{"codec":"h264","transport":"websocket","streamPath":"/preview","port":8789,"width":640,"height":360,"fps":12,"orientation":"portrait","requiresToken":true}
+  })";
+  ProtocolEvent event = decodeEventJson(eventJson);
+  assert(event.type == "recordingsListed");
+  assert(event.recordings.size() == 2);
+  assert(event.recordings[0].checksumSHA256 == "abc");
+  assert(event.hasPreview);
+  assert(event.preview.port == 8789);
+
+  ProtocolEvent oldProfileEvent = decodeEventJson(R"({"type":"captureConfigured","captureProfile":{"resolution":"4K"}})");
+  assert(oldProfileEvent.hasCaptureProfile);
+  assert(oldProfileEvent.captureProfile.fps == 30);
+  assert(oldProfileEvent.captureProfile.orientation == "auto");
+  assert(oldProfileEvent.captureProfile.look == "natural");
+}
+
 void testH264AnnexB() {
   const uint8_t bytes[] = {
       0, 0, 0, 1, 0x67, 1, 2,
@@ -105,6 +154,8 @@ int main() {
   testHelperParsing();
   testCaptureProfileArguments();
   testRemoteCameraArguments();
+  testJsonValue();
+  testControlProtocol();
   testH264AnnexB();
   testAlignmentMath();
   return 0;
