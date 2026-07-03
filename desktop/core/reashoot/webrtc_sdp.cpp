@@ -1,5 +1,7 @@
 #include "reashoot/webrtc_sdp.h"
 
+#include <map>
+
 namespace reashoot {
 namespace {
 
@@ -28,6 +30,12 @@ StrippedAnswer stripInlineIceCandidates(const std::string &answerSDP) {
   std::string currentMid;
   int currentMLineIndex = -1;
 
+  // Candidate lines may appear before their section's "a=mid:" line (some
+  // iOS/WebRTC stacks emit all candidates first), so remember which candidates
+  // belonged to which m-line index and resolve their mid after the full parse.
+  std::vector<std::size_t> candidateMLineIndex;
+  std::map<int, std::string> midByMLineIndex;
+
   std::size_t start = 0;
   while (start <= answerSDP.size()) {
     std::size_t newline = answerSDP.find('\n', start);
@@ -44,6 +52,9 @@ StrippedAnswer stripInlineIceCandidates(const std::string &answerSDP) {
     }
     if (startsWith(line, "a=mid:")) {
       currentMid = line.substr(std::string("a=mid:").size());
+      if (currentMLineIndex >= 0) {
+        midByMLineIndex[currentMLineIndex] = currentMid;
+      }
     }
     if (startsWith(line, "a=candidate:")) {
       WebRTCSignal candidate;
@@ -51,6 +62,7 @@ StrippedAnswer stripInlineIceCandidates(const std::string &answerSDP) {
       candidate.payload = line.substr(std::string("a=").size());
       candidate.mid = currentMid;
       candidate.mlineIndex = currentMLineIndex < 0 ? 0 : currentMLineIndex;
+      candidateMLineIndex.push_back(result.candidates.size());
       result.candidates.push_back(std::move(candidate));
       continue;
     }
@@ -58,6 +70,18 @@ StrippedAnswer stripInlineIceCandidates(const std::string &answerSDP) {
       continue;
     }
     keptLines.push_back(std::move(line));
+  }
+
+  // Resolve any candidate whose mid was still unknown when it was parsed
+  // (candidate line preceded its "a=mid:" line) from the completed index map.
+  for (std::size_t index : candidateMLineIndex) {
+    WebRTCSignal &candidate = result.candidates[index];
+    if (candidate.mid.empty()) {
+      auto found = midByMLineIndex.find(candidate.mlineIndex);
+      if (found != midByMLineIndex.end()) {
+        candidate.mid = found->second;
+      }
+    }
   }
 
   std::string cleaned;

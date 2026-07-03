@@ -184,6 +184,8 @@ if(WIN32)
     # REASHOOT_WITH_LIBWEBRTC gates the receiver factory in the plugin TU.
     target_compile_definitions(reashoot PRIVATE REASHOOT_WITH_LIBWEBRTC LIB_WEBRTC_API_DLL)
     target_link_libraries(reashoot PRIVATE "${REASHOOT_LIBWEBRTC_IMPLIB}")
+    # Winsock: the receiver calls WSAStartup so libwebrtc can create UDP sockets.
+    target_link_libraries(reashoot PRIVATE ws2_32)
     # Delay-load libwebrtc.dll so REAPER can load the plugin even though its
     # dependency lives beside the plugin (not in reaper.exe's directory). The
     # plugin explicitly LoadLibrary's it by full path from its own folder at

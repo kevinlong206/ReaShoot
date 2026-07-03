@@ -7,6 +7,13 @@
 #include "reashoot/debug_logger.h"
 #include "reashoot/webrtc_sdp.h"
 
+// Winsock must be initialized (WSAStartup) before libwebrtc creates its network
+// thread, otherwise UDP socket creation fails inside the prebuilt and ICE
+// gathers no UDP host candidates (only TCP-active placeholders). Include
+// winsock2.h before libwebrtc.h so it wins over the windows.h that libwebrtc
+// pulls in.
+#include <winsock2.h>
+
 // libwebrtc (webrtc-sdk) C++ wrapper API. Confined to this translation unit.
 #include "libwebrtc.h"
 #include "rtc_ice_candidate.h"
@@ -78,10 +85,26 @@ std::string summarizeCandidates(const std::string &sdp) {
 // use and tear down explicitly on plugin unload.
 std::mutex g_globalMutex;
 bool g_globalInitialized = false;
+bool g_winsockInitialized = false;
 
 void ensureGlobalInit() {
   std::lock_guard<std::mutex> lock(g_globalMutex);
   if (!g_globalInitialized) {
+    // The webrtc-sdk prebuilt does not call WSAStartup itself; it assumes the
+    // host process already initialized Winsock. REAPER does not guarantee this,
+    // and without it libwebrtc cannot create UDP sockets, so ICE gathers zero
+    // UDP candidates and the peer connection fails. Initialize Winsock first.
+    if (!g_winsockInitialized) {
+      WSADATA wsaData;
+      const int wsaResult = WSAStartup(MAKEWORD(2, 2), &wsaData);
+      if (wsaResult == 0) {
+        g_winsockInitialized = true;
+        logRtc("WSAStartup succeeded (Winsock 2.2 ready for UDP gathering)");
+      } else {
+        logRtc("WSAStartup failed: " + std::to_string(wsaResult) +
+               " (UDP ICE candidates may be unavailable)");
+      }
+    }
     lw::LibWebRTC::Initialize();
     g_globalInitialized = true;
   }
@@ -94,6 +117,10 @@ void shutdownLibWebRTC() {
   if (g_globalInitialized) {
     lw::LibWebRTC::Terminate();
     g_globalInitialized = false;
+  }
+  if (g_winsockInitialized) {
+    WSACleanup();
+    g_winsockInitialized = false;
   }
 }
 

@@ -93,6 +93,29 @@ void testNormalizesDoubledCarriageReturns() {
   assert(stripped.candidates[0].payload.rfind("candidate:", 0) == 0);
 }
 
+void testResolvesMidWhenCandidatesPrecedeMidLine() {
+  // Some iOS/WebRTC stacks emit every a=candidate line before the section's
+  // a=mid line. The parser must still associate candidates with the correct
+  // mid (resolved after the full parse), not leave them blank.
+  const std::string answer =
+      "v=0\r\n"
+      "a=group:BUNDLE 0\r\n"
+      "m=video 50795 UDP/TLS/RTP/SAVPF 109\r\n"
+      "a=candidate:489139435 1 udp 2122194687 10.0.0.103 50795 typ host\r\n"
+      "a=candidate:3817699455 1 tcp 1518214911 10.0.0.103 52998 typ host tcptype passive\r\n"
+      "a=mid:0\r\n"
+      "a=recvonly\r\n";
+
+  reashoot::StrippedAnswer stripped = reashoot::stripInlineIceCandidates(answer);
+  assert(stripped.candidates.size() == 2);
+  for (const auto &candidate : stripped.candidates) {
+    assert(candidate.mid == "0");
+    assert(candidate.mlineIndex == 0);
+  }
+  // The mid line itself is retained in the cleaned SDP.
+  assert(stripped.sdp.find("a=mid:0\r\n") != std::string::npos);
+}
+
 } // namespace
 
 int main() {
@@ -100,6 +123,7 @@ int main() {
   testMLineIndexTracksMultipleSections();
   testHandlesLFOnlyAndNoCandidates();
   testNormalizesDoubledCarriageReturns();
+  testResolvesMidWhenCandidatesPrecedeMidLine();
   std::cout << "webrtc_sdp_tests passed\n";
   return 0;
 }
