@@ -1,4 +1,5 @@
 build/
+build-cmake/
 helper/.build/
 iphone/.build/
 iphone/Package.resolved

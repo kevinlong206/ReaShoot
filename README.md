@@ -56,6 +56,15 @@ Run the lightweight validation suite with:
 make check
 ```
 
+The Makefile remains the primary macOS install path. A CMake scaffold is also available for cross-platform preparation and currently builds the shared core, core tests, helper, and macOS extension:
+
+```sh
+cmake -S . -B build-cmake -DCMAKE_BUILD_TYPE=Debug
+cmake --build build-cmake --parallel
+ctest --test-dir build-cmake --output-on-failure
+cmake --install build-cmake
+```
+
 By default the Makefile builds for the current Mac architecture. To build a universal binary:
 
 ```sh
@@ -105,7 +114,7 @@ make install
 - macOS camera and microphone permission are not required because capture happens in the iPhone app.
 - The companion iPhone app sources live in `iphone/`; old external development copies should no longer be treated as the source of truth.
 - The extension builds and installs a bundled `reashoot-mac` helper next to the REAPER extension dylib.
-- To use the extension, launch the iPhone app, click `iPhone Setup` in the REAPER dock, click `Discover`, enter the pairing code shown on the iPhone, click `Pair`, then click `Test` to verify preview/control before recording.
+- To use the extension, launch the iPhone app, click `iPhone Setup` in the REAPER dock, click `Discover`, enter the pairing code shown on the iPhone, then click `Pair`. Use `Reconnect` later if the phone is already paired and preview/control needs to be restarted.
 - The iPhone app shows the currently configured capture profile and pending recordings. Pending videos can be deleted directly in the app. Aspect ratio is currently metadata/framing intent; resolution, FPS, orientation, lens, zoom, and selected look are applied on the iPhone side. Non-natural looks are applied only after the user chooses to download a stopped clip and are baked into the downloaded movie while preserving the camera audio track.
 - Lens options depend on the connected iPhone hardware. Zoom is clamped to the selected camera's supported range; values beyond a physical lens's native view may be digital crop rather than guaranteed optical zoom.
 - Captures are written under `ReaShoot Recordings` in the saved project directory, or under REAPER's resource path for unsaved projects.

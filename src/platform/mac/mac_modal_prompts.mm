@@ -1,5 +1,8 @@
 #import "mac_modal_prompts.h"
 
+#include <memory>
+#include <vector>
+
 @implementation ReaShootMacModalPrompts
 
 + (NSDictionary<NSString *, id> *)choosePendingRecordingAction:(NSArray<NSDictionary<NSString *, NSString *> *> *)recordings {
@@ -72,3 +75,65 @@
 }
 
 @end
+
+namespace reashoot::platform::mac {
+
+namespace {
+
+NSDictionary<NSString *, NSString *> *dictionaryFromRecording(const core::RemoteRecordingDescriptor &recording) {
+  return @{
+    @"id" : [NSString stringWithUTF8String:recording.id.c_str()] ?: @"",
+    @"filename" : [NSString stringWithUTF8String:recording.filename.c_str()] ?: @"recording.mov",
+    @"byteCount" : [NSString stringWithUTF8String:recording.byteCount.c_str()] ?: @"0",
+    @"downloadPath" : [NSString stringWithUTF8String:recording.downloadPath.c_str()] ?: @"",
+    @"checksum" : [NSString stringWithUTF8String:recording.checksum.c_str()] ?: @"",
+  };
+}
+
+class MacModalPrompts final : public core::ModalPrompts {
+public:
+  core::PendingRecordingChoice choosePendingRecordingAction(const std::vector<core::RemoteRecordingDescriptor> &recordings) override {
+    NSMutableArray<NSDictionary<NSString *, NSString *> *> *items = [NSMutableArray arrayWithCapacity:recordings.size()];
+    for (const core::RemoteRecordingDescriptor &recording : recordings) {
+      [items addObject:dictionaryFromRecording(recording)];
+    }
+    NSDictionary<NSString *, id> *choice = [ReaShootMacModalPrompts choosePendingRecordingAction:items];
+    core::PendingRecordingChoice result;
+    if (!choice) {
+      return result;
+    }
+    NSString *action = choice[@"action"];
+    NSDictionary<NSString *, NSString *> *recording = choice[@"recording"];
+    result.recordingID = recording[@"id"].UTF8String ?: "";
+    if ([action isEqualToString:@"download"]) {
+      result.action = core::PendingRecordingAction::Download;
+    } else if ([action isEqualToString:@"delete"]) {
+      result.action = core::PendingRecordingAction::Delete;
+    }
+    return result;
+  }
+
+  bool confirmDeleteRecordingNamed(const std::string &filename) override {
+    return [ReaShootMacModalPrompts confirmDeleteRecordingNamed:[NSString stringWithUTF8String:filename.c_str()]];
+  }
+
+  bool confirmDeleteAllRecordingsCount(size_t count) override {
+    return [ReaShootMacModalPrompts confirmDeleteAllRecordingsCount:count];
+  }
+
+  core::StoppedRecordingAction chooseStoppedRecordingActionForFilename(const std::string &filename) override {
+    ReaShootStoppedRecordingChoice choice =
+        [ReaShootMacModalPrompts chooseStoppedRecordingActionForFilename:[NSString stringWithUTF8String:filename.c_str()]];
+    return choice == ReaShootStoppedRecordingChoiceDelete
+               ? core::StoppedRecordingAction::Delete
+               : core::StoppedRecordingAction::Download;
+  }
+};
+
+} // namespace
+
+std::unique_ptr<core::ModalPrompts> createModalPrompts() {
+  return std::make_unique<MacModalPrompts>();
+}
+
+} // namespace reashoot::platform::mac

@@ -1,6 +1,10 @@
 #pragma once
 
+#include "../../core/platform_interfaces.h"
+
 #import <Foundation/Foundation.h>
+
+#include <memory>
 
 typedef void (^ReaShootMacH264FrameHandler)(const void *pixels, int width, int height, int strideBytes);
 
@@ -9,3 +13,9 @@ typedef void (^ReaShootMacH264FrameHandler)(const void *pixels, int width, int h
 - (void)reset;
 - (void)decodeAccessUnit:(NSData *)accessUnit;
 @end
+
+namespace reashoot::platform::mac {
+
+std::unique_ptr<core::PreviewRenderer> createH264PreviewRenderer(core::VideoFrameCallback frameHandler);
+
+} // namespace reashoot::platform::mac

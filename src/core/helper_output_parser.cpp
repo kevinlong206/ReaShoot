@@ -56,4 +56,30 @@ std::string parseDownloadedPath(const std::string &output) {
   return {};
 }
 
+std::string progressStatusText(const std::string &line) {
+  if (line.rfind("encode ", 0) == 0) {
+    FieldMap fields = parseFields(line, ' ');
+    const auto percent = fields.find("percent");
+    if (percent != fields.end() && !percent->second.empty()) {
+      return "Encoding iPhone look: " + percent->second + "%";
+    }
+    return "Encoding iPhone look";
+  }
+  if (line.rfind("progress ", 0) != 0) {
+    return {};
+  }
+  FieldMap fields = parseFields(line, ' ');
+  const auto percent = fields.find("percent");
+  if (percent != fields.end() && !percent->second.empty()) {
+    return "Downloading iPhone video: " + percent->second + "%";
+  }
+  const auto bytes = fields.find("bytes");
+  const auto total = fields.find("total");
+  if (bytes != fields.end() && !bytes->second.empty() &&
+      total != fields.end() && !total->second.empty()) {
+    return "Downloading iPhone video: " + bytes->second + "/" + total->second + " bytes";
+  }
+  return {};
+}
+
 } // namespace reashoot::core

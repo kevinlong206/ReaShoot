@@ -1,5 +1,6 @@
 #include "remote_camera.h"
 
+#include <cstdlib>
 #include <utility>
 
 namespace reashoot::core {
@@ -91,6 +92,26 @@ RemoteRecordingDescriptor recordingDescriptorFromFields(const FieldMap &fields) 
   }
   descriptor.downloadPath = value("downloadPath");
   descriptor.checksum = value("checksum");
+  return descriptor;
+}
+
+PreviewStreamDescriptor previewStreamDescriptorFromFields(const FieldMap &fields) {
+  PreviewStreamDescriptor descriptor;
+  auto value = [&fields](const char *key) -> std::string {
+    auto it = fields.find(key);
+    return it == fields.end() ? "" : it->second;
+  };
+  const std::string streamPath = value("streamPath");
+  if (!streamPath.empty()) {
+    descriptor.streamPath = streamPath;
+  }
+  const std::string portText = value("port");
+  if (!portText.empty()) {
+    const int port = std::atoi(portText.c_str());
+    if (port > 0) {
+      descriptor.port = port;
+    }
+  }
   return descriptor;
 }
 

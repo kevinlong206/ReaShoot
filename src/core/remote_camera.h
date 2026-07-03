@@ -32,6 +32,11 @@ struct RemoteRecordingDescriptor {
   std::string checksum;
 };
 
+struct PreviewStreamDescriptor {
+  std::string streamPath = "/preview";
+  int port = 8789;
+};
+
 CaptureProfile captureProfileFromSettings(const RemoteCameraSettings &settings);
 std::vector<std::string> commandArguments(const RemoteCameraSettings &settings,
                                           const std::string &command,
@@ -45,6 +50,7 @@ std::vector<std::string> downloadArguments(const RemoteCameraSettings &settings,
                                            const RemoteRecordingDescriptor &recording,
                                            const std::string &downloadDirectory);
 RemoteRecordingDescriptor recordingDescriptorFromFields(const FieldMap &fields);
+PreviewStreamDescriptor previewStreamDescriptorFromFields(const FieldMap &fields);
 
 class RemoteCameraController {
 public:

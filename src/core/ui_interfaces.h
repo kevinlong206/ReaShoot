@@ -1,7 +1,11 @@
 #pragma once
 
+#include "remote_camera.h"
+
+#include <cstddef>
 #include <functional>
 #include <string>
+#include <vector>
 
 namespace reashoot::core {
 
@@ -64,6 +68,20 @@ public:
   virtual ~PlaybackPreview() = default;
   virtual void showMedia(const std::string &path, double itemStart, double sourceOffset, double projectPosition) = 0;
   virtual void hide() = 0;
+};
+
+enum class StoppedRecordingAction {
+  Download,
+  Delete,
+};
+
+class ModalPrompts {
+public:
+  virtual ~ModalPrompts() = default;
+  virtual PendingRecordingChoice choosePendingRecordingAction(const std::vector<RemoteRecordingDescriptor> &recordings) = 0;
+  virtual bool confirmDeleteRecordingNamed(const std::string &filename) = 0;
+  virtual bool confirmDeleteAllRecordingsCount(size_t count) = 0;
+  virtual StoppedRecordingAction chooseStoppedRecordingActionForFilename(const std::string &filename) = 0;
 };
 
 } // namespace reashoot::core

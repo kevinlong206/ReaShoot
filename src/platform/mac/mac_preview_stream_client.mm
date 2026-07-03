@@ -1,5 +1,9 @@
 #import "mac_preview_stream_client.h"
 
+#include <memory>
+#include <utility>
+#include <vector>
+
 @interface ReaShootMacPreviewStreamClient ()
 @property(nonatomic, strong) NSURLSession *session;
 @property(nonatomic, strong) NSURLSessionWebSocketTask *task;
@@ -8,6 +12,57 @@
 @property(nonatomic, copy) void (^onError)(NSError *error);
 @property(nonatomic, assign) BOOL active;
 @end
+
+namespace reashoot::platform::mac {
+
+namespace {
+
+class MacPreviewStreamClient final : public core::PreviewStreamClient {
+public:
+  MacPreviewStreamClient() : client_([[ReaShootMacPreviewStreamClient alloc] init]) {}
+
+  bool isRunning() const override { return [client_ isRunning]; }
+
+  bool start(const core::PreviewStreamRequest &request,
+             core::BinaryDataCallback onData,
+             core::VoidCallback onActive,
+             core::ErrorCallback onError) override {
+    return [client_ startWithHost:[NSString stringWithUTF8String:request.host.c_str()]
+                             port:request.port
+                             path:[NSString stringWithUTF8String:request.path.c_str()]
+                            token:[NSString stringWithUTF8String:request.token.c_str()]
+                           onData:^(NSData *accessUnit) {
+      if (!onData || accessUnit.length == 0) {
+        return;
+      }
+      const auto *bytes = static_cast<const uint8_t *>(accessUnit.bytes);
+      onData(std::vector<uint8_t>(bytes, bytes + accessUnit.length));
+    }
+                         onActive:^{
+      if (onActive) {
+        onActive();
+      }
+    }
+                          onError:^(NSError *error) {
+      if (onError) {
+        onError(error.localizedDescription.UTF8String ?: "Preview stream failed");
+      }
+    }];
+  }
+
+  void stop() override { [client_ stop]; }
+
+private:
+  __strong ReaShootMacPreviewStreamClient *client_ = nil;
+};
+
+} // namespace
+
+std::unique_ptr<core::PreviewStreamClient> createPreviewStreamClient() {
+  return std::make_unique<MacPreviewStreamClient>();
+}
+
+} // namespace reashoot::platform::mac
 
 @implementation ReaShootMacPreviewStreamClient
 

@@ -5,6 +5,8 @@
 #include "../src/core/helper_output_parser.h"
 #include "../src/core/path_utils.h"
 #include "../src/core/remote_camera.h"
+#include "../src/core/reashoot_controller.h"
+#include "../src/core/reashoot_status.h"
 #include "../src/core/ui_interfaces.h"
 
 #include <cassert>
@@ -31,6 +33,47 @@ void testHelperParsing() {
   assert(recordings[1]["id"] == "two");
   FieldMap device = parseFirstDevice("device\tname=iPhone\thost=phone.local\tcontrolPort=8787\n");
   assert(device["host"] == "phone.local");
+  assert(progressStatusText("encode percent=42") == "Encoding iPhone look: 42%");
+  assert(progressStatusText("encode") == "");
+  assert(progressStatusText("encode ") == "Encoding iPhone look");
+  assert(progressStatusText("progress percent=7") == "Downloading iPhone video: 7%");
+  assert(progressStatusText("progress bytes=8 total=10") == "Downloading iPhone video: 8/10 bytes");
+  assert(progressStatusText("ignored line") == "");
+}
+
+void testFriendlyStatusText() {
+  assert(friendlyStatusText("Unauthorized") ==
+         "iPhone authorization failed: reset pairing on the iPhone, enter the new code in Setup, then Pair again.");
+  assert(friendlyStatusText("error: Invalid pairing code.") ==
+         "Invalid pairing code: check the six-digit code on the iPhone and press Pair again.");
+  assert(friendlyStatusText("control socket: connection closed") ==
+         "iPhone connection closed. If you reset pairing, enter the current code and Pair again.");
+  assert(friendlyStatusText("ReaShoot live video") == "ReaShoot live video");
+  CaptureProfile profile{"", "4K", "30", "auto", "9:16", "wide", "1.0", "natural"};
+  assert(previewStateText(false, false) == "preview idle");
+  assert(previewStateText(false, true) == "preview connecting");
+  assert(previewStateText(true, false) == "H.264 preview");
+  assert(captureFormatText(profile, true, false) ==
+         "iPhone Wi-Fi: 4K 30 fps, auto, 9:16, wide lens, 1.0x, look natural, H.264 preview");
+}
+
+void testReaShootControllerState() {
+  ReaShootController controller;
+  assert(!controller.videoEnabled());
+  assert(controller.followEnabled());
+  assert(controller.followStatusText() == "Video disabled");
+  controller.setVideoEnabled(true);
+  assert(controller.videoEnabled());
+  assert(controller.followEnabled());
+  assert(controller.followStatusText() == "Video enabled; transport follow on");
+  controller.setFollowEnabled(false);
+  assert(controller.videoEnabled());
+  assert(!controller.followEnabled());
+  assert(controller.followStatusText() == "Video enabled; transport follow off");
+  controller.setVideoEnabled(false);
+  assert(!controller.videoEnabled());
+  assert(!controller.followEnabled());
+  assert(controller.followStatusText() == "Video disabled");
 }
 
 void testCaptureProfileArguments() {
@@ -73,6 +116,18 @@ void testRemoteCameraArguments() {
   assert(download[1] == "8788");
   assert(download[5] == "abc");
   assert(download[7] == "recording.mov");
+
+  PreviewStreamDescriptor defaultPreview = previewStreamDescriptorFromFields({});
+  assert(defaultPreview.streamPath == "/preview");
+  assert(defaultPreview.port == 8789);
+  FieldMap previewFields = parseFields("streamPath=/custom port=8799", ' ');
+  PreviewStreamDescriptor customPreview = previewStreamDescriptorFromFields(previewFields);
+  assert(customPreview.streamPath == "/custom");
+  assert(customPreview.port == 8799);
+  FieldMap invalidPreviewFields = parseFields("streamPath= port=-1", ' ');
+  PreviewStreamDescriptor invalidPreview = previewStreamDescriptorFromFields(invalidPreviewFields);
+  assert(invalidPreview.streamPath == "/preview");
+  assert(invalidPreview.port == 8789);
 }
 
 void testJsonValue() {
@@ -152,6 +207,8 @@ void testAlignmentMath() {
 int main() {
   testPathUtils();
   testHelperParsing();
+  testFriendlyStatusText();
+  testReaShootControllerState();
   testCaptureProfileArguments();
   testRemoteCameraArguments();
   testJsonValue();

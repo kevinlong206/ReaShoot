@@ -5,6 +5,9 @@
 #import <VideoToolbox/VideoToolbox.h>
 
 #include <cstring>
+#include <memory>
+#include <utility>
+#include <vector>
 
 @interface ReaShootMacH264FrameDecoder ()
 @property(nonatomic, assign) CMVideoFormatDescriptionRef formatDescription;
@@ -221,3 +224,47 @@ void ReaShootMacH264FrameDecoderOutputCallback(void *refCon,
 }
 
 @end
+
+namespace reashoot::platform::mac {
+
+namespace {
+
+class MacH264PreviewRenderer final : public core::PreviewRenderer {
+public:
+  explicit MacH264PreviewRenderer(core::VideoFrameCallback frameHandler) {
+    decoder_ = [[ReaShootMacH264FrameDecoder alloc] initWithFrameHandler:^(const void *pixels, int width, int height, int strideBytes) {
+      if (!frameHandler || !pixels || width <= 0 || height <= 0 || strideBytes <= 0) {
+        return;
+      }
+      core::VideoFrame frame;
+      frame.width = width;
+      frame.height = height;
+      frame.strideBytes = strideBytes;
+      const auto byteCount = static_cast<size_t>(strideBytes) * static_cast<size_t>(height);
+      const auto *bytes = static_cast<const uint8_t *>(pixels);
+      frame.pixels.assign(bytes, bytes + byteCount);
+      frameHandler(frame);
+    }];
+  }
+
+  void reset() override { [decoder_ reset]; }
+
+  void renderAnnexBAccessUnit(const uint8_t *bytes, size_t length) override {
+    if (!bytes || length == 0) {
+      return;
+    }
+    NSData *data = [NSData dataWithBytes:bytes length:length];
+    [decoder_ decodeAccessUnit:data];
+  }
+
+private:
+  __strong ReaShootMacH264FrameDecoder *decoder_ = nil;
+};
+
+} // namespace
+
+std::unique_ptr<core::PreviewRenderer> createH264PreviewRenderer(core::VideoFrameCallback frameHandler) {
+  return std::make_unique<MacH264PreviewRenderer>(std::move(frameHandler));
+}
+
+} // namespace reashoot::platform::mac

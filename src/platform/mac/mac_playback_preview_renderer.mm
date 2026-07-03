@@ -5,6 +5,8 @@
 
 #include <cmath>
 #include <cstring>
+#include <memory>
+#include <vector>
 
 @interface ReaShootMacPlaybackPreviewRenderer ()
 @property(nonatomic, strong) AVAssetImageGenerator *imageGenerator;
@@ -13,6 +15,49 @@
 @property(nonatomic, copy) ReaShootMacPlaybackFrameHandler frameHandler;
 @property(nonatomic, assign) BOOL visible;
 @end
+
+namespace reashoot::platform::mac {
+
+namespace {
+
+class MacPlaybackPreview final : public core::PlaybackPreview {
+public:
+  explicit MacPlaybackPreview(core::VideoFrameCallback frameHandler) {
+    renderer_ = [[ReaShootMacPlaybackPreviewRenderer alloc] initWithFrameHandler:^(const void *pixels, int width, int height, int strideBytes) {
+      if (!frameHandler || !pixels || width <= 0 || height <= 0 || strideBytes <= 0) {
+        return;
+      }
+      core::VideoFrame frame;
+      frame.width = width;
+      frame.height = height;
+      frame.strideBytes = strideBytes;
+      const auto byteCount = static_cast<size_t>(strideBytes) * static_cast<size_t>(height);
+      const auto *bytes = static_cast<const uint8_t *>(pixels);
+      frame.pixels.assign(bytes, bytes + byteCount);
+      frameHandler(frame);
+    }];
+  }
+
+  void showMedia(const std::string &path, double itemStart, double sourceOffset, double projectPosition) override {
+    [renderer_ showPath:[NSString stringWithUTF8String:path.c_str()]
+              itemStart:itemStart
+           sourceOffset:sourceOffset
+        projectPosition:projectPosition];
+  }
+
+  void hide() override { [renderer_ hide]; }
+
+private:
+  __strong ReaShootMacPlaybackPreviewRenderer *renderer_ = nil;
+};
+
+} // namespace
+
+std::unique_ptr<core::PlaybackPreview> createPlaybackPreview(core::VideoFrameCallback frameHandler) {
+  return std::make_unique<MacPlaybackPreview>(std::move(frameHandler));
+}
+
+} // namespace reashoot::platform::mac
 
 @implementation ReaShootMacPlaybackPreviewRenderer
 

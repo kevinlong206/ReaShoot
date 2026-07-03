@@ -17,6 +17,8 @@
 #include "core/helper_output_parser.h"
 #include "core/path_utils.h"
 #include "core/remote_camera.h"
+#include "core/reashoot_controller.h"
+#include "core/reashoot_status.h"
 #import "platform/mac/mac_h264_preview_renderer.h"
 #include "platform/mac/mac_helper_process.h"
 #include "platform/mac/mac_media_audio_reader.h"
@@ -198,6 +200,35 @@ NSDictionary<NSString *, NSString *> *dictionaryFromFields(const reashoot::core:
   return dictionary;
 }
 
+reashoot::core::RemoteRecordingDescriptor recordingDescriptorFromDictionary(NSDictionary<NSString *, NSString *> *recording) {
+  reashoot::core::RemoteRecordingDescriptor descriptor;
+  descriptor.id = stdStringFromNSString(recording[@"id"] ?: @"");
+  descriptor.filename = stdStringFromNSString(recording[@"filename"] ?: @"recording.mov");
+  descriptor.byteCount = stdStringFromNSString(recording[@"byteCount"] ?: @"0");
+  descriptor.downloadPath = stdStringFromNSString(recording[@"downloadPath"] ?: @"");
+  descriptor.checksum = stdStringFromNSString(recording[@"checksum"] ?: @"");
+  return descriptor;
+}
+
+std::vector<reashoot::core::RemoteRecordingDescriptor> recordingDescriptorsFromArray(NSArray<NSDictionary<NSString *, NSString *> *> *recordings) {
+  std::vector<reashoot::core::RemoteRecordingDescriptor> descriptors;
+  descriptors.reserve(recordings.count);
+  for (NSDictionary<NSString *, NSString *> *recording in recordings) {
+    descriptors.push_back(recordingDescriptorFromDictionary(recording));
+  }
+  return descriptors;
+}
+
+NSDictionary<NSString *, NSString *> *recordingWithID(NSArray<NSDictionary<NSString *, NSString *> *> *recordings,
+                                                       const std::string &recordingID) {
+  for (NSDictionary<NSString *, NSString *> *recording in recordings) {
+    if (stdStringFromNSString(recording[@"id"] ?: @"") == recordingID) {
+      return recording;
+    }
+  }
+  return nil;
+}
+
 std::string reashootHelperPath() {
   return stdStringFromNSString([NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/REAPER/UserPlugins/reashoot-mac"]);
 }
@@ -220,6 +251,11 @@ reashoot::core::MediaAudioReader &mediaAudioReader() {
   return *reader;
 }
 
+reashoot::core::ModalPrompts &modalPrompts() {
+  static std::unique_ptr<reashoot::core::ModalPrompts> prompts = reashoot::platform::mac::createModalPrompts();
+  return *prompts;
+}
+
 reaper_plugin_info_t *g_reaper = nullptr;
 int g_videoEnabledCommand = 0;
 int g_showPreviewCommand = 0;
@@ -234,6 +270,7 @@ HWND g_swellPanelPrototype = nullptr;
 bool g_swellPanelPrototypeDocked = false;
 bool g_videoEnabled = false;
 bool g_followEnabled = true;
+reashoot::core::ReaShootController g_extensionController;
 bool g_previewFloating = true;
 bool g_activeTransportRecording = false;
 bool g_pendingInsert = false;
@@ -1141,14 +1178,17 @@ void stopTransportRecording();
 bool toggleSwellPanelPrototype();
 
 std::string followStatusText() {
-  if (!g_videoEnabled) {
-    return "Video disabled";
-  }
-  return std::string("Video enabled; transport follow ") + (g_followEnabled ? "on" : "off");
+  return g_extensionController.followStatusText();
+}
+
+void syncExtensionStateGlobals() {
+  g_videoEnabled = g_extensionController.videoEnabled();
+  g_followEnabled = g_extensionController.followEnabled();
 }
 
 void setFollowEnabled(bool enabled) {
-  g_followEnabled = enabled;
+  g_extensionController.setFollowEnabled(enabled);
+  syncExtensionStateGlobals();
   reashoot::reaper::setExtState(kExtStateSection, kFollowEnabledKey, enabled ? "1" : "0", true);
   updateFollowStatusText();
   refreshToolbarState();
@@ -1159,6 +1199,11 @@ void setVideoEnabled(bool enabled);
 } // namespace
 
 @interface ReaShootRecorder : NSObject
+{
+  std::unique_ptr<reashoot::core::PreviewRenderer> _swellPreviewRenderer;
+  std::unique_ptr<reashoot::core::PlaybackPreview> _playbackPreviewRenderer;
+  std::unique_ptr<reashoot::core::PreviewStreamClient> _previewStreamClient;
+}
 @property(nonatomic, strong) NSView *dockView;
 @property(nonatomic, strong) NSView *previewView;
 @property(nonatomic, strong) NSWindow *floatingPreviewWindow;
@@ -1189,9 +1234,6 @@ void setVideoEnabled(bool enabled);
 @property(nonatomic, strong) NSButton *iPhoneNextLookButton;
 @property(nonatomic, strong) NSTextField *formatLabel;
 @property(nonatomic, strong) NSTextField *statusLabel;
-@property(nonatomic, strong) ReaShootMacH264FrameDecoder *swellPreviewDecoder;
-@property(nonatomic, strong) ReaShootMacPlaybackPreviewRenderer *playbackPreviewRenderer;
-@property(nonatomic, strong) ReaShootMacPreviewStreamClient *previewStreamClient;
 @property(nonatomic, assign) BOOL iPhonePreviewProfileConfiguring;
 @property(nonatomic, assign) BOOL previewStreamStarting;
 @property(nonatomic, assign) BOOL previewStreamActive;
@@ -1207,13 +1249,13 @@ void setVideoEnabled(bool enabled);
 @property(nonatomic, assign) BOOL showingPlayback;
 @property(nonatomic, assign) BOOL remoteRecording;
 - (void)ensureDockView;
+- (void)ensurePreviewAdapters;
 - (void)showLivePreview;
 - (void)showFloatingPreview;
 - (void)showDockedPreview;
 - (void)hideFloatingPreview;
 - (void)hideDockedPreview;
 - (void)setStatus:(NSString *)status;
-- (NSString *)friendlyStatusTextForStatus:(NSString *)status;
 - (void)setRecordingVisualState:(BOOL)recording;
 - (void)updateCaptureFormatLabel;
 - (void)persistIPhoneSettings;
@@ -1221,7 +1263,6 @@ void setVideoEnabled(bool enabled);
 - (void)showIPhoneSetup:(id)sender;
 - (void)restoreIPhoneRecording;
 - (reashoot::core::RemoteCameraSettings)remoteCameraSettings;
-- (NSDictionary<NSString *, NSString *> *)fieldsFromHelperLine:(NSString *)line;
 - (NSArray<NSString *> *)iPhoneConfigureArguments;
 - (void)startRemotePreview;
 - (void)startSwellPreviewPrototype;
@@ -1229,7 +1270,6 @@ void setVideoEnabled(bool enabled);
 - (void)stopAllPreviewActivity;
 - (void)startPreviewStreamWithFields:(NSDictionary<NSString *, NSString *> *)fields;
 - (void)stopPreviewStream;
-- (void)handlePreviewAccessUnit:(NSData *)accessUnit;
 - (NSString *)runReaShootCommand:(NSString *)command
                    extraArguments:(NSArray<NSString *> *)extraArguments
                             error:(NSError **)error;
@@ -1251,6 +1291,40 @@ void setVideoEnabled(bool enabled);
 @end
 
 @implementation ReaShootRecorder
+
+- (void)ensurePreviewAdapters {
+  __weak ReaShootRecorder *weakSelf = self;
+  if (!_swellPreviewRenderer) {
+    _swellPreviewRenderer = reashoot::platform::mac::createH264PreviewRenderer([weakSelf](const reashoot::core::VideoFrame &frame) {
+      ReaShootRecorder *strongSelf = weakSelf;
+      if (strongSelf && !strongSelf.swellPreviewReceivedFrame) {
+        strongSelf.swellPreviewReceivedFrame = YES;
+        [strongSelf setStatus:@"ReaShoot live video"];
+      }
+      if (g_swellPanelPrototypeDocked && g_swellPanelPrototype && !frame.pixels.empty()) {
+        reashoot::platform::swell::setSwellPanelPreviewFrame(g_swellPanelPrototype,
+                                                             frame.pixels.data(),
+                                                             frame.width,
+                                                             frame.height,
+                                                             frame.strideBytes);
+      }
+    });
+  }
+  if (!_playbackPreviewRenderer) {
+    _playbackPreviewRenderer = reashoot::platform::mac::createPlaybackPreview([](const reashoot::core::VideoFrame &frame) {
+      if (g_swellPanelPrototype && !frame.pixels.empty()) {
+        reashoot::platform::swell::setSwellPanelPreviewFrame(g_swellPanelPrototype,
+                                                             frame.pixels.data(),
+                                                             frame.width,
+                                                             frame.height,
+                                                             frame.strideBytes);
+      }
+    });
+  }
+  if (!_previewStreamClient) {
+    _previewStreamClient = reashoot::platform::mac::createPreviewStreamClient();
+  }
+}
 
 - (instancetype)init {
   self = [super init];
@@ -1280,7 +1354,9 @@ void setVideoEnabled(bool enabled);
   dispatch_async(dispatch_get_main_queue(), ^{
     [self ensureDockView];
     self.showingPlayback = NO;
-    [self.playbackPreviewRenderer hide];
+    if (_playbackPreviewRenderer) {
+      _playbackPreviewRenderer->hide();
+    }
     if (g_swellPanelPrototype) {
       reashoot::platform::swell::setSwellPanelPreviewPending(g_swellPanelPrototype);
     }
@@ -1441,29 +1517,9 @@ void setVideoEnabled(bool enabled);
 }
 
 - (void)handleReaShootProgressLine:(NSString *)line {
-  if ([line hasPrefix:@"encode "]) {
-    NSDictionary<NSString *, NSString *> *fields =
-        dictionaryFromFields(reashoot::core::parseFields(line.UTF8String ?: "", ' '));
-    NSString *percent = fields[@"percent"];
-    if (percent.length > 0) {
-      [self setStatus:[NSString stringWithFormat:@"Encoding iPhone look: %@%%", percent]];
-    } else {
-      [self setStatus:@"Encoding iPhone look"];
-    }
-    return;
-  }
-  if (![line hasPrefix:@"progress "]) {
-    return;
-  }
-  NSDictionary<NSString *, NSString *> *fields =
-      dictionaryFromFields(reashoot::core::parseFields(line.UTF8String ?: "", ' '));
-  NSString *percent = fields[@"percent"];
-  NSString *bytes = fields[@"bytes"];
-  NSString *total = fields[@"total"];
-  if (percent.length > 0) {
-    [self setStatus:[NSString stringWithFormat:@"Downloading iPhone video: %@%%", percent]];
-  } else if (bytes.length > 0 && total.length > 0) {
-    [self setStatus:[NSString stringWithFormat:@"Downloading iPhone video: %@/%@ bytes", bytes, total]];
+  const std::string status = reashoot::core::progressStatusText(line.UTF8String ?: "");
+  if (!status.empty()) {
+    [self setStatus:stringFromStd(status)];
   }
 }
 
@@ -1618,16 +1674,20 @@ void setVideoEnabled(bool enabled);
       return;
     }
 
-    NSDictionary<NSString *, id> *choice = [ReaShootMacModalPrompts choosePendingRecordingAction:recordings];
-    if (!choice) {
+    reashoot::core::PendingRecordingChoice choice =
+        modalPrompts().choosePendingRecordingAction(recordingDescriptorsFromArray(recordings));
+    if (choice.action == reashoot::core::PendingRecordingAction::Cancel) {
       [self setStatus:@"Restore canceled"];
       return;
     }
-    NSDictionary<NSString *, NSString *> *recording = choice[@"recording"];
-    NSString *action = choice[@"action"];
-    if ([action isEqualToString:@"delete"]) {
+    NSDictionary<NSString *, NSString *> *recording = recordingWithID(recordings, choice.recordingID);
+    if (!recording) {
+      [self setStatus:@"Restore canceled"];
+      return;
+    }
+    if (choice.action == reashoot::core::PendingRecordingAction::Delete) {
       NSString *filename = recording[@"filename"] ?: recording[@"id"] ?: @"the selected iPhone video";
-      if (![ReaShootMacModalPrompts confirmDeleteRecordingNamed:filename]) {
+      if (!modalPrompts().confirmDeleteRecordingNamed(stdStringFromNSString(filename))) {
         [self setStatus:@"Delete canceled"];
         return;
       }
@@ -1712,7 +1772,7 @@ void setVideoEnabled(bool enabled);
       return;
     }
 
-    if (![ReaShootMacModalPrompts confirmDeleteAllRecordingsCount:recordings.count]) {
+    if (!modalPrompts().confirmDeleteAllRecordingsCount(recordings.count)) {
       [self setStatus:@"Delete all canceled"];
       return;
     }
@@ -1723,8 +1783,9 @@ void setVideoEnabled(bool enabled);
 
 - (void)promptForStoppedIPhoneRecording:(NSDictionary<NSString *, NSString *> *)recording {
   NSString *filename = recording[@"filename"] ?: @"the stopped iPhone video";
-  ReaShootStoppedRecordingChoice choice = [ReaShootMacModalPrompts chooseStoppedRecordingActionForFilename:filename];
-  if (choice == ReaShootStoppedRecordingChoiceDownload) {
+  reashoot::core::StoppedRecordingAction choice =
+      modalPrompts().chooseStoppedRecordingActionForFilename(stdStringFromNSString(filename));
+  if (choice == reashoot::core::StoppedRecordingAction::Download) {
     [self downloadStoppedIPhoneRecording:recording];
     return;
   }
@@ -1769,17 +1830,16 @@ void setVideoEnabled(bool enabled);
 }
 
 - (void)updateCaptureFormatLabel {
-  NSString *previewState = self.previewStreamActive ? @"H.264 preview" : (self.previewStreamStarting ? @"preview connecting" : @"preview idle");
-  NSString *format = [NSString stringWithFormat:@"iPhone %@: %s %@ fps, %s, %s, %s lens, %sx, look %s, %@",
-                                                @"Wi-Fi",
-                                                g_iPhoneResolution.c_str(),
-                                                [NSString stringWithUTF8String:g_iPhoneFPS.c_str()],
-                                                g_iPhoneOrientation.c_str(),
-                                                g_iPhoneAspect.c_str(),
-                                                g_iPhoneLens.c_str(),
-                                                g_iPhoneZoom.c_str(),
-                                                g_iPhoneLook.c_str(),
-                                                previewState];
+  reashoot::core::CaptureProfile profile;
+  profile.resolution = g_iPhoneResolution;
+  profile.fps = g_iPhoneFPS;
+  profile.orientation = g_iPhoneOrientation;
+  profile.aspect = g_iPhoneAspect;
+  profile.lens = g_iPhoneLens;
+  profile.zoom = g_iPhoneZoom;
+  profile.look = g_iPhoneLook;
+  const std::string formatText = reashoot::core::captureFormatText(profile, self.previewStreamActive, self.previewStreamStarting);
+  NSString *format = [NSString stringWithUTF8String:formatText.c_str()];
   if (self.formatLabel) {
     self.formatLabel.stringValue = format;
   }
@@ -1910,20 +1970,6 @@ void setVideoEnabled(bool enabled);
 
 - (NSArray<NSString *> *)iPhoneConfigureArguments {
   return stringArrayFromStdVector(reashoot::core::configureArguments([self remoteCameraSettings]));
-}
-
-- (NSDictionary<NSString *, NSString *> *)fieldsFromHelperLine:(NSString *)line {
-  NSMutableDictionary<NSString *, NSString *> *fields = [NSMutableDictionary dictionary];
-  for (NSString *part in [line componentsSeparatedByString:@"\t"]) {
-    NSRange equals = [part rangeOfString:@"="];
-    if (equals.location == NSNotFound || equals.location == 0) {
-      continue;
-    }
-    NSString *key = [part substringToIndex:equals.location];
-    NSString *value = [part substringFromIndex:equals.location + 1];
-    fields[key] = value;
-  }
-  return fields;
 }
 
 - (BOOL)applyFirstDiscoveredIPhoneFromOutput:(NSString *)output {
@@ -2154,46 +2200,15 @@ void setVideoEnabled(bool enabled);
                                                        g_iPhoneFPS.c_str(),
                                                        g_iPhoneOrientation.c_str(),
                                                        g_iPhoneLens.c_str());
-    __weak ReaShootRecorder *weakSelf = self;
-    self.swellPreviewDecoder = [[ReaShootMacH264FrameDecoder alloc] initWithFrameHandler:^(const void *pixels, int width, int height, int strideBytes) {
-      ReaShootRecorder *strongSelf = weakSelf;
-      if (strongSelf && !strongSelf.swellPreviewReceivedFrame) {
-        strongSelf.swellPreviewReceivedFrame = YES;
-        [strongSelf setStatus:@"ReaShoot live video"];
-      }
-      if (g_swellPanelPrototypeDocked && g_swellPanelPrototype) {
-        reashoot::platform::swell::setSwellPanelPreviewFrame(g_swellPanelPrototype, pixels, width, height, strideBytes);
-      }
-    }];
-    self.playbackPreviewRenderer = [[ReaShootMacPlaybackPreviewRenderer alloc] initWithFrameHandler:^(const void *pixels, int width, int height, int strideBytes) {
-      if (g_swellPanelPrototype) {
-        reashoot::platform::swell::setSwellPanelPreviewFrame(g_swellPanelPrototype, pixels, width, height, strideBytes);
-      }
-    }];
-    self.previewStreamClient = [[ReaShootMacPreviewStreamClient alloc] init];
+    [self ensurePreviewAdapters];
     [self updateCaptureFormatLabel];
   }
 }
 
 - (void)startRemotePreview {
   [self persistIPhoneSettings];
-  if (!self.previewStreamClient) {
-    self.previewStreamClient = [[ReaShootMacPreviewStreamClient alloc] init];
-  }
-  if (!self.swellPreviewDecoder) {
-    __weak ReaShootRecorder *weakSelf = self;
-    self.swellPreviewDecoder = [[ReaShootMacH264FrameDecoder alloc] initWithFrameHandler:^(const void *pixels, int width, int height, int strideBytes) {
-      ReaShootRecorder *strongSelf = weakSelf;
-      if (strongSelf && !strongSelf.swellPreviewReceivedFrame) {
-        strongSelf.swellPreviewReceivedFrame = YES;
-        [strongSelf setStatus:@"ReaShoot live video"];
-      }
-      if (g_swellPanelPrototypeDocked && g_swellPanelPrototype) {
-        reashoot::platform::swell::setSwellPanelPreviewFrame(g_swellPanelPrototype, pixels, width, height, strideBytes);
-      }
-    }];
-  }
-  if (!self.previewStreamClient.isRunning && !self.previewStreamStarting) {
+  [self ensurePreviewAdapters];
+  if (!_previewStreamClient->isRunning() && !self.previewStreamStarting) {
     self.previewStreamFailed = NO;
     self.previewStreamFailureReason = nil;
   }
@@ -2213,7 +2228,7 @@ void setVideoEnabled(bool enabled);
         return;
       }
       NSString *message = [output stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-      if (message.length > 0 && !self.previewStreamClient.isRunning && !self.previewStreamStarting) {
+      if (message.length > 0 && (!_previewStreamClient || !_previewStreamClient->isRunning()) && !self.previewStreamStarting) {
         [self setStatus:message];
       }
       [self runReaShootCommandAsync:@"start-preview"
@@ -2228,7 +2243,9 @@ void setVideoEnabled(bool enabled);
           [self setStatus:message];
           return;
         }
-        [self startPreviewStreamWithFields:[self fieldsFromHelperLine:previewOutput]];
+        NSDictionary<NSString *, NSString *> *fields =
+            dictionaryFromFields(reashoot::core::parseFields(previewOutput.UTF8String ?: "", '\t'));
+        [self startPreviewStreamWithFields:fields];
       }];
     }];
     return;
@@ -2253,7 +2270,8 @@ void setVideoEnabled(bool enabled);
 }
 
 - (void)startPreviewStreamWithFields:(NSDictionary<NSString *, NSString *> *)fields {
-  if (self.showingPlayback || self.previewStreamClient.isRunning || self.previewStreamStarting || self.previewStreamFailed) {
+  [self ensurePreviewAdapters];
+  if (self.showingPlayback || (_previewStreamClient && _previewStreamClient->isRunning()) || self.previewStreamStarting || self.previewStreamFailed) {
     return;
   }
   if (g_iPhoneHost.empty() || g_iPhoneToken.empty()) {
@@ -2263,25 +2281,34 @@ void setVideoEnabled(bool enabled);
     return;
   }
 
-  NSString *streamPath = fields[@"streamPath"];
-  if (streamPath.length == 0) {
-    streamPath = @"/preview";
+  reashoot::core::FieldMap fieldMap;
+  for (NSString *key in fields) {
+    fieldMap[stdStringFromNSString(key)] = stdStringFromNSString(fields[key]);
   }
-  NSString *portText = fields[@"port"];
-  NSInteger port = portText.length > 0 ? portText.integerValue : 8789;
-  if (port <= 0) {
-    port = 8789;
-  }
+  const reashoot::core::PreviewStreamDescriptor descriptor =
+      reashoot::core::previewStreamDescriptorFromFields(fieldMap);
 
   __weak ReaShootRecorder *weakSelf = self;
-  BOOL started = [self.previewStreamClient startWithHost:[NSString stringWithUTF8String:g_iPhoneHost.c_str()]
-                                                    port:port
-                                                    path:streamPath
-                                                   token:[NSString stringWithUTF8String:g_iPhoneToken.c_str()]
-                                                  onData:^(NSData *accessUnit) {
-    [weakSelf handlePreviewAccessUnit:accessUnit];
-  }
-                                                onActive:^{
+  reashoot::core::PreviewStreamRequest request;
+  request.host = g_iPhoneHost;
+  request.port = descriptor.port;
+  request.path = descriptor.streamPath;
+  request.token = g_iPhoneToken;
+  BOOL started = _previewStreamClient->start(request,
+                                            [weakSelf](std::vector<uint8_t> accessUnit) {
+    ReaShootRecorder *strongSelf = weakSelf;
+    if (!strongSelf) {
+      return;
+    }
+    if (!strongSelf.swellPreviewReceivedAccessUnit) {
+      strongSelf.swellPreviewReceivedAccessUnit = YES;
+      [strongSelf setStatus:@"Preview: H.264 received; decoding for SWELL"];
+    }
+    if (strongSelf->_swellPreviewRenderer && !accessUnit.empty()) {
+      strongSelf->_swellPreviewRenderer->renderAnnexBAccessUnit(accessUnit.data(), accessUnit.size());
+    }
+  },
+                                            [weakSelf]() {
     ReaShootRecorder *strongSelf = weakSelf;
     if (!strongSelf) {
       return;
@@ -2290,8 +2317,8 @@ void setVideoEnabled(bool enabled);
     strongSelf.previewStreamActive = YES;
     [strongSelf setStatus:@"Preview: H.264 stream"];
     [strongSelf updateCaptureFormatLabel];
-  }
-                                                 onError:^(NSError *error) {
+  },
+                                            [weakSelf](const std::string &error) {
     ReaShootRecorder *strongSelf = weakSelf;
     if (!strongSelf) {
       return;
@@ -2299,11 +2326,11 @@ void setVideoEnabled(bool enabled);
     strongSelf.previewStreamStarting = NO;
     strongSelf.previewStreamActive = NO;
     strongSelf.previewStreamFailed = YES;
-    strongSelf.previewStreamFailureReason = error.localizedDescription ?: @"Preview stream failed";
+    strongSelf.previewStreamFailureReason = stringFromStd(error.empty() ? "Preview stream failed" : error);
     if (!strongSelf.showingPlayback && !strongSelf.recordingVisualState) {
       [strongSelf setStatus:@"Preview: stream disconnected"];
     }
-  }];
+  });
   if (!started) {
     self.previewStreamFailed = YES;
     self.previewStreamFailureReason = @"Invalid preview URL";
@@ -2316,7 +2343,9 @@ void setVideoEnabled(bool enabled);
   self.previewStreamFailureReason = nil;
   self.swellPreviewReceivedAccessUnit = NO;
   self.swellPreviewReceivedFrame = NO;
-  [self.swellPreviewDecoder reset];
+  if (_swellPreviewRenderer) {
+    _swellPreviewRenderer->reset();
+  }
   [self setStatus:@"Preview: connecting H.264 stream"];
 }
 
@@ -2325,21 +2354,19 @@ void setVideoEnabled(bool enabled);
   self.previewStreamActive = NO;
   self.swellPreviewReceivedAccessUnit = NO;
   self.swellPreviewReceivedFrame = NO;
-  [self.previewStreamClient stop];
-  [self.swellPreviewDecoder reset];
-}
-
-- (void)handlePreviewAccessUnit:(NSData *)accessUnit {
-  if (!self.swellPreviewReceivedAccessUnit) {
-    self.swellPreviewReceivedAccessUnit = YES;
-    [self setStatus:@"Preview: H.264 received; decoding for SWELL"];
+  if (_previewStreamClient) {
+    _previewStreamClient->stop();
   }
-  [self.swellPreviewDecoder decodeAccessUnit:accessUnit];
+  if (_swellPreviewRenderer) {
+    _swellPreviewRenderer->reset();
+  }
 }
 
 - (void)showLivePreview {
   self.showingPlayback = NO;
-  [self.playbackPreviewRenderer hide];
+  if (_playbackPreviewRenderer) {
+    _playbackPreviewRenderer->hide();
+  }
   [self startRemotePreview];
 }
 
@@ -2350,14 +2377,11 @@ void setVideoEnabled(bool enabled);
   [self ensureDockView];
   const BOOL enteringPlayback = !self.showingPlayback;
   self.showingPlayback = YES;
-  if (self.playbackPreviewRenderer) {
+  if (_playbackPreviewRenderer) {
     if (enteringPlayback) {
       [self stopRemotePreview];
     }
-    [self.playbackPreviewRenderer showPath:[NSString stringWithUTF8String:path.c_str()]
-                                itemStart:itemStart
-                             sourceOffset:sourceOffset
-                           projectPosition:projectPosition];
+    _playbackPreviewRenderer->showMedia(path, itemStart, sourceOffset, projectPosition);
     [self setStatus:@"Playback"];
   } else {
     (void)path;
@@ -2378,7 +2402,9 @@ void setVideoEnabled(bool enabled);
 
 - (void)stopAllPreviewActivity {
   self.showingPlayback = NO;
-  [self.playbackPreviewRenderer hide];
+  if (_playbackPreviewRenderer) {
+    _playbackPreviewRenderer->hide();
+  }
   [self stopRemotePreview];
 }
 
@@ -2417,23 +2443,9 @@ void setVideoEnabled(bool enabled);
   g_swellPanelPrototypeDocked = false;
 }
 
-- (NSString *)friendlyStatusTextForStatus:(NSString *)status {
-  NSString *statusText = status ?: @"Idle";
-  NSString *lowercase = statusText.lowercaseString;
-  if ([lowercase containsString:@"unauthorized"]) {
-    return @"iPhone authorization failed: reset pairing on the iPhone, enter the new code in Setup, then Pair again.";
-  }
-  if ([lowercase containsString:@"invalid pairing code"]) {
-    return @"Invalid pairing code: check the six-digit code on the iPhone and press Pair again.";
-  }
-  if ([lowercase containsString:@"connection closed"]) {
-    return @"iPhone connection closed. If you reset pairing, enter the current code and Pair again.";
-  }
-  return statusText;
-}
-
 - (void)setStatus:(NSString *)status {
-  NSString *statusText = [self friendlyStatusTextForStatus:status];
+  std::string friendlyStatus = reashoot::core::friendlyStatusText(status ? status.UTF8String : "Idle");
+  NSString *statusText = [NSString stringWithUTF8String:friendlyStatus.c_str()];
   if (self.statusLabel) {
     self.statusLabel.font = [NSFont boldSystemFontOfSize:14.0];
     self.statusLabel.stringValue = statusText;
@@ -2491,13 +2503,12 @@ void setVideoEnabled(bool enabled) {
     return;
   }
 
-  g_videoEnabled = enabled;
+  g_extensionController.setVideoEnabled(enabled);
+  syncExtensionStateGlobals();
   if (enabled) {
-    g_followEnabled = true;
     ensureVideoTrackReady(currentProject(), false);
     [recorder() showPreview];
   } else {
-    g_followEnabled = false;
     if (recorder().isRecording) {
       stopTransportRecording();
     }
@@ -2988,7 +2999,8 @@ void migrateLegacyToolbarActions() {
 void loadSettings() {
   std::string follow = reashoot::reaper::extState(kExtStateSection, kFollowEnabledKey);
   if (!follow.empty()) {
-    g_followEnabled = follow != "0";
+    g_extensionController.setFollowEnabled(follow != "0");
+    syncExtensionStateGlobals();
   }
   std::string previewFloating = reashoot::reaper::extState(kExtStateSection, kPreviewFloatingKey);
   if (!previewFloating.empty()) {
