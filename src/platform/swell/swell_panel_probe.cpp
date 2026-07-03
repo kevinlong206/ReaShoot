@@ -24,6 +24,35 @@ enum ControlID {
   kFormatLabel = 1011,
   kPreviousLookButton = 1012,
   kNextLookButton = 1013,
+  kLookCombo = 1014,
+};
+
+struct LookOption {
+  const char *title;
+  const char *id;
+};
+
+const LookOption kLookOptions[] = {
+    {"Natural", "natural"},
+    {"Warm Vintage", "warmVintage"},
+    {"Cool Blue", "coolBlue"},
+    {"High Contrast B&W", "highContrastBW"},
+    {"Faded Film", "fadedFilm"},
+    {"Dream Glow", "dreamGlow"},
+    {"Noir", "noir"},
+    {"Saturated Pop", "saturatedPop"},
+    {"Bleach Bypass", "bleachBypass"},
+    {"Sepia", "sepia"},
+    {"Instant Photo", "instantPhoto"},
+    {"Chrome", "chrome"},
+    {"Tonal", "tonal"},
+    {"Silvertone", "silvertone"},
+    {"Dramatic Warm", "dramaticWarm"},
+    {"Dramatic Cool", "dramaticCool"},
+    {"Soft Matte", "softMatte"},
+    {"Comic Book", "comicBook"},
+    {"VHS", "vhs"},
+    {"Music Video Pop", "musicVideoPop"},
 };
 
 std::vector<uint32_t> g_previewFrame;
@@ -33,6 +62,18 @@ bool g_usingLivePreview = false;
 bool g_previewPending = false;
 std::string g_previewMessage = "Preview unavailable: set iPhone host and token, then Test.";
 SwellPanelCallbacks g_callbacks;
+
+int lookIndexForID(const char *lookID) {
+  if (!lookID || !lookID[0]) {
+    return 0;
+  }
+  for (int i = 0; i < static_cast<int>(sizeof(kLookOptions) / sizeof(kLookOptions[0])); ++i) {
+    if (strcmp(kLookOptions[i].id, lookID) == 0) {
+      return i;
+    }
+  }
+  return 0;
+}
 
 void updatePlaceholderPreviewFrame() {
   g_previewFrame.resize(static_cast<size_t>(g_previewWidth * g_previewHeight));
@@ -129,6 +170,13 @@ static LRESULT swellProbeWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
       }
       return 0;
     }
+    if (controlID == kLookCombo) {
+      const int selection = comboGetCurSel(hwnd, kLookCombo);
+      if (selection >= 0 && selection < static_cast<int>(sizeof(kLookOptions) / sizeof(kLookOptions[0])) && g_callbacks.selectLook) {
+        g_callbacks.selectLook(g_callbacks.context, kLookOptions[selection].id);
+      }
+      return 0;
+    }
   }
   return 0;
 }
@@ -155,7 +203,12 @@ HWND createSwellPanelProbe(HWND parent, const SwellPanelCallbacks &callbacks) {
   makeButton(0, "Test", kTestButton, 616, 101, 52, 24, 0);
   makeButton(0, "Prev", kPreviousLookButton, 12, 49, 52, 24, 0);
   makeButton(0, "Next", kNextLookButton, 616, 49, 52, 24, 0);
-  makeLabel(0, "Format: SWELL production panel", kFormatLabel, 70, 49, 540, 18, 0);
+  makeCombo(kLookCombo, 70, 49, 540, 200, CBS_DROPDOWNLIST);
+  for (const auto &look : kLookOptions) {
+    comboAddString(panel, kLookCombo, look.title);
+  }
+  comboSetCurSel(panel, kLookCombo, 0);
+  makeLabel(0, "Format: SWELL production panel", kFormatLabel, 12, 29, 656, 18, 0);
   makeLabel(0, "Video disabled", kStatusLabel, 12, 9, 600, 18, 0);
   invalidateRect(panel, nullptr, false);
   return panel;
@@ -176,6 +229,13 @@ void updateSwellPanelProbe(HWND panel, const char *status, const char *format, c
     updatePlaceholderPreviewFrame();
   }
   invalidateRect(panel, nullptr, false);
+}
+
+void setSwellPanelLook(HWND panel, const char *lookID) {
+  if (!panel) {
+    return;
+  }
+  comboSetCurSel(panel, kLookCombo, lookIndexForID(lookID));
 }
 
 SwellPanelSettings swellPanelSettings(HWND panel) {

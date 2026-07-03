@@ -17,8 +17,12 @@ using CreateDialogFn = HWND (*)(void *, const char *, HWND, DLGPROC, LPARAM);
 using MakeButtonFn = HWND (*)(int, const char *, int, int, int, int, int, int);
 using MakeEditFieldFn = HWND (*)(int, int, int, int, int, int);
 using MakeLabelFn = HWND (*)(int, const char *, int, int, int, int, int, int);
+using MakeComboFn = HWND (*)(int, int, int, int, int, int);
 using SetDlgItemTextFn = BOOL (*)(HWND, int, const char *);
 using GetDlgItemTextFn = BOOL (*)(HWND, int, char *, int);
+using ComboAddStringFn = int (*)(HWND, int, const char *);
+using ComboSetCurSelFn = void (*)(HWND, int, int);
+using ComboGetCurSelFn = int (*)(HWND, int);
 using GetClientRectFn = void (*)(HWND, RECT *);
 using InvalidateRectFn = BOOL (*)(HWND, const RECT *, int);
 using SetTimerFn = UINT_PTR (*)(HWND, UINT_PTR, UINT, TIMERPROC);
@@ -37,8 +41,12 @@ CreateDialogFn g_createDialog = nullptr;
 MakeButtonFn g_makeButton = nullptr;
 MakeEditFieldFn g_makeEditField = nullptr;
 MakeLabelFn g_makeLabel = nullptr;
+MakeComboFn g_makeCombo = nullptr;
 SetDlgItemTextFn g_setDlgItemText = nullptr;
 GetDlgItemTextFn g_getDlgItemText = nullptr;
+ComboAddStringFn g_comboAddString = nullptr;
+ComboSetCurSelFn g_comboSetCurSel = nullptr;
+ComboGetCurSelFn g_comboGetCurSel = nullptr;
 GetClientRectFn g_getClientRect = nullptr;
 InvalidateRectFn g_invalidateRect = nullptr;
 SetTimerFn g_setTimer = nullptr;
@@ -95,8 +103,12 @@ bool initializeSwellRuntime() {
   g_makeButton = loadFunction<MakeButtonFn>("SWELL_MakeButton");
   g_makeEditField = loadFunction<MakeEditFieldFn>("SWELL_MakeEditField");
   g_makeLabel = loadFunction<MakeLabelFn>("SWELL_MakeLabel");
+  g_makeCombo = loadFunction<MakeComboFn>("SWELL_MakeCombo");
   g_setDlgItemText = loadFunction<SetDlgItemTextFn>("SetDlgItemText");
   g_getDlgItemText = loadFunction<GetDlgItemTextFn>("GetDlgItemText");
+  g_comboAddString = loadFunction<ComboAddStringFn>("SWELL_CB_AddString");
+  g_comboSetCurSel = loadFunction<ComboSetCurSelFn>("SWELL_CB_SetCurSel");
+  g_comboGetCurSel = loadFunction<ComboGetCurSelFn>("SWELL_CB_GetCurSel");
   g_getClientRect = loadFunction<GetClientRectFn>("GetClientRect");
   g_invalidateRect = loadFunction<InvalidateRectFn>("InvalidateRect");
   g_setTimer = loadFunction<SetTimerFn>("SetTimer");
@@ -143,6 +155,10 @@ HWND makeLabel(int align, const char *label, int controlID, int x, int y, int wi
   return g_makeLabel ? g_makeLabel(align, label, controlID, x, y, width, height, flags) : nullptr;
 }
 
+HWND makeCombo(int controlID, int x, int y, int width, int height, int flags) {
+  return g_makeCombo ? g_makeCombo(controlID, x, y, width, height, flags) : nullptr;
+}
+
 bool setDlgItemText(HWND parent, int controlID, const char *text) {
   return g_setDlgItemText && g_setDlgItemText(parent, controlID, text ? text : "");
 }
@@ -153,6 +169,20 @@ bool getDlgItemText(HWND parent, int controlID, char *text, int textLength) {
   }
   text[0] = '\0';
   return g_getDlgItemText(parent, controlID, text, textLength);
+}
+
+int comboAddString(HWND parent, int controlID, const char *text) {
+  return g_comboAddString ? g_comboAddString(parent, controlID, text ? text : "") : -1;
+}
+
+void comboSetCurSel(HWND parent, int controlID, int selection) {
+  if (g_comboSetCurSel) {
+    g_comboSetCurSel(parent, controlID, selection);
+  }
+}
+
+int comboGetCurSel(HWND parent, int controlID) {
+  return g_comboGetCurSel ? g_comboGetCurSel(parent, controlID) : -1;
 }
 
 bool getClientRect(HWND hwnd, RECT *rect) {

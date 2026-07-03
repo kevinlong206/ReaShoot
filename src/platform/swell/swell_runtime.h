@@ -12,8 +12,12 @@ HWND createDialog(void *resourceHead, const char *resourceID, HWND parent, DLGPR
 HWND makeButton(int isDefault, const char *label, int controlID, int x, int y, int width, int height, int flags);
 HWND makeEditField(int controlID, int x, int y, int width, int height, int flags);
 HWND makeLabel(int align, const char *label, int controlID, int x, int y, int width, int height, int flags);
+HWND makeCombo(int controlID, int x, int y, int width, int height, int flags);
 bool setDlgItemText(HWND parent, int controlID, const char *text);
 bool getDlgItemText(HWND parent, int controlID, char *text, int textLength);
+int comboAddString(HWND parent, int controlID, const char *text);
+void comboSetCurSel(HWND parent, int controlID, int selection);
+int comboGetCurSel(HWND parent, int controlID);
 bool getClientRect(HWND hwnd, RECT *rect);
 bool invalidateRect(HWND hwnd, const RECT *rect, bool eraseBackground);
 bool setTimer(HWND hwnd, UINT_PTR timerID, UINT rateMs);

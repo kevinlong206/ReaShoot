@@ -1787,6 +1787,7 @@ void setVideoEnabled(bool enabled);
                                                      format.UTF8String,
                                                      g_iPhoneHost.c_str(),
                                                      g_iPhoneToken.c_str());
+    reashoot::platform::swell::setSwellPanelLook(g_swellPanelPrototype, g_iPhoneLook.c_str());
   }
   [self updateRecordingTextColor];
 }
@@ -2112,8 +2113,17 @@ void setVideoEnabled(bool enabled);
       ReaShootRecorder *target = (__bridge ReaShootRecorder *)context;
       dispatch_async(dispatch_get_main_queue(), ^{ [target nextIPhoneLook:nil]; });
     };
+    callbacks.selectLook = [](void *context, const char *lookID) {
+      ReaShootRecorder *target = (__bridge ReaShootRecorder *)context;
+      std::string selectedLook = lookID ? lookID : "natural";
+      dispatch_async(dispatch_get_main_queue(), ^{
+        g_iPhoneLook = selectedLook;
+        [target profileSelectionChanged:nil];
+      });
+    };
     g_swellPanelPrototype = reashoot::platform::swell::createSwellPanelProbe(nullptr, callbacks);
     reashoot::platform::swell::updateSwellPanelProbe(g_swellPanelPrototype, followStatusText().c_str(), nullptr, g_iPhoneHost.c_str(), g_iPhoneToken.c_str());
+    reashoot::platform::swell::setSwellPanelLook(g_swellPanelPrototype, g_iPhoneLook.c_str());
     __weak ReaShootRecorder *weakSelf = self;
     self.swellPreviewDecoder = [[ReaShootMacH264FrameDecoder alloc] initWithFrameHandler:^(const void *pixels, int width, int height, int strideBytes) {
       ReaShootRecorder *strongSelf = weakSelf;

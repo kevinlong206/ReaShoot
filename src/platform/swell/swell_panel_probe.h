@@ -14,6 +14,7 @@ struct SwellPanelCallbacks {
   void (*deleteAllPending)(void *context) = nullptr;
   void (*previousLook)(void *context) = nullptr;
   void (*nextLook)(void *context) = nullptr;
+  void (*selectLook)(void *context, const char *lookID) = nullptr;
 };
 
 struct SwellPanelSettings {
@@ -24,6 +25,7 @@ struct SwellPanelSettings {
 
 HWND createSwellPanelProbe(HWND parent, const SwellPanelCallbacks &callbacks = {});
 void updateSwellPanelProbe(HWND panel, const char *status, const char *format, const char *host, const char *token);
+void setSwellPanelLook(HWND panel, const char *lookID);
 SwellPanelSettings swellPanelSettings(HWND panel);
 void setSwellPanelPreviewFrame(HWND panel, const void *pixels, int width, int height, int strideBytes);
 void setSwellPanelPreviewPending(HWND panel, const char *reason = nullptr);
