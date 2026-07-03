@@ -116,7 +116,7 @@ make install
 ## Iterating locally
 
 - Restart REAPER after every `make install`; the extension dylib is loaded at process startup.
-- Keep protocol changes mirrored between `helper/Sources/ReaShootCore/ControlProtocol.swift` and `iphone/Sources/ReaShootCore/ControlProtocol.swift`.
-- Keep helper CLI behavior mirrored between `helper/Sources/reashoot-mac` and `iphone/Sources/reashoot-mac`.
-- Run `make check` before committing shared Swift changes; it verifies mirrored helper/iPhone files and runs the Swift checks.
+- Keep the C++ helper protocol in `src/core/control_protocol.*` compatible with the iPhone protocol models in `iphone/Sources/ReaShootCore`.
+- Keep the C++ helper CLI behavior in `src/helper/` compatible with the REAPER extension's line-based output parsers.
+- Run `make check` before committing; it builds the C++ helper and runs the iPhone Swift checks.
 - Xcode/SwiftPM may regenerate `iphone/Package.resolved` or local `.build` directories during builds. Do not commit those unless dependency pinning intentionally changes.

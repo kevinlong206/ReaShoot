@@ -29,7 +29,7 @@ The app disables the idle timer while ready/listening so foreground preview does
 - `Sources/ReaShootKit`: iOS recording engine, pairing, WebSocket server, HTTP server, and orchestration service.
 - `Sources/ReaShootKit/PreviewH264Encoder.swift`: VideoToolbox H.264 encoder for low-resolution dock preview.
 - `Sources/ReaShootKit/PreviewStreamServer.swift`: authenticated binary WebSocket server for preview frames.
-- `Sources/reashoot-mac`: Mac command-line tool. Keep this aligned with `../helper/Sources/reashoot-mac`.
+- `Sources/reashoot-mac`: Legacy SwiftPM Mac command-line tool target for iPhone-package development. The REAPER-side bundled helper lives in `../src/helper/`.
 - `Tests/ReaShootCoreTests`: shared protocol and state-machine tests.
 - `test-downloads`: local output directory for downloaded recordings; do not commit it.
 

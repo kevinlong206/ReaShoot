@@ -11,10 +11,10 @@ This repository contains ReaShoot: a macOS-only native REAPER extension plus its
 ## Important files
 
 - `src/reashoot.mm` - Main extension implementation, including REAPER action registration, docked preview UI, iPhone app control, media insertion, playback preview, and post-record audio alignment.
-- `helper/` - Bundled Swift helper package. Builds `reashoot-mac` and shares protocol types with the iPhone app.
+- `src/helper/` - Bundled C++ helper executable. Builds `reashoot-mac` for REAPER-side iPhone control, discovery, and media download.
 - `iphone/` - Consolidated iPhone app project and Swift package.
 - `iphone/Sources/ReaShootKit/` - iOS capture, H.264 preview streaming, WebSocket control, HTTP transfer, and pairing.
-- `iphone/Sources/ReaShootCore/ControlProtocol.swift` and `helper/Sources/ReaShootCore/ControlProtocol.swift` - Protocol definitions; keep these in sync when adding commands/events.
+- `src/core/control_protocol.*` and `iphone/Sources/ReaShootCore/ControlProtocol.swift` - Protocol definitions; keep these compatible when adding commands/events.
 - `Info.plist` - Bundle metadata for the REAPER extension.
 - `Makefile` - Builds and installs `reaper_reashoot.dylib` and `reashoot-mac`.
 - `README.md` - User-facing install and behavior notes.
