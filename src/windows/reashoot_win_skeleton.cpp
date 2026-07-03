@@ -48,15 +48,23 @@
 #include "reashoot/audio_align.h"
 #include "reashoot/debug_logger.h"
 #include "reashoot/plugin_settings.h"
+#include "reashoot/webrtc_receiver.h"
+#include "reashoot/webrtc_sdp.h"
 #include "reashoot/windows/helper_launcher.h"
 
 #include "preview_panel_win32.h"
 #include "settings_dialog_win32.h"
 
+#if defined(REASHOOT_WITH_LIBWEBRTC)
+#include "webrtc_receiver_libwebrtc.h"
+#endif
+
 #include <windows.h>
 
+#include <atomic>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -699,17 +707,222 @@ void primePanelValues() {
   previewPanel().setInitialValues(pc);
 }
 
+// ---- WebRTC live preview ---------------------------------------------------
+// REAPER is the recv-only offerer. The receiver produces a local SDP offer and
+// ICE candidates; this controller relays them to the iPhone through the helper
+// (webrtc-answer / webrtc-candidate) and feeds the returned answer + candidates
+// back into the receiver. Decoded frames are drawn by the panel's GDI renderer.
+// Signaling that would otherwise block the WebRTC signaling thread (candidate
+// sends, stop-webrtc) runs on tracked worker threads joined on stop.
+
+std::string trimWhitespace(const std::string &value) {
+  const char *ws = " \t\r\n";
+  const auto begin = value.find_first_not_of(ws);
+  if (begin == std::string::npos) {
+    return {};
+  }
+  const auto end = value.find_last_not_of(ws);
+  return value.substr(begin, end - begin + 1);
+}
+
+// Writes an SDP to a unique temp file (consumed by the helper's --offer-file).
+bool writeTempSdp(const std::string &sdp, std::wstring &outPath) {
+  wchar_t tempDir[MAX_PATH] = {0};
+  const DWORD dirLen = GetTempPathW(MAX_PATH, tempDir);
+  if (dirLen == 0 || dirLen > MAX_PATH) {
+    return false;
+  }
+  wchar_t tempFile[MAX_PATH] = {0};
+  if (GetTempFileNameW(tempDir, L"rsw", 0, tempFile) == 0) {
+    return false;
+  }
+  std::ofstream stream(tempFile, std::ios::binary | std::ios::trunc);
+  if (!stream) {
+    return false;
+  }
+  stream.write(sdp.data(), static_cast<std::streamsize>(sdp.size()));
+  if (!stream) {
+    return false;
+  }
+  stream.close();
+  outPath = tempFile;
+  return true;
+}
+
+class WebRTCPreviewController {
+public:
+  bool active() const { return active_.load(); }
+
+  void start() {
+    if (active_.load()) {
+      return;
+    }
+    ReaperExtStateStore store;
+    const reashoot::PluginSettings settings = reashoot::loadSettings(store);
+    if (settings.host.empty() || settings.token.empty()) {
+      report("ReaShoot: set the iPhone host and token to start the WebRTC preview.");
+      return;
+    }
+
+    reashoot::IPreviewRenderer *renderer = previewPanel().renderer();
+    receiver_ = makeReceiver();
+    receiver_->setRenderer(renderer);
+    settings_ = settings;
+    helper_ = helperExecutablePath();
+    active_ = true;
+    report("ReaShoot: connecting WebRTC preview\u2026");
+
+    receiver_->start([this](const reashoot::WebRTCSignal &signal) { onLocalSignal(signal); });
+  }
+
+  void stop() {
+    const bool wasActive = active_.exchange(false);
+    if (!wasActive && !receiver_) {
+      return;
+    }
+    if (receiver_) {
+      receiver_->stop();
+    }
+    if (!settings_.host.empty() && !settings_.token.empty()) {
+      const reashoot::PluginSettings settings = settings_;
+      const std::wstring helper = helper_;
+      spawnWorker([settings, helper]() {
+        const reashoot::HelperConnection connection =
+            reashoot::makeConnection(settings.host, settings.controlPort, settings.httpPort);
+        reashoot::runVideoSyncCommand(helper, "stop-webrtc", connection,
+                                      {L"--token", widen(settings.token)});
+      });
+    }
+    joinWorkers();
+    receiver_.reset();
+    if (wasActive) {
+      report("ReaShoot: WebRTC preview stopped.");
+    }
+  }
+
+  // Plugin-unload teardown: stop and release libwebrtc globals.
+  void shutdown() {
+    stop();
+#if defined(REASHOOT_WITH_LIBWEBRTC)
+    reashoot::shutdownLibWebRTC();
+#endif
+  }
+
+private:
+  std::unique_ptr<reashoot::IWebRTCReceiver> makeReceiver() {
+#if defined(REASHOOT_WITH_LIBWEBRTC)
+    return std::make_unique<reashoot::LibWebRTCReceiver>();
+#else
+    return std::make_unique<reashoot::StubWebRTCReceiver>();
+#endif
+  }
+
+  void onLocalSignal(const reashoot::WebRTCSignal &signal) {
+    switch (signal.type) {
+    case reashoot::WebRTCSignal::Type::Offer:
+      handleLocalOffer(signal.payload);
+      break;
+    case reashoot::WebRTCSignal::Type::Candidate:
+      sendLocalCandidate(signal);
+      break;
+    case reashoot::WebRTCSignal::Type::Answer:
+      break; // ReaShoot never emits an answer.
+    }
+  }
+
+  // Runs on the receiver's negotiation worker thread, so blocking on the helper
+  // subprocess here is safe.
+  void handleLocalOffer(const std::string &offerSdp) {
+    const reashoot::HelperConnection connection =
+        reashoot::makeConnection(settings_.host, settings_.controlPort, settings_.httpPort);
+    std::wstring offerFile;
+    if (!writeTempSdp(offerSdp, offerFile)) {
+      logger().log("webrtc: failed to stage offer SDP");
+      return;
+    }
+    const reashoot::ProcessResult result = reashoot::runVideoSyncCommand(
+        helper_, "webrtc-answer", connection,
+        {L"--token", widen(settings_.token), L"--offer-file", offerFile});
+    DeleteFileW(offerFile.c_str());
+
+    if (result.exitCode != 0 || result.standardOutput.empty()) {
+      logger().log("webrtc: webrtc-answer failed exit=" + std::to_string(result.exitCode));
+      report("ReaShoot: WebRTC signaling failed; check the iPhone connection.");
+      return;
+    }
+
+    const reashoot::StrippedAnswer stripped =
+        reashoot::stripInlineIceCandidates(trimWhitespace(result.standardOutput));
+    if (!receiver_) {
+      return;
+    }
+    reashoot::WebRTCSignal answer;
+    answer.type = reashoot::WebRTCSignal::Type::Answer;
+    answer.payload = stripped.sdp;
+    receiver_->handleRemoteSignal(answer);
+    for (const reashoot::WebRTCSignal &candidate : stripped.candidates) {
+      receiver_->handleRemoteSignal(candidate);
+    }
+  }
+
+  // Runs on the WebRTC signaling thread; relay on a worker so we never block it.
+  void sendLocalCandidate(const reashoot::WebRTCSignal &signal) {
+    const reashoot::PluginSettings settings = settings_;
+    const std::wstring helper = helper_;
+    spawnWorker([settings, helper, signal]() {
+      const reashoot::HelperConnection connection =
+          reashoot::makeConnection(settings.host, settings.controlPort, settings.httpPort);
+      std::vector<std::wstring> args = {L"--token", widen(settings.token), L"--candidate",
+                                        widen(signal.payload), L"--mline",
+                                        std::to_wstring(signal.mlineIndex)};
+      if (!signal.mid.empty()) {
+        args.push_back(L"--mid");
+        args.push_back(widen(signal.mid));
+      }
+      reashoot::runVideoSyncCommand(helper, "webrtc-candidate", connection, args);
+    });
+  }
+
+  void spawnWorker(std::function<void()> work) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    workers_.emplace_back(std::move(work));
+  }
+
+  void joinWorkers() {
+    std::vector<std::thread> workers;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      workers.swap(workers_);
+    }
+    for (std::thread &worker : workers) {
+      if (worker.joinable()) {
+        worker.join();
+      }
+    }
+  }
+
+  std::atomic<bool> active_{false};
+  std::unique_ptr<reashoot::IWebRTCReceiver> receiver_;
+  reashoot::PluginSettings settings_;
+  std::wstring helper_;
+  std::mutex mutex_;
+  std::vector<std::thread> workers_;
+};
+
+WebRTCPreviewController g_webrtcPreview;
+
 void handleShowPreview() {
   ensurePanelConfigured();
   reashoot::Win32PreviewPanel &panel = previewPanel();
   if (panel.isVisible()) {
     panel.hide();
+    g_webrtcPreview.stop();
     report("ReaShoot: preview hidden.");
   } else {
     primePanelValues();
     panel.show();
-    report("ReaShoot: preview panel shown. Pair and record from here (video preview pending "
-           "WebRTC).");
+    g_webrtcPreview.start();
+    report("ReaShoot: preview panel shown. Pair and record from here.");
   }
 }
 
@@ -831,6 +1044,7 @@ void unregisterActions(reaper_plugin_info_t *rec) {
   rec->Register("-timer", reinterpret_cast<void *>(onTimer));
   rec->Register("-accelerator", &g_panelAccel);
   rec->Register("-hookcommand2", reinterpret_cast<void *>(hookCommand2));
+  g_webrtcPreview.shutdown();
   joinFollowWorkers();
 }
 

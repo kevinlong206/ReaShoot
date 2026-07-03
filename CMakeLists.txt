@@ -9,6 +9,27 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(REASHOOT_REAPER_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/vendor/reaper-sdk/sdk" CACHE PATH "Path to the REAPER Extension SDK headers")
 set(REASHOOT_REAPER_WDL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/vendor/reaper-sdk/WDL" CACHE PATH "Path to WDL/SWELL headers from the REAPER SDK")
 
+# Real WebRTC preview support is backed by the webrtc-sdk/libwebrtc prebuilt
+# (the libwebrtc C++ wrapper API), vendored under vendor/libwebrtc. It shares
+# the WebRTC lineage of the iPhone app's LiveKit build, keeping codecs
+# compatible. When the prebuilt is absent the plugin falls back to the stub
+# receiver so the rest of the build still works.
+option(REASHOOT_WITH_LIBWEBRTC "Build the libwebrtc-backed WebRTC preview receiver when the prebuilt is present" ON)
+set(REASHOOT_LIBWEBRTC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/vendor/libwebrtc/extracted/libwebrtc-x64-release" CACHE PATH "Path to the extracted webrtc-sdk/libwebrtc prebuilt (include/ and lib/)")
+
+set(REASHOOT_HAVE_LIBWEBRTC FALSE)
+if(WIN32 AND REASHOOT_WITH_LIBWEBRTC)
+  set(REASHOOT_LIBWEBRTC_INCLUDE "${REASHOOT_LIBWEBRTC_DIR}/include")
+  set(REASHOOT_LIBWEBRTC_IMPLIB "${REASHOOT_LIBWEBRTC_DIR}/lib/libwebrtc.dll.lib")
+  set(REASHOOT_LIBWEBRTC_DLL "${REASHOOT_LIBWEBRTC_DIR}/lib/libwebrtc.dll")
+  if(EXISTS "${REASHOOT_LIBWEBRTC_INCLUDE}/libwebrtc.h" AND EXISTS "${REASHOOT_LIBWEBRTC_IMPLIB}")
+    set(REASHOOT_HAVE_LIBWEBRTC TRUE)
+    message(STATUS "ReaShoot: libwebrtc prebuilt found at ${REASHOOT_LIBWEBRTC_DIR}")
+  else()
+    message(WARNING "ReaShoot: REASHOOT_WITH_LIBWEBRTC is ON but no libwebrtc prebuilt at ${REASHOOT_LIBWEBRTC_DIR}; falling back to the stub receiver")
+  endif()
+endif()
+
 add_library(reashoot_portability INTERFACE)
 target_include_directories(reashoot_portability INTERFACE
   "${REASHOOT_REAPER_SDK_DIR}"
@@ -26,6 +47,7 @@ add_library(reashoot_core
   desktop/core/reashoot/json.cpp
   desktop/core/reashoot/plugin_settings.cpp
   desktop/core/reashoot/sha256.cpp
+  desktop/core/reashoot/webrtc_sdp.cpp
   desktop/core/reashoot/websocket.cpp
   desktop/core/reashoot/windows/control_client.cpp
   desktop/core/reashoot/windows/helper_launcher.cpp
@@ -107,6 +129,12 @@ if(BUILD_TESTING)
   target_link_libraries(reashoot_preview_tests PRIVATE reashoot_core)
   add_test(NAME reashoot_preview_tests COMMAND reashoot_preview_tests)
 
+  add_executable(reashoot_webrtc_sdp_tests
+    desktop/core/tests/webrtc_sdp_tests.cpp
+  )
+  target_link_libraries(reashoot_webrtc_sdp_tests PRIVATE reashoot_core)
+  add_test(NAME reashoot_webrtc_sdp_tests COMMAND reashoot_webrtc_sdp_tests)
+
   add_executable(reashoot_audio_align_tests
     desktop/core/tests/audio_align_tests.cpp
   )
@@ -148,6 +176,22 @@ if(WIN32)
     src/windows/settings_dialog_win32.cpp
   )
   target_link_libraries(reashoot PRIVATE reashoot_portability reashoot_core gdi32 user32)
+
+  if(REASHOOT_HAVE_LIBWEBRTC)
+    target_sources(reashoot PRIVATE src/windows/webrtc_receiver_libwebrtc.cpp)
+    target_include_directories(reashoot PRIVATE "${REASHOOT_LIBWEBRTC_INCLUDE}")
+    # LIB_WEBRTC_API_DLL selects __declspec(dllimport) in the libwebrtc headers;
+    # REASHOOT_WITH_LIBWEBRTC gates the receiver factory in the plugin TU.
+    target_compile_definitions(reashoot PRIVATE REASHOOT_WITH_LIBWEBRTC LIB_WEBRTC_API_DLL)
+    target_link_libraries(reashoot PRIVATE "${REASHOOT_LIBWEBRTC_IMPLIB}")
+    # Stage libwebrtc.dll next to the plugin so REAPER can load it at runtime.
+    add_custom_command(TARGET reashoot POST_BUILD
+      COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+        "${REASHOOT_LIBWEBRTC_DLL}" "$<TARGET_FILE_DIR:reashoot>/libwebrtc.dll"
+      VERBATIM
+    )
+    install(FILES "${REASHOOT_LIBWEBRTC_DLL}" DESTINATION ".")
+  endif()
   # REAPER only loads extension DLLs from UserPlugins whose filename starts
   # with "reaper_" (matching the macOS "reaper_video_recorder.dylib" convention),
   # so the output name must carry that prefix or REAPER silently ignores it.

@@ -10,3 +10,7 @@ iphone/test-downloads/
 *.mov
 *.download
 .DS_Store
+
+# libwebrtc prebuilt download artifacts (extracted contents are vendored)
+vendor/libwebrtc/*.zip
+vendor/libwebrtc/*.shasum
