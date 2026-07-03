@@ -17,6 +17,9 @@
 #endif
 #include <windows.h>
 
+#include <fcntl.h>
+#include <io.h>
+
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -457,6 +460,11 @@ int run(const Arguments &args) {
 } // namespace
 
 int main(int argc, char **argv) {
+  // Emit stdout in binary mode so the CRLF line endings inside relayed SDP are
+  // preserved verbatim. In text mode the C runtime translates every '\n' to
+  // "\r\n", which doubles the SDP's existing carriage returns into "\r\r\n" and
+  // breaks libwebrtc's strict SDP parser on the receiving plugin.
+  _setmode(_fileno(stdout), _O_BINARY);
   const Arguments args(argc, argv);
   try {
     return run(args);

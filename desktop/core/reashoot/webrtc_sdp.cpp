@@ -3,13 +3,15 @@
 namespace reashoot {
 namespace {
 
-// Trims a single trailing carriage return so lines split on '\n' compare
-// cleanly regardless of CRLF or LF SDP encoding.
+// Trims all trailing carriage returns so lines split on '\n' compare cleanly
+// regardless of LF, CRLF, or the CR-doubled CRCRLF that Windows text-mode
+// stdout produces when it re-translates already-CRLF SDP from the helper.
 std::string trimTrailingCR(const std::string &line) {
-  if (!line.empty() && line.back() == '\r') {
-    return line.substr(0, line.size() - 1);
+  std::size_t end = line.size();
+  while (end > 0 && line[end - 1] == '\r') {
+    --end;
   }
-  return line;
+  return line.substr(0, end);
 }
 
 bool startsWith(const std::string &value, const char *prefix) {

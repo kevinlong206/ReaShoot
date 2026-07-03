@@ -64,12 +64,42 @@ void testHandlesLFOnlyAndNoCandidates() {
   assert(stripped.sdp.find("a=recvonly\r\n") != std::string::npos);
 }
 
+void testNormalizesDoubledCarriageReturns() {
+  // Windows text-mode stdout re-translates the helper's already-CRLF SDP,
+  // producing CRCRLF line endings that libwebrtc's parser rejects. The cleaner
+  // must collapse them to a single CRLF and strip the stray CR from candidate
+  // payloads.
+  const std::string answer =
+      "v=0\r\r\n"
+      "o=- 1 2 IN IP4 127.0.0.1\r\r\n"
+      "m=video 9 UDP/TLS/RTP/SAVPF 96\r\r\n"
+      "a=group:BUNDLE 0\r\r\n"
+      "a=mid:0\r\r\n"
+      "a=candidate:1 1 udp 2122260223 192.168.1.5 51000 typ host\r\r\n"
+      "a=recvonly\r\r\n";
+
+  reashoot::StrippedAnswer stripped = reashoot::stripInlineIceCandidates(answer);
+
+  // No doubled carriage returns survive anywhere in the cleaned SDP.
+  assert(stripped.sdp.find("\r\r") == std::string::npos);
+  assert(stripped.sdp.find("v=0\r\n") != std::string::npos);
+  assert(stripped.sdp.find("a=group:BUNDLE 0\r\n") != std::string::npos);
+  assert(stripped.sdp.find("a=mid:0\r\n") != std::string::npos);
+  assert(stripped.sdp.find("a=recvonly\r\n") != std::string::npos);
+
+  // The candidate payload is free of any trailing carriage return.
+  assert(stripped.candidates.size() == 1);
+  assert(stripped.candidates[0].payload.find('\r') == std::string::npos);
+  assert(stripped.candidates[0].payload.rfind("candidate:", 0) == 0);
+}
+
 } // namespace
 
 int main() {
   testStripsCandidateLines();
   testMLineIndexTracksMultipleSections();
   testHandlesLFOnlyAndNoCandidates();
+  testNormalizesDoubledCarriageReturns();
   std::cout << "webrtc_sdp_tests passed\n";
   return 0;
 }
