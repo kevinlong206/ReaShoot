@@ -1981,6 +1981,7 @@ void setVideoEnabled(bool enabled);
   [self persistIPhoneSettings];
   NSTextField *codeField = self.iPhoneSetupWindow.visible && self.iPhoneSetupPairingCodeField ? self.iPhoneSetupPairingCodeField : self.iPhonePairingCodeField;
   NSString *code = codeField ? codeField.stringValue : [NSString stringWithUTF8String:reashoot::platform::swell::swellPanelSettings(g_swellPanelPrototype).pairingCode];
+  code = [code stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
   if (g_iPhoneHost.empty() || code.length == 0) {
     [self setStatus:@"Enter iPhone host and pairing code"];
     return;
@@ -1999,9 +2000,16 @@ void setVideoEnabled(bool enabled);
         if (self.iPhoneTokenField) self.iPhoneTokenField.stringValue = token;
         if (self.iPhoneSetupTokenField) self.iPhoneSetupTokenField.stringValue = token;
         g_iPhoneToken = token.UTF8String ?: "";
-        [self persistIPhoneSettings];
+        // Push the new token into the SWELL setup field before persisting;
+        // persistIPhoneSettings re-reads that field, so persisting first would
+        // clobber the new token with the stale one still shown in the panel.
         reashoot::platform::swell::updateSwellPanelProbe(g_swellPanelPrototype, "iPhone paired", nullptr, g_iPhoneHost.c_str(), g_iPhoneToken.c_str());
+        [self persistIPhoneSettings];
         [self setStatus:@"iPhone paired"];
+        [self stopRemotePreview];
+        self.previewStreamFailed = NO;
+        self.previewStreamFailureReason = nil;
+        [self startRemotePreview];
         return;
       }
     }
@@ -2202,7 +2210,10 @@ void setVideoEnabled(bool enabled);
     [self runReaShootCommandAsync:@"configure" extraArguments:[self iPhoneConfigureArguments] completion:^(NSString *output, NSError *error) {
       self.iPhonePreviewProfileConfiguring = NO;
       if (error) {
-        [self setStatus:@"iPhone preview configure failed"];
+        NSString *message = error.localizedDescription.length > 0
+                                ? [NSString stringWithFormat:@"iPhone preview configure failed: %@", error.localizedDescription]
+                                : @"iPhone preview configure failed";
+        [self setStatus:message];
         return;
       }
       NSString *message = [output stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];

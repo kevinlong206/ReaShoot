@@ -25,7 +25,6 @@ public final class PairingStore: ObservableObject {
         let newToken = UUID().uuidString.replacingOccurrences(of: "-", with: "")
         try Self.saveToken(newToken, service: service, account: account)
         token = newToken
-        pairingCode = String(format: "%06d", Int.random(in: 0...999_999))
         return newToken
     }
 

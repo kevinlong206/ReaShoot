@@ -202,7 +202,15 @@ public final class ReaShootService: ObservableObject {
     private func handleControlMessage(_ data: Data) async throws -> Data {
         let command = try ProtocolCodec.decodeCommand(data)
         DebugLog.write("control command type=\(command.type.rawValue) recordingID=\(command.recordingID ?? "nil")")
+        do {
+            return try await dispatchControlCommand(command)
+        } catch {
+            DebugLog.write("control command failed type=\(command.type.rawValue): \(error.localizedDescription)")
+            return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .error, message: error.localizedDescription))
+        }
+    }
 
+    private func dispatchControlCommand(_ command: ControlCommand) async throws -> Data {
         switch command.type {
         case .pair:
             let token = try pairingStore.pair(code: command.pairingCode ?? "")
