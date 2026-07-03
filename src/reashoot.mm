@@ -1,4 +1,3 @@
-#import <AVFoundation/AVFoundation.h>
 #import <Cocoa/Cocoa.h>
 #import <QuartzCore/QuartzCore.h>
 
@@ -24,7 +23,6 @@
 #import "platform/mac/mac_modal_prompts.h"
 #import "platform/mac/mac_playback_preview_renderer.h"
 #import "platform/mac/mac_preview_stream_client.h"
-#import "platform/mac/mac_reashoot_panel.h"
 #include "reaper/reaper_host.h"
 
 #define REAPERAPI_IMPLEMENT
@@ -1163,7 +1161,6 @@ void setVideoEnabled(bool enabled);
 @interface ReaShootRecorder : NSObject
 @property(nonatomic, strong) NSView *dockView;
 @property(nonatomic, strong) NSView *previewView;
-@property(nonatomic, strong) ReaShootMacDockPanel *dockPanel;
 @property(nonatomic, strong) NSWindow *floatingPreviewWindow;
 @property(nonatomic, strong) NSButton *iPhoneSetupButton;
 @property(nonatomic, strong) NSButton *iPhonePendingButton;
@@ -1192,8 +1189,6 @@ void setVideoEnabled(bool enabled);
 @property(nonatomic, strong) NSButton *iPhoneNextLookButton;
 @property(nonatomic, strong) NSTextField *formatLabel;
 @property(nonatomic, strong) NSTextField *statusLabel;
-@property(nonatomic, strong) AVSampleBufferDisplayLayer *streamPreviewLayer;
-@property(nonatomic, strong) ReaShootMacH264PreviewRenderer *h264PreviewRenderer;
 @property(nonatomic, strong) ReaShootMacH264FrameDecoder *swellPreviewDecoder;
 @property(nonatomic, strong) ReaShootMacPlaybackPreviewRenderer *playbackPreviewRenderer;
 @property(nonatomic, strong) ReaShootMacPreviewStreamClient *previewStreamClient;
@@ -1276,7 +1271,6 @@ void setVideoEnabled(bool enabled);
     } else {
       [self showDockedPreview];
     }
-    [self setStatus:[NSString stringWithUTF8String:followStatusText().c_str()]];
   });
 }
 
@@ -1773,24 +1767,38 @@ void setVideoEnabled(bool enabled);
 }
 
 - (void)updateCaptureFormatLabel {
-  if (!self.formatLabel) {
-    return;
-  }
   NSString *previewState = self.previewStreamActive ? @"H.264 preview" : (self.previewStreamStarting ? @"preview connecting" : @"preview idle");
-  self.formatLabel.stringValue = [NSString stringWithFormat:@"iPhone %@: %s %@ fps, %s, %s, %s lens, %sx, look %s, %@",
-                                                            @"Wi-Fi",
-                                                            g_iPhoneResolution.c_str(),
-                                                            [NSString stringWithUTF8String:g_iPhoneFPS.c_str()],
-                                                            g_iPhoneOrientation.c_str(),
-                                                            g_iPhoneAspect.c_str(),
-                                                            g_iPhoneLens.c_str(),
-                                                            g_iPhoneZoom.c_str(),
-                                                            g_iPhoneLook.c_str(),
-                                                            previewState];
+  NSString *format = [NSString stringWithFormat:@"iPhone %@: %s %@ fps, %s, %s, %s lens, %sx, look %s, %@",
+                                                @"Wi-Fi",
+                                                g_iPhoneResolution.c_str(),
+                                                [NSString stringWithUTF8String:g_iPhoneFPS.c_str()],
+                                                g_iPhoneOrientation.c_str(),
+                                                g_iPhoneAspect.c_str(),
+                                                g_iPhoneLens.c_str(),
+                                                g_iPhoneZoom.c_str(),
+                                                g_iPhoneLook.c_str(),
+                                                previewState];
+  if (self.formatLabel) {
+    self.formatLabel.stringValue = format;
+  }
+  if (g_swellPanelPrototype) {
+    reashoot::platform::swell::updateSwellPanelProbe(g_swellPanelPrototype,
+                                                     self.statusLabel ? self.statusLabel.stringValue.UTF8String : followStatusText().c_str(),
+                                                     format.UTF8String,
+                                                     g_iPhoneHost.c_str(),
+                                                     g_iPhoneToken.c_str());
+  }
   [self updateRecordingTextColor];
 }
 
 - (void)persistIPhoneSettings {
+  reashoot::platform::swell::SwellPanelSettings swellSettings = reashoot::platform::swell::swellPanelSettings(g_swellPanelPrototype);
+  if (swellSettings.host[0] != '\0') {
+    g_iPhoneHost = swellSettings.host;
+  }
+  if (swellSettings.token[0] != '\0') {
+    g_iPhoneToken = swellSettings.token;
+  }
   NSTextField *hostField = self.iPhoneSetupWindow.visible && self.iPhoneSetupHostField ? self.iPhoneSetupHostField : self.iPhoneHostField;
   NSTextField *tokenField = self.iPhoneSetupWindow.visible && self.iPhoneSetupTokenField ? self.iPhoneSetupTokenField : self.iPhoneTokenField;
   if (hostField) {
@@ -1799,10 +1807,10 @@ void setVideoEnabled(bool enabled);
   if (tokenField) {
     g_iPhoneToken = tokenField.stringValue.UTF8String ?: "";
   }
-  self.iPhoneHostField.stringValue = [NSString stringWithUTF8String:g_iPhoneHost.c_str()];
-  self.iPhoneTokenField.stringValue = [NSString stringWithUTF8String:g_iPhoneToken.c_str()];
-  self.iPhoneSetupHostField.stringValue = [NSString stringWithUTF8String:g_iPhoneHost.c_str()];
-  self.iPhoneSetupTokenField.stringValue = [NSString stringWithUTF8String:g_iPhoneToken.c_str()];
+  if (self.iPhoneHostField) self.iPhoneHostField.stringValue = [NSString stringWithUTF8String:g_iPhoneHost.c_str()];
+  if (self.iPhoneTokenField) self.iPhoneTokenField.stringValue = [NSString stringWithUTF8String:g_iPhoneToken.c_str()];
+  if (self.iPhoneSetupHostField) self.iPhoneSetupHostField.stringValue = [NSString stringWithUTF8String:g_iPhoneHost.c_str()];
+  if (self.iPhoneSetupTokenField) self.iPhoneSetupTokenField.stringValue = [NSString stringWithUTF8String:g_iPhoneToken.c_str()];
   if (self.iPhoneResolutionPopup.selectedItem.title.length > 0) {
     g_iPhoneResolution = self.iPhoneResolutionPopup.selectedItem.title.UTF8String ?: "4K";
   }
@@ -1920,8 +1928,8 @@ void setVideoEnabled(bool enabled);
   if (httpPort.length > 0) {
     g_iPhoneHttpPort = httpPort.UTF8String;
   }
-  self.iPhoneHostField.stringValue = host;
-  self.iPhoneSetupHostField.stringValue = host;
+  if (self.iPhoneHostField) self.iPhoneHostField.stringValue = host;
+  if (self.iPhoneSetupHostField) self.iPhoneSetupHostField.stringValue = host;
   [self persistIPhoneSettings];
   [self setStatus:[NSString stringWithFormat:@"Found iPhone: %@", fields[@"name"] ?: host]];
   return YES;
@@ -1939,8 +1947,8 @@ void setVideoEnabled(bool enabled);
     if (![self applyFirstDiscoveredIPhoneFromOutput:output ?: @""]) {
       if (g_iPhoneHost.empty()) {
         g_iPhoneHost = kDefaultIPhoneHost;
-        self.iPhoneHostField.stringValue = [NSString stringWithUTF8String:kDefaultIPhoneHost];
-        self.iPhoneSetupHostField.stringValue = [NSString stringWithUTF8String:kDefaultIPhoneHost];
+        if (self.iPhoneHostField) self.iPhoneHostField.stringValue = [NSString stringWithUTF8String:kDefaultIPhoneHost];
+        if (self.iPhoneSetupHostField) self.iPhoneSetupHostField.stringValue = [NSString stringWithUTF8String:kDefaultIPhoneHost];
         [self persistIPhoneSettings];
         [self setStatus:@"Bonjour not found; using known iPhone host"];
       } else {
@@ -1954,7 +1962,7 @@ void setVideoEnabled(bool enabled);
   (void)sender;
   [self persistIPhoneSettings];
   NSTextField *codeField = self.iPhoneSetupWindow.visible && self.iPhoneSetupPairingCodeField ? self.iPhoneSetupPairingCodeField : self.iPhonePairingCodeField;
-  NSString *code = codeField.stringValue;
+  NSString *code = codeField ? codeField.stringValue : [NSString stringWithUTF8String:reashoot::platform::swell::swellPanelSettings(g_swellPanelPrototype).pairingCode];
   if (g_iPhoneHost.empty() || code.length == 0) {
     [self setStatus:@"Enter iPhone host and pairing code"];
     return;
@@ -1970,10 +1978,11 @@ void setVideoEnabled(bool enabled);
     for (NSString *line in [output componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
       if ([line hasPrefix:prefix]) {
         NSString *token = [line substringFromIndex:prefix.length];
-        self.iPhoneTokenField.stringValue = token;
-        self.iPhoneSetupTokenField.stringValue = token;
+        if (self.iPhoneTokenField) self.iPhoneTokenField.stringValue = token;
+        if (self.iPhoneSetupTokenField) self.iPhoneSetupTokenField.stringValue = token;
         g_iPhoneToken = token.UTF8String ?: "";
         [self persistIPhoneSettings];
+        reashoot::platform::swell::updateSwellPanelProbe(g_swellPanelPrototype, "iPhone paired", nullptr, g_iPhoneHost.c_str(), g_iPhoneToken.c_str());
         [self setStatus:@"iPhone paired"];
         return;
       }
@@ -2019,19 +2028,28 @@ void setVideoEnabled(bool enabled);
 - (void)showIPhoneSetup:(id)sender {
   (void)sender;
   [self ensureDockView];
-  [self.dockPanel showSetupWindowWithTarget:self
-                                       host:[NSString stringWithUTF8String:g_iPhoneHost.c_str()]
-                                      token:[NSString stringWithUTF8String:g_iPhoneToken.c_str()]];
-  self.iPhoneSetupWindow = self.dockPanel.iPhoneSetupWindow;
-  self.iPhoneSetupHostField = self.dockPanel.iPhoneSetupHostField;
-  self.iPhoneSetupTokenField = self.dockPanel.iPhoneSetupTokenField;
-  self.iPhoneSetupPairingCodeField = self.dockPanel.iPhoneSetupPairingCodeField;
-  self.iPhoneSetupDiscoverButton = self.dockPanel.iPhoneSetupDiscoverButton;
-  self.iPhoneSetupPairButton = self.dockPanel.iPhoneSetupPairButton;
-  self.iPhoneSetupTestButton = self.dockPanel.iPhoneSetupTestButton;
+  [self setStatus:@"Use SWELL host/token/code fields, then Discover, Pair, or Test"];
 }
 
 - (void)selectRelativeIPhoneLook:(NSInteger)offset {
+  if (!self.iPhoneLookPopup) {
+    static const char *looks[] = {"natural", "warmVintage", "coolBlue", "highContrastBW", "fadedFilm", "dreamGlow", "noir",
+                                  "saturatedPop", "bleachBypass", "sepia", "instantPhoto", "chrome", "tonal", "silvertone",
+                                  "dramaticWarm", "dramaticCool", "softMatte", "comicBook", "vhs", "musicVideoPop"};
+    int selectedIndex = 0;
+    const int count = static_cast<int>(sizeof(looks) / sizeof(looks[0]));
+    for (int i = 0; i < count; ++i) {
+      if (g_iPhoneLook == looks[i]) {
+        selectedIndex = i;
+        break;
+      }
+    }
+    int nextIndex = (selectedIndex + static_cast<int>(offset)) % count;
+    if (nextIndex < 0) nextIndex += count;
+    g_iPhoneLook = looks[nextIndex];
+    [self profileSelectionChanged:nil];
+    return;
+  }
   const NSInteger itemCount = self.iPhoneLookPopup.numberOfItems;
   if (itemCount <= 0) {
     return;
@@ -2059,28 +2077,43 @@ void setVideoEnabled(bool enabled);
 }
 
 - (void)ensureDockView {
-  if (!self.dockView) {
-    self.dockPanel = [[ReaShootMacDockPanel alloc] initWithTarget:self
-                                                            host:[NSString stringWithUTF8String:g_iPhoneHost.c_str()]
-                                                           token:[NSString stringWithUTF8String:g_iPhoneToken.c_str()]
-                                                      resolution:[NSString stringWithUTF8String:g_iPhoneResolution.c_str()]
-                                                             fps:[NSString stringWithUTF8String:g_iPhoneFPS.c_str()]
-                                                     orientation:[NSString stringWithUTF8String:g_iPhoneOrientation.c_str()]
-                                                          aspect:[NSString stringWithUTF8String:g_iPhoneAspect.c_str()]
-                                                            lens:[NSString stringWithUTF8String:g_iPhoneLens.c_str()]
-                                                            zoom:[NSString stringWithUTF8String:g_iPhoneZoom.c_str()]
-                                                            look:[NSString stringWithUTF8String:g_iPhoneLook.c_str()]
-                                                      statusText:[NSString stringWithUTF8String:followStatusText().c_str()]];
-    self.dockView = self.dockPanel.dockView;
-    self.previewView = self.dockPanel.previewView;
-
-    self.streamPreviewLayer = [AVSampleBufferDisplayLayer layer];
-    self.streamPreviewLayer.videoGravity = AVLayerVideoGravityResizeAspect;
-    self.streamPreviewLayer.frame = self.previewView.bounds;
-    self.streamPreviewLayer.autoresizingMask = kCALayerWidthSizable | kCALayerHeightSizable;
-    self.streamPreviewLayer.hidden = YES;
-    [self.previewView.layer addSublayer:self.streamPreviewLayer];
-    self.h264PreviewRenderer = [[ReaShootMacH264PreviewRenderer alloc] initWithLayer:self.streamPreviewLayer];
+  if (!g_swellPanelPrototype) {
+    reashoot::platform::swell::SwellPanelCallbacks callbacks;
+    callbacks.context = (__bridge void *)self;
+    callbacks.setup = [](void *context) {
+      ReaShootRecorder *target = (__bridge ReaShootRecorder *)context;
+      dispatch_async(dispatch_get_main_queue(), ^{ [target showIPhoneSetup:nil]; });
+    };
+    callbacks.discover = [](void *context) {
+      ReaShootRecorder *target = (__bridge ReaShootRecorder *)context;
+      dispatch_async(dispatch_get_main_queue(), ^{ [target discoverIPhone:nil]; });
+    };
+    callbacks.pair = [](void *context) {
+      ReaShootRecorder *target = (__bridge ReaShootRecorder *)context;
+      dispatch_async(dispatch_get_main_queue(), ^{ [target pairIPhone:nil]; });
+    };
+    callbacks.testConnection = [](void *context) {
+      ReaShootRecorder *target = (__bridge ReaShootRecorder *)context;
+      dispatch_async(dispatch_get_main_queue(), ^{ [target testIPhoneConnection:nil]; });
+    };
+    callbacks.restorePending = [](void *context) {
+      ReaShootRecorder *target = (__bridge ReaShootRecorder *)context;
+      dispatch_async(dispatch_get_main_queue(), ^{ [target restoreIPhoneRecording]; });
+    };
+    callbacks.deleteAllPending = [](void *context) {
+      ReaShootRecorder *target = (__bridge ReaShootRecorder *)context;
+      dispatch_async(dispatch_get_main_queue(), ^{ [target deleteAllPendingIPhoneRecordings]; });
+    };
+    callbacks.previousLook = [](void *context) {
+      ReaShootRecorder *target = (__bridge ReaShootRecorder *)context;
+      dispatch_async(dispatch_get_main_queue(), ^{ [target previousIPhoneLook:nil]; });
+    };
+    callbacks.nextLook = [](void *context) {
+      ReaShootRecorder *target = (__bridge ReaShootRecorder *)context;
+      dispatch_async(dispatch_get_main_queue(), ^{ [target nextIPhoneLook:nil]; });
+    };
+    g_swellPanelPrototype = reashoot::platform::swell::createSwellPanelProbe(nullptr, callbacks);
+    reashoot::platform::swell::updateSwellPanelProbe(g_swellPanelPrototype, followStatusText().c_str(), nullptr, g_iPhoneHost.c_str(), g_iPhoneToken.c_str());
     __weak ReaShootRecorder *weakSelf = self;
     self.swellPreviewDecoder = [[ReaShootMacH264FrameDecoder alloc] initWithFrameHandler:^(const void *pixels, int width, int height, int strideBytes) {
       ReaShootRecorder *strongSelf = weakSelf;
@@ -2092,29 +2125,7 @@ void setVideoEnabled(bool enabled);
         reashoot::platform::swell::setSwellPanelPreviewFrame(g_swellPanelPrototype, pixels, width, height, strideBytes);
       }
     }];
-    self.playbackPreviewRenderer = [[ReaShootMacPlaybackPreviewRenderer alloc] initWithContainerView:self.previewView];
     self.previewStreamClient = [[ReaShootMacPreviewStreamClient alloc] init];
-
-    self.iPhoneSetupButton = self.dockPanel.iPhoneSetupButton;
-    self.iPhonePendingButton = self.dockPanel.iPhonePendingButton;
-    self.iPhoneDeleteAllButton = self.dockPanel.iPhoneDeleteAllButton;
-    self.iPhoneHostField = self.dockPanel.iPhoneHostField;
-    self.iPhoneTokenField = self.dockPanel.iPhoneTokenField;
-    self.iPhonePairingCodeField = self.dockPanel.iPhonePairingCodeField;
-    self.iPhoneDiscoverButton = self.dockPanel.iPhoneDiscoverButton;
-    self.iPhonePairButton = self.dockPanel.iPhonePairButton;
-    self.iPhoneTestButton = self.dockPanel.iPhoneTestButton;
-    self.iPhoneResolutionPopup = self.dockPanel.iPhoneResolutionPopup;
-    self.iPhoneFPSPopup = self.dockPanel.iPhoneFPSPopup;
-    self.iPhoneOrientationPopup = self.dockPanel.iPhoneOrientationPopup;
-    self.iPhoneAspectPopup = self.dockPanel.iPhoneAspectPopup;
-    self.iPhoneLensPopup = self.dockPanel.iPhoneLensPopup;
-    self.iPhoneZoomPopup = self.dockPanel.iPhoneZoomPopup;
-    self.iPhoneLookPopup = self.dockPanel.iPhoneLookPopup;
-    self.iPhonePreviousLookButton = self.dockPanel.iPhonePreviousLookButton;
-    self.iPhoneNextLookButton = self.dockPanel.iPhoneNextLookButton;
-    self.formatLabel = self.dockPanel.formatLabel;
-    self.statusLabel = self.dockPanel.statusLabel;
     [self updateCaptureFormatLabel];
   }
 }
@@ -2254,8 +2265,6 @@ void setVideoEnabled(bool enabled);
   self.previewStreamFailureReason = nil;
   self.swellPreviewReceivedAccessUnit = NO;
   self.swellPreviewReceivedFrame = NO;
-  self.streamPreviewLayer.hidden = NO;
-  [self.h264PreviewRenderer reset];
   [self.swellPreviewDecoder reset];
   [self setStatus:@"Preview: connecting H.264 stream"];
 }
@@ -2266,8 +2275,6 @@ void setVideoEnabled(bool enabled);
   self.swellPreviewReceivedAccessUnit = NO;
   self.swellPreviewReceivedFrame = NO;
   [self.previewStreamClient stop];
-  self.streamPreviewLayer.hidden = YES;
-  [self.h264PreviewRenderer reset];
   [self.swellPreviewDecoder reset];
 }
 
@@ -2276,7 +2283,6 @@ void setVideoEnabled(bool enabled);
     self.swellPreviewReceivedAccessUnit = YES;
     [self setStatus:@"Preview: H.264 received; decoding for SWELL"];
   }
-  [self.h264PreviewRenderer renderAccessUnit:accessUnit];
   [self.swellPreviewDecoder decodeAccessUnit:accessUnit];
 }
 
@@ -2292,12 +2298,20 @@ void setVideoEnabled(bool enabled);
                 projectPosition:(double)projectPosition {
   [self ensureDockView];
   self.showingPlayback = YES;
-  [self stopRemotePreview];
-  [self.playbackPreviewRenderer showPath:[NSString stringWithUTF8String:path.c_str()]
-                               itemStart:itemStart
-                            sourceOffset:sourceOffset
-                         projectPosition:projectPosition];
-  [self setStatus:@"Playback"];
+  if (self.playbackPreviewRenderer) {
+    [self stopRemotePreview];
+    [self.playbackPreviewRenderer showPath:[NSString stringWithUTF8String:path.c_str()]
+                                 itemStart:itemStart
+                              sourceOffset:sourceOffset
+                           projectPosition:projectPosition];
+    [self setStatus:@"Playback"];
+  } else {
+    (void)path;
+    (void)itemStart;
+    (void)sourceOffset;
+    (void)projectPosition;
+    [self setStatus:@"Playback preview pending SWELL implementation"];
+  }
 }
 
 - (void)stopPlaybackAndShowLive {
@@ -2309,48 +2323,48 @@ void setVideoEnabled(bool enabled);
 }
 
 - (void)showDockedPreview {
-  if (!DockWindowAddEx || !self.dockView) {
+  [self ensureDockView];
+  if (!DockWindowAddEx || !g_swellPanelPrototype) {
     return;
   }
-  [self hideFloatingPreview];
-  HWND hwnd = (__bridge HWND)self.dockView;
   if (!self.docked) {
-    DockWindowAddEx(hwnd, "ReaShoot", kDockIdent, true);
+    DockWindowAddEx(g_swellPanelPrototype, "ReaShoot", kDockIdent, true);
     self.docked = YES;
+    g_swellPanelPrototypeDocked = true;
   }
   if (DockWindowActivate) {
-    DockWindowActivate(hwnd);
+    DockWindowActivate(g_swellPanelPrototype);
   }
   if (DockWindowRefreshForHWND) {
-    DockWindowRefreshForHWND(hwnd);
+    DockWindowRefreshForHWND(g_swellPanelPrototype);
   }
 }
 
 - (void)showFloatingPreview {
-  if (!self.dockView) {
-    return;
-  }
-  [self hideDockedPreview];
-  [self.dockPanel showFloatingPreview];
-  self.floatingPreviewWindow = self.dockPanel.floatingPreviewWindow;
+  [self showDockedPreview];
+  [self setStatus:@"SWELL preview uses REAPER dock"];
 }
 
 - (void)hideFloatingPreview {
-  [self.dockPanel hideFloatingPreview];
+  self.floatingPreviewWindow = nil;
 }
 
 - (void)hideDockedPreview {
-  if (DockWindowRemove && self.docked && self.dockView) {
-    DockWindowRemove((__bridge HWND)self.dockView);
+  if (DockWindowRemove && self.docked && g_swellPanelPrototype) {
+    DockWindowRemove(g_swellPanelPrototype);
   }
   self.docked = NO;
+  g_swellPanelPrototypeDocked = false;
 }
 
 - (void)setStatus:(NSString *)status {
-  self.statusLabel.stringValue = status ?: @"Idle";
-  if (g_swellPanelPrototypeDocked && g_swellPanelPrototype) {
+  if (self.statusLabel) {
+    self.statusLabel.stringValue = status ?: @"Idle";
+  }
+  if (g_swellPanelPrototype) {
     reashoot::platform::swell::updateSwellPanelProbe(g_swellPanelPrototype,
                                                      (status ?: @"Idle").UTF8String,
+                                                     nullptr,
                                                      g_iPhoneHost.c_str(),
                                                      g_iPhoneToken.c_str());
   }
@@ -2363,6 +2377,9 @@ void setVideoEnabled(bool enabled);
 }
 
 - (void)updateRecordingTextColor {
+  if (!self.statusLabel || !self.formatLabel) {
+    return;
+  }
   NSColor *color = _recordingVisualState ? NSColor.systemRedColor : NSColor.labelColor;
   self.statusLabel.textColor = color;
   self.formatLabel.textColor = color;
@@ -2679,51 +2696,7 @@ void timerPoll() {
 }
 
 bool toggleSwellPanelPrototype() {
-  if (!DockWindowAddEx || !DockWindowRemove) {
-    showError("SWELL panel prototype requires REAPER dock window APIs.");
-    return true;
-  }
-  if (!g_swellPanelPrototype) {
-    reashoot::platform::swell::SwellPanelCallbacks callbacks;
-    callbacks.setup = [](void *) {
-      dispatch_async(dispatch_get_main_queue(), ^{
-        [recorder() showIPhoneSetup:nil];
-      });
-    };
-    callbacks.restorePending = [](void *) {
-      dispatch_async(dispatch_get_main_queue(), ^{
-        [recorder() restoreIPhoneRecording];
-      });
-    };
-    callbacks.deleteAllPending = [](void *) {
-      dispatch_async(dispatch_get_main_queue(), ^{
-        [recorder() deleteAllPendingIPhoneRecordings];
-      });
-    };
-    g_swellPanelPrototype = reashoot::platform::swell::createSwellPanelProbe(nullptr, callbacks);
-  }
-  if (!g_swellPanelPrototype) {
-    showError("Unable to create the SWELL panel prototype.");
-    return true;
-  }
-  reashoot::platform::swell::updateSwellPanelProbe(g_swellPanelPrototype,
-                                                   followStatusText().c_str(),
-                                                   g_iPhoneHost.c_str(),
-                                                   g_iPhoneToken.c_str());
-  if (g_swellPanelPrototypeDocked) {
-    DockWindowRemove(g_swellPanelPrototype);
-    g_swellPanelPrototypeDocked = false;
-  } else {
-    DockWindowAddEx(g_swellPanelPrototype, "ReaShoot SWELL Prototype", "reashoot_swell_prototype", true);
-    g_swellPanelPrototypeDocked = true;
-    [recorder() startSwellPreviewPrototype];
-    if (DockWindowActivate) {
-      DockWindowActivate(g_swellPanelPrototype);
-    }
-    if (DockWindowRefreshForHWND) {
-      DockWindowRefreshForHWND(g_swellPanelPrototype);
-    }
-  }
+  [recorder() togglePreview];
   return true;
 }
 
@@ -2851,7 +2824,7 @@ bool registerActions(reaper_plugin_info_t *rec) {
   custom_action_register_t swellPanelPrototypeAction = {
       0,
       "KLONG_REASHOOT_SWELL",
-      "ReaShoot: SWELL Panel Prototype",
+        "ReaShoot: Show/Hide SWELL Panel",
       nullptr,
   };
 

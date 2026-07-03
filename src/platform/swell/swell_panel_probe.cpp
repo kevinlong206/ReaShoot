@@ -16,6 +16,13 @@ enum ControlID {
   kHostField = 1004,
   kTokenField = 1005,
   kStatusLabel = 1006,
+  kPairingCodeField = 1007,
+  kDiscoverButton = 1008,
+  kPairButton = 1009,
+  kTestButton = 1010,
+  kFormatLabel = 1011,
+  kPreviousLookButton = 1012,
+  kNextLookButton = 1013,
   kAnimationTimer = 2001,
 };
 
@@ -98,6 +105,36 @@ static LRESULT swellProbeWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
       }
       return 0;
     }
+    if (controlID == kDiscoverButton) {
+      if (g_callbacks.discover) {
+        g_callbacks.discover(g_callbacks.context);
+      }
+      return 0;
+    }
+    if (controlID == kPairButton) {
+      if (g_callbacks.pair) {
+        g_callbacks.pair(g_callbacks.context);
+      }
+      return 0;
+    }
+    if (controlID == kTestButton) {
+      if (g_callbacks.testConnection) {
+        g_callbacks.testConnection(g_callbacks.context);
+      }
+      return 0;
+    }
+    if (controlID == kPreviousLookButton) {
+      if (g_callbacks.previousLook) {
+        g_callbacks.previousLook(g_callbacks.context);
+      }
+      return 0;
+    }
+    if (controlID == kNextLookButton) {
+      if (g_callbacks.nextLook) {
+        g_callbacks.nextLook(g_callbacks.context);
+      }
+      return 0;
+    }
   }
   return 0;
 }
@@ -118,14 +155,13 @@ HWND createSwellPanelProbe(HWND parent, const SwellPanelCallbacks &callbacks) {
   makeButton(0, "Delete All", kDeleteAllButton, 424, 101, 96, 24, 0);
   makeEditField(kHostField, 12, 127, 296, 22, 0);
   makeEditField(kTokenField, 320, 127, 296, 22, 0);
-  makeLabel(0,
-            hasSwellDrawingRuntime() ? "Format: SWELL prototype with frame drawing" : "Format: SWELL prototype; frame drawing unavailable",
-            -1,
-            12,
-            29,
-            600,
-            18,
-            0);
+  makeEditField(kPairingCodeField, 12, 101, 160, 22, 0);
+  makeButton(0, "Discover", kDiscoverButton, 180, 101, 72, 24, 0);
+  makeButton(0, "Pair", kPairButton, 256, 101, 48, 24, 0);
+  makeButton(0, "Test", kTestButton, 616, 101, 52, 24, 0);
+  makeButton(0, "Prev", kPreviousLookButton, 12, 49, 52, 24, 0);
+  makeButton(0, "Next", kNextLookButton, 616, 49, 52, 24, 0);
+  makeLabel(0, "Format: SWELL production panel", kFormatLabel, 70, 49, 540, 18, 0);
   makeLabel(0, "Video disabled", kStatusLabel, 12, 9, 600, 18, 0);
   if (hasSwellDrawingRuntime()) {
     setTimer(panel, kAnimationTimer, 33);
@@ -134,17 +170,31 @@ HWND createSwellPanelProbe(HWND parent, const SwellPanelCallbacks &callbacks) {
   return panel;
 }
 
-void updateSwellPanelProbe(HWND panel, const char *status, const char *host, const char *token) {
+void updateSwellPanelProbe(HWND panel, const char *status, const char *format, const char *host, const char *token) {
   if (!panel) {
     return;
   }
   setDlgItemText(panel, kStatusLabel, status ? status : "Video disabled");
+  if (format) {
+    setDlgItemText(panel, kFormatLabel, format);
+  }
   setDlgItemText(panel, kHostField, host ? host : "");
   setDlgItemText(panel, kTokenField, token ? token : "");
   if (!g_usingLivePreview && !g_previewPending) {
     updateSyntheticPreviewFrame();
   }
   invalidateRect(panel, nullptr, false);
+}
+
+SwellPanelSettings swellPanelSettings(HWND panel) {
+  SwellPanelSettings settings;
+  if (!panel) {
+    return settings;
+  }
+  getDlgItemText(panel, kHostField, settings.host, sizeof(settings.host));
+  getDlgItemText(panel, kTokenField, settings.token, sizeof(settings.token));
+  getDlgItemText(panel, kPairingCodeField, settings.pairingCode, sizeof(settings.pairingCode));
+  return settings;
 }
 
 void setSwellPanelPreviewFrame(HWND panel, const void *pixels, int width, int height, int strideBytes) {

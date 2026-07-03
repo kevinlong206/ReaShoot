@@ -13,6 +13,7 @@ HWND makeButton(int isDefault, const char *label, int controlID, int x, int y, i
 HWND makeEditField(int controlID, int x, int y, int width, int height, int flags);
 HWND makeLabel(int align, const char *label, int controlID, int x, int y, int width, int height, int flags);
 bool setDlgItemText(HWND parent, int controlID, const char *text);
+bool getDlgItemText(HWND parent, int controlID, char *text, int textLength);
 bool getClientRect(HWND hwnd, RECT *rect);
 bool invalidateRect(HWND hwnd, const RECT *rect, bool eraseBackground);
 bool setTimer(HWND hwnd, UINT_PTR timerID, UINT rateMs);

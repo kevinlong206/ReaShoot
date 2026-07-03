@@ -18,6 +18,7 @@ using MakeButtonFn = HWND (*)(int, const char *, int, int, int, int, int, int);
 using MakeEditFieldFn = HWND (*)(int, int, int, int, int, int);
 using MakeLabelFn = HWND (*)(int, const char *, int, int, int, int, int, int);
 using SetDlgItemTextFn = BOOL (*)(HWND, int, const char *);
+using GetDlgItemTextFn = BOOL (*)(HWND, int, char *, int);
 using GetClientRectFn = void (*)(HWND, RECT *);
 using InvalidateRectFn = BOOL (*)(HWND, const RECT *, int);
 using SetTimerFn = UINT_PTR (*)(HWND, UINT_PTR, UINT, TIMERPROC);
@@ -36,6 +37,7 @@ MakeButtonFn g_makeButton = nullptr;
 MakeEditFieldFn g_makeEditField = nullptr;
 MakeLabelFn g_makeLabel = nullptr;
 SetDlgItemTextFn g_setDlgItemText = nullptr;
+GetDlgItemTextFn g_getDlgItemText = nullptr;
 GetClientRectFn g_getClientRect = nullptr;
 InvalidateRectFn g_invalidateRect = nullptr;
 SetTimerFn g_setTimer = nullptr;
@@ -92,6 +94,7 @@ bool initializeSwellRuntime() {
   g_makeEditField = loadFunction<MakeEditFieldFn>("SWELL_MakeEditField");
   g_makeLabel = loadFunction<MakeLabelFn>("SWELL_MakeLabel");
   g_setDlgItemText = loadFunction<SetDlgItemTextFn>("SetDlgItemText");
+  g_getDlgItemText = loadFunction<GetDlgItemTextFn>("GetDlgItemText");
   g_getClientRect = loadFunction<GetClientRectFn>("GetClientRect");
   g_invalidateRect = loadFunction<InvalidateRectFn>("InvalidateRect");
   g_setTimer = loadFunction<SetTimerFn>("SetTimer");
@@ -139,6 +142,14 @@ HWND makeLabel(int align, const char *label, int controlID, int x, int y, int wi
 
 bool setDlgItemText(HWND parent, int controlID, const char *text) {
   return g_setDlgItemText && g_setDlgItemText(parent, controlID, text ? text : "");
+}
+
+bool getDlgItemText(HWND parent, int controlID, char *text, int textLength) {
+  if (!g_getDlgItemText || !text || textLength <= 0) {
+    return false;
+  }
+  text[0] = '\0';
+  return g_getDlgItemText(parent, controlID, text, textLength);
 }
 
 bool getClientRect(HWND hwnd, RECT *rect) {
