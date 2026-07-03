@@ -244,7 +244,7 @@ std::string g_iPhoneHttpPort = "8788";
 std::string g_iPhoneToken;
 std::string g_iPhoneResolution = "4K";
 std::string g_iPhoneFPS = "30";
-std::string g_iPhoneOrientation = "portrait";
+std::string g_iPhoneOrientation = "auto";
 std::string g_iPhoneAspect = "9:16";
 std::string g_iPhoneLens = "wide";
 std::string g_iPhoneZoom = "1.0";
@@ -1788,6 +1788,11 @@ void setVideoEnabled(bool enabled);
                                                      g_iPhoneHost.c_str(),
                                                      g_iPhoneToken.c_str());
     reashoot::platform::swell::setSwellPanelLook(g_swellPanelPrototype, g_iPhoneLook.c_str());
+    reashoot::platform::swell::updateSwellPanelProfile(g_swellPanelPrototype,
+                                                       g_iPhoneResolution.c_str(),
+                                                       g_iPhoneFPS.c_str(),
+                                                       g_iPhoneOrientation.c_str(),
+                                                       g_iPhoneLens.c_str());
   }
   [self updateRecordingTextColor];
 }
@@ -1799,6 +1804,18 @@ void setVideoEnabled(bool enabled);
   }
   if (swellSettings.token[0] != '\0') {
     g_iPhoneToken = swellSettings.token;
+  }
+  if (swellSettings.resolution[0] != '\0') {
+    g_iPhoneResolution = swellSettings.resolution;
+  }
+  if (swellSettings.fps[0] != '\0') {
+    g_iPhoneFPS = swellSettings.fps;
+  }
+  if (swellSettings.orientation[0] != '\0') {
+    g_iPhoneOrientation = swellSettings.orientation;
+  }
+  if (swellSettings.lens[0] != '\0') {
+    g_iPhoneLens = swellSettings.lens;
   }
   NSTextField *hostField = self.iPhoneSetupWindow.visible && self.iPhoneSetupHostField ? self.iPhoneSetupHostField : self.iPhoneHostField;
   NSTextField *tokenField = self.iPhoneSetupWindow.visible && self.iPhoneSetupTokenField ? self.iPhoneSetupTokenField : self.iPhoneTokenField;
@@ -1820,7 +1837,7 @@ void setVideoEnabled(bool enabled);
   }
   if (self.iPhoneOrientationPopup.selectedItem.representedObject) {
     NSString *orientation = self.iPhoneOrientationPopup.selectedItem.representedObject;
-    g_iPhoneOrientation = orientation.UTF8String ?: "portrait";
+    g_iPhoneOrientation = orientation.UTF8String ?: "auto";
   }
   if (self.iPhoneAspectPopup.selectedItem.title.length > 0) {
     g_iPhoneAspect = self.iPhoneAspectPopup.selectedItem.title.UTF8String ?: "9:16";
@@ -2121,9 +2138,18 @@ void setVideoEnabled(bool enabled);
         [target profileSelectionChanged:nil];
       });
     };
+    callbacks.profileChanged = [](void *context) {
+      ReaShootRecorder *target = (__bridge ReaShootRecorder *)context;
+      dispatch_async(dispatch_get_main_queue(), ^{ [target profileSelectionChanged:nil]; });
+    };
     g_swellPanelPrototype = reashoot::platform::swell::createSwellPanelProbe(nullptr, callbacks);
     reashoot::platform::swell::updateSwellPanelProbe(g_swellPanelPrototype, followStatusText().c_str(), nullptr, g_iPhoneHost.c_str(), g_iPhoneToken.c_str());
     reashoot::platform::swell::setSwellPanelLook(g_swellPanelPrototype, g_iPhoneLook.c_str());
+    reashoot::platform::swell::updateSwellPanelProfile(g_swellPanelPrototype,
+                                                       g_iPhoneResolution.c_str(),
+                                                       g_iPhoneFPS.c_str(),
+                                                       g_iPhoneOrientation.c_str(),
+                                                       g_iPhoneLens.c_str());
     __weak ReaShootRecorder *weakSelf = self;
     self.swellPreviewDecoder = [[ReaShootMacH264FrameDecoder alloc] initWithFrameHandler:^(const void *pixels, int width, int height, int strideBytes) {
       ReaShootRecorder *strongSelf = weakSelf;

@@ -25,6 +25,10 @@ enum ControlID {
   kSetupPairButton = 1105,
   kSetupTestButton = 1106,
   kSetupCloseButton = 1107,
+  kSetupResolutionCombo = 1108,
+  kSetupFPSCombo = 1109,
+  kSetupOrientationCombo = 1110,
+  kSetupLensCombo = 1111,
   kManagePendingButton = 1201,
   kManageDeleteAllButton = 1202,
   kManageCloseButton = 1203,
@@ -33,6 +37,11 @@ enum ControlID {
 struct LookOption {
   const char *title;
   const char *id;
+};
+
+struct ComboOption {
+  const char *title;
+  const char *value;
 };
 
 const LookOption kLookOptions[] = {
@@ -58,6 +67,31 @@ const LookOption kLookOptions[] = {
     {"Music Video Pop", "musicVideoPop"},
 };
 
+const ComboOption kResolutionOptions[] = {
+    {"4K", "4K"},
+    {"1080p", "1080p"},
+    {"720p", "720p"},
+};
+
+const ComboOption kFPSOptions[] = {
+    {"24", "24"},
+    {"30", "30"},
+    {"60", "60"},
+};
+
+const ComboOption kOrientationOptions[] = {
+    {"Auto at Record Start", "auto"},
+    {"Portrait", "portrait"},
+    {"Landscape Left", "landscapeLeft"},
+    {"Landscape Right", "landscapeRight"},
+};
+
+const ComboOption kLensOptions[] = {
+    {"Wide", "wide"},
+    {"Ultra Wide", "ultrawide"},
+    {"Telephoto", "telephoto"},
+};
+
 std::vector<uint32_t> g_previewFrame;
 int g_previewWidth = 320;
 int g_previewHeight = 180;
@@ -66,6 +100,10 @@ bool g_previewPending = false;
 std::string g_previewMessage = "Preview unavailable: set iPhone host and token, then Test.";
 std::string g_host;
 std::string g_token;
+std::string g_resolution = "4K";
+std::string g_fps = "30";
+std::string g_orientation = "auto";
+std::string g_lens = "wide";
 SwellPanelCallbacks g_callbacks;
 HWND g_setupWindow = nullptr;
 HWND g_manageWindow = nullptr;
@@ -85,12 +123,44 @@ int lookIndexForID(const char *lookID) {
   return 0;
 }
 
+template <size_t Count>
+int optionIndexForValue(const ComboOption (&options)[Count], const char *value) {
+  if (!value || !value[0]) {
+    return 0;
+  }
+  for (int i = 0; i < static_cast<int>(Count); ++i) {
+    if (strcmp(options[i].value, value) == 0 || strcmp(options[i].title, value) == 0) {
+      return i;
+    }
+  }
+  return 0;
+}
+
+template <size_t Count>
+const char *optionValueForSelection(const ComboOption (&options)[Count], int selection) {
+  if (selection < 0 || selection >= static_cast<int>(Count)) {
+    return options[0].value;
+  }
+  return options[selection].value;
+}
+
+template <size_t Count>
+void addOptions(HWND parent, int controlID, const ComboOption (&options)[Count]) {
+  for (const auto &option : options) {
+    comboAddString(parent, controlID, option.title);
+  }
+}
+
 void syncSetupFields() {
   if (!g_setupWindow) {
     return;
   }
   setDlgItemText(g_setupWindow, kSetupHostField, g_host.c_str());
   setDlgItemText(g_setupWindow, kSetupTokenField, g_token.c_str());
+  comboSetCurSel(g_setupWindow, kSetupResolutionCombo, optionIndexForValue(kResolutionOptions, g_resolution.c_str()));
+  comboSetCurSel(g_setupWindow, kSetupFPSCombo, optionIndexForValue(kFPSOptions, g_fps.c_str()));
+  comboSetCurSel(g_setupWindow, kSetupOrientationCombo, optionIndexForValue(kOrientationOptions, g_orientation.c_str()));
+  comboSetCurSel(g_setupWindow, kSetupLensCombo, optionIndexForValue(kLensOptions, g_lens.c_str()));
 }
 
 void captureSetupFields() {
@@ -104,6 +174,10 @@ void captureSetupFields() {
   if (getDlgItemText(g_setupWindow, kSetupTokenField, text, sizeof(text))) {
     g_token = text;
   }
+  g_resolution = optionValueForSelection(kResolutionOptions, comboGetCurSel(g_setupWindow, kSetupResolutionCombo));
+  g_fps = optionValueForSelection(kFPSOptions, comboGetCurSel(g_setupWindow, kSetupFPSCombo));
+  g_orientation = optionValueForSelection(kOrientationOptions, comboGetCurSel(g_setupWindow, kSetupOrientationCombo));
+  g_lens = optionValueForSelection(kLensOptions, comboGetCurSel(g_setupWindow, kSetupLensCombo));
 }
 
 void showSetupWindow();
@@ -135,7 +209,18 @@ void paintPreview(HWND hwnd) {
     const int width = max(1, client.right - client.left - margin * 2);
     const int height = max(1, client.bottom - client.top - controlsHeight - margin);
     if (!g_previewFrame.empty()) {
-      drawFrame(hdc, margin, controlsHeight, width, height, g_previewFrame.data(), g_previewWidth, g_previewHeight);
+      int targetWidth = width;
+      int targetHeight = height;
+      const double sourceAspect = g_previewWidth > 0 && g_previewHeight > 0 ? static_cast<double>(g_previewWidth) / static_cast<double>(g_previewHeight) : 16.0 / 9.0;
+      const double availableAspect = static_cast<double>(width) / static_cast<double>(height);
+      if (availableAspect > sourceAspect) {
+        targetWidth = max(1, static_cast<int>(targetHeight * sourceAspect));
+      } else {
+        targetHeight = max(1, static_cast<int>(targetWidth / sourceAspect));
+      }
+      const int targetX = margin + (width - targetWidth) / 2;
+      const int targetY = controlsHeight + (height - targetHeight) / 2;
+      drawFrame(hdc, targetX, targetY, targetWidth, targetHeight, g_previewFrame.data(), g_previewWidth, g_previewHeight);
     }
     if (!g_usingLivePreview && !g_previewMessage.empty()) {
       RECT textRect = {margin + 16, controlsHeight + 16, client.right - margin - 16, client.bottom - margin - 16};
@@ -248,6 +333,14 @@ static LRESULT setupWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
   }
   if (msg == WM_COMMAND) {
     const int controlID = LOWORD(wParam);
+    if (controlID == kSetupResolutionCombo || controlID == kSetupFPSCombo || controlID == kSetupOrientationCombo ||
+        controlID == kSetupLensCombo) {
+      captureSetupFields();
+      if (g_callbacks.profileChanged) {
+        g_callbacks.profileChanged(g_callbacks.context);
+      }
+      return 0;
+    }
     if (controlID == kSetupDiscoverButton) {
       captureSetupFields();
       if (g_callbacks.discover) {
@@ -382,18 +475,30 @@ void showSetupWindow() {
     if (!g_setupWindow) {
       return;
     }
-    configurePopupWindow(g_setupWindow, "ReaShoot Setup", 200, 200, 510, 210);
+    configurePopupWindow(g_setupWindow, "ReaShoot Setup", 200, 200, 540, 310);
     makeSetCurParms(1.0f, 1.0f, 0.0f, 0.0f, g_setupWindow, false, false);
-    makeLabel(0, "Host", -1, 12, 124, 80, 18, 0);
-    makeEditField(kSetupHostField, 96, 122, 300, 22, 0);
-    makeButton(0, "Discover", kSetupDiscoverButton, 404, 122, 82, 24, 0);
-    makeLabel(0, "Token", -1, 12, 90, 80, 18, 0);
-    makeEditField(kSetupTokenField, 96, 88, 390, 22, 0);
-    makeLabel(0, "Pair code", -1, 12, 56, 80, 18, 0);
-    makeEditField(kSetupPairingCodeField, 96, 54, 180, 22, 0);
-    makeButton(0, "Pair", kSetupPairButton, 284, 54, 70, 24, 0);
-    makeButton(0, "Test", kSetupTestButton, 362, 54, 70, 24, 0);
-    makeButton(0, "Close", kSetupCloseButton, 416, 12, 70, 24, 0);
+    makeLabel(0, "Host", -1, 12, 224, 80, 18, 0);
+    makeEditField(kSetupHostField, 96, 222, 310, 22, 0);
+    makeButton(0, "Discover", kSetupDiscoverButton, 416, 222, 92, 24, 0);
+    makeLabel(0, "Token", -1, 12, 190, 80, 18, 0);
+    makeEditField(kSetupTokenField, 96, 188, 412, 22, 0);
+    makeLabel(0, "Pair code", -1, 12, 156, 80, 18, 0);
+    makeEditField(kSetupPairingCodeField, 96, 154, 180, 22, 0);
+    makeButton(0, "Pair", kSetupPairButton, 284, 154, 70, 24, 0);
+    makeButton(0, "Test", kSetupTestButton, 362, 154, 70, 24, 0);
+    makeLabel(0, "Resolution", -1, 12, 116, 80, 18, 0);
+    makeCombo(kSetupResolutionCombo, 96, 112, 160, 120, CBS_DROPDOWNLIST);
+    addOptions(g_setupWindow, kSetupResolutionCombo, kResolutionOptions);
+    makeLabel(0, "FPS", -1, 282, 116, 50, 18, 0);
+    makeCombo(kSetupFPSCombo, 332, 112, 176, 120, CBS_DROPDOWNLIST);
+    addOptions(g_setupWindow, kSetupFPSCombo, kFPSOptions);
+    makeLabel(0, "Orientation", -1, 12, 78, 80, 18, 0);
+    makeCombo(kSetupOrientationCombo, 96, 74, 160, 120, CBS_DROPDOWNLIST);
+    addOptions(g_setupWindow, kSetupOrientationCombo, kOrientationOptions);
+    makeLabel(0, "Lens", -1, 282, 78, 50, 18, 0);
+    makeCombo(kSetupLensCombo, 332, 74, 176, 120, CBS_DROPDOWNLIST);
+    addOptions(g_setupWindow, kSetupLensCombo, kLensOptions);
+    makeButton(0, "Close", kSetupCloseButton, 438, 12, 70, 24, 0);
   }
   syncSetupFields();
   showWindow(g_setupWindow, SW_SHOW);
@@ -466,6 +571,17 @@ void setSwellPanelLook(HWND panel, const char *lookID) {
   comboSetCurSel(panel, kLookCombo, lookIndexForID(lookID));
 }
 
+void updateSwellPanelProfile(HWND panel, const char *resolution, const char *fps, const char *orientation, const char *lens) {
+  if (!panel) {
+    return;
+  }
+  g_resolution = resolution && resolution[0] ? resolution : "4K";
+  g_fps = fps && fps[0] ? fps : "30";
+  g_orientation = orientation && orientation[0] ? orientation : "auto";
+  g_lens = lens && lens[0] ? lens : "wide";
+  syncSetupFields();
+}
+
 SwellPanelSettings swellPanelSettings(HWND panel) {
   SwellPanelSettings settings;
   if (!panel) {
@@ -477,6 +593,10 @@ SwellPanelSettings swellPanelSettings(HWND panel) {
   }
   snprintf(settings.host, sizeof(settings.host), "%s", g_host.c_str());
   snprintf(settings.token, sizeof(settings.token), "%s", g_token.c_str());
+  snprintf(settings.resolution, sizeof(settings.resolution), "%s", g_resolution.c_str());
+  snprintf(settings.fps, sizeof(settings.fps), "%s", g_fps.c_str());
+  snprintf(settings.orientation, sizeof(settings.orientation), "%s", g_orientation.c_str());
+  snprintf(settings.lens, sizeof(settings.lens), "%s", g_lens.c_str());
   return settings;
 }
 

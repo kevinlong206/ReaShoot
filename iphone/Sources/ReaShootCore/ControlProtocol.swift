@@ -89,7 +89,7 @@ public struct CaptureProfile: Codable, Equatable, Sendable {
     public init(
         resolution: String = "4K",
         fps: Int = 30,
-        orientation: String = "portrait",
+        orientation: String = "auto",
         aspectRatio: String = "9:16",
         lens: String = "wide",
         zoomFactor: Double = 1.0,
@@ -108,7 +108,7 @@ public struct CaptureProfile: Codable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         resolution = try container.decodeIfPresent(String.self, forKey: .resolution) ?? "4K"
         fps = try container.decodeIfPresent(Int.self, forKey: .fps) ?? 30
-        orientation = try container.decodeIfPresent(String.self, forKey: .orientation) ?? "portrait"
+        orientation = try container.decodeIfPresent(String.self, forKey: .orientation) ?? "auto"
         aspectRatio = try container.decodeIfPresent(String.self, forKey: .aspectRatio) ?? "9:16"
         lens = try container.decodeIfPresent(String.self, forKey: .lens) ?? "wide"
         zoomFactor = try container.decodeIfPresent(Double.self, forKey: .zoomFactor) ?? 1.0

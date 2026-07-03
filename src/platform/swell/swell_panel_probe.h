@@ -15,17 +15,23 @@ struct SwellPanelCallbacks {
   void (*previousLook)(void *context) = nullptr;
   void (*nextLook)(void *context) = nullptr;
   void (*selectLook)(void *context, const char *lookID) = nullptr;
+  void (*profileChanged)(void *context) = nullptr;
 };
 
 struct SwellPanelSettings {
   char host[256] = {};
   char token[256] = {};
   char pairingCode[64] = {};
+  char resolution[32] = {};
+  char fps[16] = {};
+  char orientation[32] = {};
+  char lens[32] = {};
 };
 
 HWND createSwellPanelProbe(HWND parent, const SwellPanelCallbacks &callbacks = {});
 void updateSwellPanelProbe(HWND panel, const char *status, const char *format, const char *host, const char *token);
 void setSwellPanelLook(HWND panel, const char *lookID);
+void updateSwellPanelProfile(HWND panel, const char *resolution, const char *fps, const char *orientation, const char *lens);
 SwellPanelSettings swellPanelSettings(HWND panel);
 void setSwellPanelPreviewFrame(HWND panel, const void *pixels, int width, int height, int strideBytes);
 void setSwellPanelPreviewPending(HWND panel, const char *reason = nullptr);

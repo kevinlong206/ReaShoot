@@ -416,7 +416,7 @@ private final class PreviewFrameStore: NSObject, AVCaptureVideoDataOutputSampleB
         let interval = minimumFrameInterval
         let consumer = sampleBufferConsumer
         let look = look
-        let orientation = orientation
+        let orientation = resolvedOrientation(orientation)
         lock.unlock()
         guard now.timeIntervalSince(lastFrameTime) >= interval else {
             return
@@ -467,9 +467,9 @@ private final class PreviewFrameStore: NSObject, AVCaptureVideoDataOutputSampleB
         let propertyOrientation: CGImagePropertyOrientation
         switch orientation.lowercased() {
         case "landscapeleft":
-            propertyOrientation = .down
-        case "landscaperight", "landscape":
             propertyOrientation = .up
+        case "landscaperight", "landscape":
+            propertyOrientation = .down
         case "portraitupsidedown":
             propertyOrientation = .left
         default:
@@ -478,6 +478,30 @@ private final class PreviewFrameStore: NSObject, AVCaptureVideoDataOutputSampleB
         let oriented = image.oriented(propertyOrientation)
         let extent = oriented.extent
         return oriented.transformed(by: CGAffineTransform(translationX: -extent.origin.x, y: -extent.origin.y))
+    }
+
+    private func resolvedOrientation(_ orientation: String) -> String {
+        guard orientation.lowercased() == "auto" else {
+            return orientation
+        }
+        return PhysicalOrientation.current(fallback: "portrait")
+    }
+}
+
+private enum PhysicalOrientation {
+    static func current(fallback: String) -> String {
+        switch UIDevice.current.orientation {
+        case .landscapeLeft:
+            return "landscapeLeft"
+        case .landscapeRight:
+            return "landscapeRight"
+        case .portraitUpsideDown:
+            return "portraitUpsideDown"
+        case .portrait:
+            return "portrait"
+        default:
+            return fallback.lowercased() == "auto" ? "portrait" : fallback
+        }
     }
 }
 
@@ -514,6 +538,7 @@ public final class CaptureRecordingEngine: NSObject, ObservableObject {
     public init(store: RecordingStore) {
         self.store = store
         super.init()
+        UIDevice.current.beginGeneratingDeviceOrientationNotifications()
     }
 
     public func requestPermissions() async -> Bool {
@@ -604,10 +629,11 @@ public final class CaptureRecordingEngine: NSObject, ObservableObject {
         }
 
         let recording = store.newRecordingURL(sessionID: sessionID)
+        let recordingOrientation = resolvedProfileOrientation()
         activeRecordingID = recording.id
         activeRecordingLook = normalizedLook(currentProfile.look)
         previewFrameStore.setTargetFPS(6.0)
-        applyOrientation()
+        applyOrientation(recordingOrientation)
         movieOutput.startRecording(to: recording.url, recordingDelegate: self)
         isRecording = true
         return recording.id
@@ -875,9 +901,9 @@ public final class CaptureRecordingEngine: NSObject, ObservableObject {
     private func rotationAngle(for orientation: String) -> CGFloat {
         switch orientation.lowercased() {
         case "landscapeleft":
-            return 180
-        case "landscaperight", "landscape":
             return 0
+        case "landscaperight", "landscape":
+            return 180
         case "portraitupsidedown":
             return 270
         default:
@@ -885,8 +911,12 @@ public final class CaptureRecordingEngine: NSObject, ObservableObject {
         }
     }
 
-    private func applyOrientation() {
-        let angle = rotationAngle(for: currentProfile.orientation)
+    private func resolvedProfileOrientation() -> String {
+        currentProfile.orientation.lowercased() == "auto" ? PhysicalOrientation.current(fallback: "portrait") : currentProfile.orientation
+    }
+
+    private func applyOrientation(_ orientation: String? = nil) {
+        let angle = rotationAngle(for: orientation ?? resolvedProfileOrientation())
         if let connection = movieOutput.connection(with: .video), connection.isVideoRotationAngleSupported(angle) {
             connection.videoRotationAngle = angle
         }
