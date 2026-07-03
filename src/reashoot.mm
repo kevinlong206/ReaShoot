@@ -2358,12 +2358,16 @@ void setVideoEnabled(bool enabled);
 }
 
 - (void)setStatus:(NSString *)status {
+  NSString *statusText = status ?: @"Idle";
   if (self.statusLabel) {
-    self.statusLabel.stringValue = status ?: @"Idle";
+    self.statusLabel.stringValue = statusText;
   }
   if (g_swellPanelPrototype) {
+    if ([statusText hasPrefix:@"Preview:"] && ![statusText isEqualToString:@"Preview: SWELL live video"]) {
+      reashoot::platform::swell::setSwellPanelPreviewPending(g_swellPanelPrototype, statusText.UTF8String);
+    }
     reashoot::platform::swell::updateSwellPanelProbe(g_swellPanelPrototype,
-                                                     (status ?: @"Idle").UTF8String,
+                                                     statusText.UTF8String,
                                                      nullptr,
                                                      g_iPhoneHost.c_str(),
                                                      g_iPhoneToken.c_str());

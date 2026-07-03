@@ -21,5 +21,6 @@ bool killTimer(HWND hwnd, UINT_PTR timerID);
 HDC beginPaint(HWND hwnd, PAINTSTRUCT *paint);
 bool endPaint(HWND hwnd, PAINTSTRUCT *paint);
 bool drawFrame(HDC output, int x, int y, int width, int height, const void *bits, int sourceWidth, int sourceHeight);
+bool drawText(HDC output, const char *text, RECT *rect, int align);
 
 } // namespace reashoot::platform::swell

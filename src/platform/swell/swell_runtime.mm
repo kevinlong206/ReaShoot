@@ -29,6 +29,7 @@ using CreateMemContextFn = HDC (*)(HDC, int, int);
 using DeleteGfxContextFn = void (*)(HDC);
 using GetCtxFrameBufferFn = void *(*)(HDC);
 using StretchBltFn = void (*)(HDC, int, int, int, int, HDC, int, int, int, int, int);
+using DrawTextFn = int (*)(HDC, const char *, int, RECT *, int);
 
 SwellGetFunc g_getFunc = nullptr;
 MakeSetCurParmsFn g_makeSetCurParms = nullptr;
@@ -48,6 +49,7 @@ CreateMemContextFn g_createMemContext = nullptr;
 DeleteGfxContextFn g_deleteGfxContext = nullptr;
 GetCtxFrameBufferFn g_getCtxFrameBuffer = nullptr;
 StretchBltFn g_stretchBlt = nullptr;
+DrawTextFn g_drawText = nullptr;
 
 template <typename T>
 T loadFunction(const char *name) {
@@ -105,6 +107,7 @@ bool initializeSwellRuntime() {
   g_deleteGfxContext = loadFunction<DeleteGfxContextFn>("SWELL_DeleteGfxContext");
   g_getCtxFrameBuffer = loadFunction<GetCtxFrameBufferFn>("SWELL_GetCtxFrameBuffer");
   g_stretchBlt = loadFunction<StretchBltFn>("StretchBlt");
+  g_drawText = loadFunction<DrawTextFn>("SWELL_DrawText");
   return hasSwellRuntime();
 #endif
 }
@@ -201,6 +204,13 @@ bool drawFrame(HDC output, int x, int y, int width, int height, const void *bits
   g_stretchBlt(output, x, y, width, height, source, 0, 0, sourceWidth, sourceHeight, 0);
   g_deleteGfxContext(source);
   return true;
+}
+
+bool drawText(HDC output, const char *text, RECT *rect, int align) {
+  if (!g_drawText || !output || !text || !rect) {
+    return false;
+  }
+  return g_drawText(output, text, -1, rect, align) != 0;
 }
 
 } // namespace reashoot::platform::swell

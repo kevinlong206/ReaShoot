@@ -26,6 +26,6 @@ HWND createSwellPanelProbe(HWND parent, const SwellPanelCallbacks &callbacks = {
 void updateSwellPanelProbe(HWND panel, const char *status, const char *format, const char *host, const char *token);
 SwellPanelSettings swellPanelSettings(HWND panel);
 void setSwellPanelPreviewFrame(HWND panel, const void *pixels, int width, int height, int strideBytes);
-void setSwellPanelPreviewPending(HWND panel);
+void setSwellPanelPreviewPending(HWND panel, const char *reason = nullptr);
 
 } // namespace reashoot::platform::swell

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <string>
 #include <vector>
 
 namespace reashoot::platform::swell {
@@ -23,32 +24,29 @@ enum ControlID {
   kFormatLabel = 1011,
   kPreviousLookButton = 1012,
   kNextLookButton = 1013,
-  kAnimationTimer = 2001,
 };
 
 std::vector<uint32_t> g_previewFrame;
 int g_previewWidth = 320;
 int g_previewHeight = 180;
-int g_frameCounter = 0;
 bool g_usingLivePreview = false;
 bool g_previewPending = false;
+std::string g_previewMessage = "Preview unavailable: set iPhone host and token, then Test.";
 SwellPanelCallbacks g_callbacks;
 
-void updateSyntheticPreviewFrame() {
+void updatePlaceholderPreviewFrame() {
   g_previewFrame.resize(static_cast<size_t>(g_previewWidth * g_previewHeight));
-  ++g_frameCounter;
+  const uint32_t background = 0xffd6d6d6u;
+  const uint32_t border = 0xff777777u;
   for (int y = 0; y < g_previewHeight; ++y) {
     for (int x = 0; x < g_previewWidth; ++x) {
-      const uint8_t red = static_cast<uint8_t>((x + g_frameCounter * 3) & 0xff);
-      const uint8_t green = static_cast<uint8_t>((y * 2 + g_frameCounter * 5) & 0xff);
-      const uint8_t blue = static_cast<uint8_t>(((x + y) / 2 + g_frameCounter * 7) & 0xff);
-      g_previewFrame[static_cast<size_t>(y * g_previewWidth + x)] =
-          0xff000000u | (static_cast<uint32_t>(red) << 16) | (static_cast<uint32_t>(green) << 8) | blue;
+      const bool edge = x < 2 || y < 2 || x >= g_previewWidth - 2 || y >= g_previewHeight - 2;
+      g_previewFrame[static_cast<size_t>(y * g_previewWidth + x)] = edge ? border : background;
     }
   }
 }
 
-void paintSyntheticPreview(HWND hwnd) {
+void paintPreview(HWND hwnd) {
   PAINTSTRUCT paint = {};
   HDC hdc = beginPaint(hwnd, &paint);
   if (!hdc) {
@@ -64,6 +62,10 @@ void paintSyntheticPreview(HWND hwnd) {
     if (!g_previewFrame.empty()) {
       drawFrame(hdc, margin, controlsHeight, width, height, g_previewFrame.data(), g_previewWidth, g_previewHeight);
     }
+    if (!g_usingLivePreview && !g_previewMessage.empty()) {
+      RECT textRect = {margin + 16, controlsHeight + 16, client.right - margin - 16, client.bottom - margin - 16};
+      drawText(hdc, g_previewMessage.c_str(), &textRect, DT_CENTER | DT_VCENTER | DT_WORDBREAK);
+    }
   }
   endPaint(hwnd, &paint);
 }
@@ -71,18 +73,10 @@ void paintSyntheticPreview(HWND hwnd) {
 static LRESULT swellProbeWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
   (void)lParam;
   if (msg == WM_PAINT) {
-    paintSyntheticPreview(hwnd);
-    return 0;
-  }
-  if (msg == WM_TIMER && wParam == kAnimationTimer) {
-    if (!g_usingLivePreview && !g_previewPending) {
-      updateSyntheticPreviewFrame();
-      invalidateRect(hwnd, nullptr, false);
-    }
+    paintPreview(hwnd);
     return 0;
   }
   if (msg == WM_DESTROY) {
-    killTimer(hwnd, kAnimationTimer);
     return 0;
   }
   if (msg == WM_COMMAND) {
@@ -148,7 +142,7 @@ HWND createSwellPanelProbe(HWND parent, const SwellPanelCallbacks &callbacks) {
     return nullptr;
   }
   g_callbacks = callbacks;
-  updateSyntheticPreviewFrame();
+  updatePlaceholderPreviewFrame();
   makeSetCurParms(1.0f, 1.0f, 0.0f, 0.0f, panel, false, false);
   makeButton(0, "Setup", kSetupButton, 528, 101, 100, 24, 0);
   makeButton(0, "Pending...", kPendingButton, 312, 101, 104, 24, 0);
@@ -163,9 +157,6 @@ HWND createSwellPanelProbe(HWND parent, const SwellPanelCallbacks &callbacks) {
   makeButton(0, "Next", kNextLookButton, 616, 49, 52, 24, 0);
   makeLabel(0, "Format: SWELL production panel", kFormatLabel, 70, 49, 540, 18, 0);
   makeLabel(0, "Video disabled", kStatusLabel, 12, 9, 600, 18, 0);
-  if (hasSwellDrawingRuntime()) {
-    setTimer(panel, kAnimationTimer, 33);
-  }
   invalidateRect(panel, nullptr, false);
   return panel;
 }
@@ -180,8 +171,9 @@ void updateSwellPanelProbe(HWND panel, const char *status, const char *format, c
   }
   setDlgItemText(panel, kHostField, host ? host : "");
   setDlgItemText(panel, kTokenField, token ? token : "");
-  if (!g_usingLivePreview && !g_previewPending) {
-    updateSyntheticPreviewFrame();
+  if (!g_usingLivePreview) {
+    g_previewMessage = status && status[0] ? status : "Preview unavailable";
+    updatePlaceholderPreviewFrame();
   }
   invalidateRect(panel, nullptr, false);
 }
@@ -212,15 +204,18 @@ void setSwellPanelPreviewFrame(HWND panel, const void *pixels, int width, int he
   }
   g_usingLivePreview = true;
   g_previewPending = false;
+  g_previewMessage.clear();
   invalidateRect(panel, nullptr, false);
 }
 
-void setSwellPanelPreviewPending(HWND panel) {
+void setSwellPanelPreviewPending(HWND panel, const char *reason) {
   if (!panel) {
     return;
   }
   g_usingLivePreview = false;
   g_previewPending = true;
+  g_previewMessage = reason && reason[0] ? reason : "Preview connecting...";
+  updatePlaceholderPreviewFrame();
   invalidateRect(panel, nullptr, false);
 }
 
