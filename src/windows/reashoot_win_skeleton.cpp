@@ -881,6 +881,24 @@ bool writeTempSdp(const std::string &sdp, std::wstring &outPath) {
   return true;
 }
 
+// Dumps an SDP payload to %TEMP%\reashoot_<name>.sdp (overwritten each attempt)
+// for negotiation diagnostics, and logs the byte count so the debug log records
+// that the artifact was written. Best-effort: failures are swallowed.
+void dumpDiagnosticSdp(const std::string &name, const std::string &content) {
+  wchar_t tempDir[MAX_PATH] = {0};
+  const DWORD dirLen = GetTempPathW(MAX_PATH, tempDir);
+  if (dirLen == 0 || dirLen > MAX_PATH) {
+    return;
+  }
+  const std::wstring path = std::wstring(tempDir) + L"reashoot_" + widen(name) + L".sdp";
+  std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+  if (stream) {
+    stream.write(content.data(), static_cast<std::streamsize>(content.size()));
+  }
+  logger().log("webrtc: wrote " + name + " sdp (" + std::to_string(content.size()) +
+               " bytes) to reashoot_" + name + ".sdp");
+}
+
 class WebRTCPreviewController {
 public:
   bool active() const { return active_.load(); }
@@ -967,6 +985,7 @@ private:
   void handleLocalOffer(const std::string &offerSdp) {
     const reashoot::HelperConnection connection =
         reashoot::makeConnection(settings_.host, settings_.controlPort, settings_.httpPort);
+    dumpDiagnosticSdp("offer", offerSdp);
     std::wstring offerFile;
     if (!writeTempSdp(offerSdp, offerFile)) {
       logger().log("webrtc: failed to stage offer SDP");
@@ -985,8 +1004,10 @@ private:
       return;
     }
 
-    const reashoot::StrippedAnswer stripped =
-        reashoot::stripInlineIceCandidates(trimWhitespace(result.standardOutput));
+    const std::string rawAnswer = trimWhitespace(result.standardOutput);
+    dumpDiagnosticSdp("answer_raw", rawAnswer);
+    const reashoot::StrippedAnswer stripped = reashoot::stripInlineIceCandidates(rawAnswer);
+    dumpDiagnosticSdp("answer_stripped", stripped.sdp);
     logger().log("webrtc: received answer, " + std::to_string(stripped.candidates.size()) +
                  " inline candidate(s)");
     if (!receiver_) {
