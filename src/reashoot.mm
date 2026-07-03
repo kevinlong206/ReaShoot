@@ -14,6 +14,14 @@
 #include <string>
 #include <vector>
 
+#include "core/alignment_math.h"
+#include "core/capture_profile.h"
+#include "core/helper_output_parser.h"
+#include "core/path_utils.h"
+#import "platform/mac/mac_h264_preview_renderer.h"
+#include "platform/mac/mac_helper_process.h"
+#include "reaper/reaper_host.h"
+
 #define REAPERAPI_IMPLEMENT
 #define REAPERAPI_MINIMAL
 #define REAPERAPI_WANT_AddMediaItemToTrack
@@ -152,21 +160,49 @@ void debugLog(NSString *format, ...) {
   }
 }
 
-NSString *redactedArguments(NSArray<NSString *> *arguments) {
-  NSMutableArray<NSString *> *redacted = [NSMutableArray arrayWithCapacity:arguments.count];
-  BOOL redactNext = NO;
-  for (NSString *argument in arguments) {
-    if (redactNext) {
-      [redacted addObject:@"REDACTED"];
-      redactNext = NO;
-    } else {
-      [redacted addObject:argument ?: @""];
-      if ([argument isEqualToString:@"--token"]) {
-        redactNext = YES;
-      }
-    }
+NSString *stringFromStd(const std::string &value) {
+  return [NSString stringWithUTF8String:value.c_str()] ?: @"";
+}
+
+std::string stdStringFromNSString(NSString *value) {
+  return value.UTF8String ? value.UTF8String : "";
+}
+
+NSArray<NSString *> *stringArrayFromStdVector(const std::vector<std::string> &values) {
+  NSMutableArray<NSString *> *array = [NSMutableArray arrayWithCapacity:values.size()];
+  for (const std::string &value : values) {
+    [array addObject:stringFromStd(value)];
   }
-  return [redacted componentsJoinedByString:@" "];
+  return array;
+}
+
+std::vector<std::string> stdVectorFromStringArray(NSArray<NSString *> *values) {
+  std::vector<std::string> vector;
+  vector.reserve(values.count);
+  for (NSString *value in values) {
+    vector.push_back(stdStringFromNSString(value ?: @""));
+  }
+  return vector;
+}
+
+NSDictionary<NSString *, NSString *> *dictionaryFromFields(const reashoot::core::FieldMap &fields) {
+  NSMutableDictionary<NSString *, NSString *> *dictionary = [NSMutableDictionary dictionaryWithCapacity:fields.size()];
+  for (const auto &entry : fields) {
+    dictionary[stringFromStd(entry.first)] = stringFromStd(entry.second);
+  }
+  return dictionary;
+}
+
+std::string reashootHelperPath() {
+  return stdStringFromNSString([NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/REAPER/UserPlugins/reashoot-mac"]);
+}
+
+reashoot::core::HelperProcess &helperProcess() {
+  static std::unique_ptr<reashoot::core::HelperProcess> helper =
+      reashoot::platform::mac::createHelperProcess(reashootHelperPath(), [](const std::string &message) {
+        debugLog(@"%s", message.c_str());
+      });
+  return *helper;
 }
 
 reaper_plugin_info_t *g_reaper = nullptr;
@@ -225,27 +261,11 @@ struct AlignmentResult {
   std::string videoDebug;
 };
 
-struct TransientPeak {
-  int index = 0;
-  double value = 0.0;
-};
-
 struct AlignmentWindow {
   bool active = false;
   double start = 0.0;
   double end = 0.0;
 };
-
-bool hasPathExtension(const std::string &path, const std::string &extension) {
-  return path.size() >= extension.size() &&
-         std::equal(extension.rbegin(), extension.rend(), path.rbegin(), [](char a, char b) {
-           return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b));
-         });
-}
-
-bool isVideoPath(const std::string &path) {
-  return hasPathExtension(path, ".mov") || hasPathExtension(path, ".mp4") || hasPathExtension(path, ".m4v");
-}
 
 void showError(const std::string &message) {
   if (ShowMessageBox) {
@@ -261,46 +281,6 @@ ReaProject *currentProject() {
     }
   }
   return nullptr;
-}
-
-std::string directoryName(const std::string &path) {
-  const std::string::size_type slash = path.find_last_of('/');
-  if (slash == std::string::npos) {
-    return {};
-  }
-  return path.substr(0, slash);
-}
-
-std::string baseNameWithoutExtension(const std::string &path) {
-  std::string name = path;
-  const std::string::size_type slash = name.find_last_of('/');
-  if (slash != std::string::npos) {
-    name = name.substr(slash + 1);
-  }
-  const std::string::size_type dot = name.find_last_of('.');
-  if (dot != std::string::npos) {
-    name = name.substr(0, dot);
-  }
-  if (name.empty()) {
-    return "unsaved_project";
-  }
-  for (char &ch : name) {
-    const bool safe = (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') ||
-                      (ch >= '0' && ch <= '9') || ch == '-' || ch == '_';
-    if (!safe) {
-      ch = '_';
-    }
-  }
-  return name;
-}
-
-std::string timestampString() {
-  std::time_t now = std::time(nullptr);
-  std::tm localTime = {};
-  localtime_r(&now, &localTime);
-  char buffer[32] = {};
-  std::strftime(buffer, sizeof(buffer), "%Y%m%d_%H%M%S", &localTime);
-  return buffer;
 }
 
 std::string captureOutputPath(ReaProject *project) {
@@ -319,21 +299,21 @@ std::string captureOutputPath(ReaProject *project) {
   if (EnumProjects) {
     EnumProjects(-1, projectFile, sizeof(projectFile));
     if (projectFile[0] != '\0') {
-      projectName = baseNameWithoutExtension(projectFile);
+      projectName = reashoot::core::baseNameWithoutExtension(projectFile);
       if (outputRoot.empty()) {
-        outputRoot = directoryName(projectFile);
+        outputRoot = reashoot::core::directoryName(projectFile);
       }
     }
   }
 
-  if (outputRoot.empty() && GetResourcePath) {
-    outputRoot = GetResourcePath();
+  if (outputRoot.empty()) {
+    outputRoot = reashoot::reaper::resourcePath();
   }
   if (outputRoot.empty()) {
     outputRoot = NSHomeDirectory().UTF8String;
   }
 
-  return outputRoot + "/ReaShoot Recordings/" + projectName + "_" + timestampString() + ".mov";
+  return outputRoot + "/ReaShoot Recordings/" + projectName + "_" + reashoot::core::timestampString() + ".mov";
 }
 
 MediaTrack *findVideoTrack(ReaProject *project) {
@@ -443,7 +423,7 @@ PlaybackVideo findPlaybackVideoAtPosition(ReaProject *project, double position) 
     if (filePath[0] == '\0') {
       continue;
     }
-    if (!isVideoPath(filePath)) {
+    if (!reashoot::core::isVideoPath(filePath)) {
       continue;
     }
 
@@ -500,75 +480,6 @@ MediaItem *insertMediaItem(MediaTrack *track,
   return item;
 }
 
-std::vector<double> normalizedEnvelope(std::vector<double> envelope) {
-  if (envelope.empty()) {
-    return {};
-  }
-  double mean = 0.0;
-  for (double value : envelope) {
-    mean += value;
-  }
-  mean /= static_cast<double>(envelope.size());
-
-  double energy = 0.0;
-  for (double &value : envelope) {
-    value -= mean;
-    energy += value * value;
-  }
-  if (energy <= 1e-9) {
-    return {};
-  }
-  return envelope;
-}
-
-std::vector<double> shapeEnvelope(std::vector<double> envelope, double peakRate) {
-  if (envelope.empty()) {
-    return {};
-  }
-
-  for (double &value : envelope) {
-    value = std::log1p((std::max)(0.0, value) * 24.0);
-  }
-
-  const int radius = (std::max)(1, static_cast<int>(std::llround((peakRate >= kAlignmentFinePeakRate ? 0.015 : 0.25) * peakRate)));
-  std::vector<double> smoothed(envelope.size(), 0.0);
-  double sum = 0.0;
-  int count = 0;
-  int left = 0;
-  int right = -1;
-  for (int i = 0; i < static_cast<int>(envelope.size()); ++i) {
-    const int targetRight = (std::min)(static_cast<int>(envelope.size()) - 1, i + radius);
-    while (right < targetRight) {
-      ++right;
-      sum += envelope[static_cast<size_t>(right)];
-      ++count;
-    }
-    const int targetLeft = (std::max)(0, i - radius);
-    while (left < targetLeft) {
-      sum -= envelope[static_cast<size_t>(left)];
-      --count;
-      ++left;
-    }
-    smoothed[static_cast<size_t>(i)] = count > 0 ? sum / static_cast<double>(count) : 0.0;
-  }
-
-  return normalizedEnvelope(std::move(smoothed));
-}
-
-std::vector<double> transientEnvelope(const std::vector<double> &rawEnvelope) {
-  if (rawEnvelope.empty()) {
-    return {};
-  }
-  std::vector<double> onset(rawEnvelope.size(), 0.0);
-  double slowEnvelope = rawEnvelope.front();
-  for (size_t i = 1; i < rawEnvelope.size(); ++i) {
-    const double previousSlow = slowEnvelope;
-    slowEnvelope = (0.90 * slowEnvelope) + (0.10 * rawEnvelope[i]);
-    onset[i] = (std::max)(0.0, rawEnvelope[i] - previousSlow);
-  }
-  return normalizedEnvelope(std::move(onset));
-}
-
 double takeSourceOffset(MediaItem_Take *take) {
   if (!take || !GetMediaItemTakeInfo_Value) {
     return 0.0;
@@ -603,7 +514,7 @@ bool takeSourcePath(MediaItem_Take *take, std::string &path) {
 }
 
 bool pathLooksLikeMovie(const std::string &path) {
-  return hasPathExtension(path, ".mov") || hasPathExtension(path, ".mp4") || hasPathExtension(path, ".m4v");
+  return reashoot::core::isVideoPath(path);
 }
 
 std::vector<double> envelopeFromPeakBuffer(const std::vector<double> &peaks, int returnedSamples, double peakRate) {
@@ -614,7 +525,7 @@ std::vector<double> envelopeFromPeakBuffer(const std::vector<double> &peaks, int
     envelope[static_cast<size_t>(i)] = value;
   }
 
-  return shapeEnvelope(std::move(envelope), peakRate);
+  return reashoot::core::shapeEnvelope(std::move(envelope), peakRate, kAlignmentFinePeakRate);
 }
 
 std::vector<double> movieAudioEnvelope(const std::string &path, double sourceStart, double duration, double peakRate, int &sampleCountOut, std::string *debug) {
@@ -771,7 +682,7 @@ std::vector<double> movieAudioEnvelope(const std::string &path, double sourceSta
     envelope.resize(static_cast<size_t>(observedBuckets));
   }
 
-  envelope = shapeEnvelope(std::move(envelope), peakRate);
+  envelope = reashoot::core::shapeEnvelope(std::move(envelope), peakRate, kAlignmentFinePeakRate);
   if (envelope.empty()) {
     return {};
   }
@@ -852,73 +763,6 @@ std::vector<double> takeEnvelope(MediaItem_Take *take, double sourceStart, doubl
   }
   sampleCountOut = returnedSamples;
   return envelope;
-}
-
-double normalizedCorrelationAtLag(const std::vector<double> &video,
-                                  const std::vector<double> &reference,
-                                  int lagSamples,
-                                  int minimumOverlapSamples = static_cast<int>(kAlignmentPeakRate)) {
-  int videoStart = 0;
-  int referenceStart = lagSamples;
-  int count = static_cast<int>(video.size());
-  if (referenceStart < 0) {
-    videoStart = -referenceStart;
-    referenceStart = 0;
-    count -= videoStart;
-  }
-  count = (std::min)(count, static_cast<int>(reference.size()) - referenceStart);
-  if (count < minimumOverlapSamples) {
-    return -std::numeric_limits<double>::infinity();
-  }
-
-  double dot = 0.0;
-  double videoEnergy = 0.0;
-  double referenceEnergy = 0.0;
-  for (int i = 0; i < count; ++i) {
-    const double videoValue = video[static_cast<size_t>(videoStart + i)];
-    const double referenceValue = reference[static_cast<size_t>(referenceStart + i)];
-    dot += videoValue * referenceValue;
-    videoEnergy += videoValue * videoValue;
-    referenceEnergy += referenceValue * referenceValue;
-  }
-  if (videoEnergy <= 1e-9 || referenceEnergy <= 1e-9) {
-    return -std::numeric_limits<double>::infinity();
-  }
-  return dot / std::sqrt(videoEnergy * referenceEnergy);
-}
-
-std::vector<double> normalizedSampleShape(std::vector<double> samples) {
-  if (samples.empty()) {
-    return {};
-  }
-
-  for (double &sample : samples) {
-    sample = std::sqrt(std::fabs(sample));
-  }
-
-  const int radius = (std::max)(1, static_cast<int>(std::llround(0.0015 * kAlignmentSampleRate)));
-  std::vector<double> smoothed(samples.size(), 0.0);
-  double sum = 0.0;
-  int count = 0;
-  int left = 0;
-  int right = -1;
-  for (int i = 0; i < static_cast<int>(samples.size()); ++i) {
-    const int targetRight = (std::min)(static_cast<int>(samples.size()) - 1, i + radius);
-    while (right < targetRight) {
-      ++right;
-      sum += samples[static_cast<size_t>(right)];
-      ++count;
-    }
-    const int targetLeft = (std::max)(0, i - radius);
-    while (left < targetLeft) {
-      sum -= samples[static_cast<size_t>(left)];
-      --count;
-      ++left;
-    }
-    smoothed[static_cast<size_t>(i)] = count > 0 ? sum / static_cast<double>(count) : 0.0;
-  }
-
-  return normalizedEnvelope(std::move(smoothed));
 }
 
 std::vector<double> movieAudioSamples(const std::string &path, double sourceStart, double duration) {
@@ -1046,9 +890,10 @@ bool sampleAccurateRefine(MediaItem_Take *videoTake,
     return false;
   }
 
-  std::vector<double> videoSamples = normalizedSampleShape(movieAudioSamples(videoPath, videoSourceStart, duration));
-  std::vector<double> referenceSamples = normalizedSampleShape(
-      takeAudioAccessorSamples(referenceTake, referenceWindowProjectPosition, referenceDuration));
+  std::vector<double> videoSamples =
+      reashoot::core::normalizedSampleShape(movieAudioSamples(videoPath, videoSourceStart, duration), kAlignmentSampleRate);
+  std::vector<double> referenceSamples = reashoot::core::normalizedSampleShape(
+      takeAudioAccessorSamples(referenceTake, referenceWindowProjectPosition, referenceDuration), kAlignmentSampleRate);
   if (videoSamples.empty() || referenceSamples.empty()) {
     return false;
   }
@@ -1066,7 +911,7 @@ bool sampleAccurateRefine(MediaItem_Take *videoTake,
   double bestScore = -std::numeric_limits<double>::infinity();
   int bestLag = expectedLag;
   for (int lag = minLag; lag <= maxLag; ++lag) {
-    const double score = normalizedCorrelationAtLag(videoSamples, referenceSamples, lag, minimumOverlapSamples);
+    const double score = reashoot::core::normalizedCorrelationAtLag(videoSamples, referenceSamples, lag, minimumOverlapSamples);
     if (score > bestScore) {
       bestScore = score;
       bestLag = lag;
@@ -1079,52 +924,6 @@ bool sampleAccurateRefine(MediaItem_Take *videoTake,
   refinedPosition = referenceWindowProjectPosition + (static_cast<double>(bestLag) / kAlignmentSampleRate) - analysisOffset;
   refinedScore = bestScore;
   return true;
-}
-
-std::vector<TransientPeak> strongestTransientPeaks(const std::vector<double> &signal) {
-  std::vector<TransientPeak> peaks;
-  if (signal.size() < 3) {
-    return peaks;
-  }
-
-  double maxValue = 0.0;
-  for (double value : signal) {
-    maxValue = (std::max)(maxValue, value);
-  }
-  if (maxValue <= 0.0) {
-    return peaks;
-  }
-
-  const double threshold = maxValue * 0.35;
-  const int minDistance = static_cast<int>(std::llround(0.08 * kAlignmentPeakRate));
-  for (int i = 1; i < static_cast<int>(signal.size()) - 1; ++i) {
-    const double value = signal[static_cast<size_t>(i)];
-    if (value < threshold || value < signal[static_cast<size_t>(i - 1)] || value < signal[static_cast<size_t>(i + 1)]) {
-      continue;
-    }
-    bool merged = false;
-    for (TransientPeak &peak : peaks) {
-      if (std::abs(peak.index - i) <= minDistance) {
-        if (value > peak.value) {
-          peak.index = i;
-          peak.value = value;
-        }
-        merged = true;
-        break;
-      }
-    }
-    if (!merged) {
-      peaks.push_back({i, value});
-    }
-  }
-
-  std::sort(peaks.begin(), peaks.end(), [](const TransientPeak &a, const TransientPeak &b) {
-    return a.value > b.value;
-  });
-  if (peaks.size() > 32) {
-    peaks.resize(32);
-  }
-  return peaks;
 }
 
 bool refineAlignment(MediaItem_Take *videoTake,
@@ -1180,7 +979,7 @@ bool refineAlignment(MediaItem_Take *videoTake,
   int bestLag = expectedLagSamples;
   std::vector<double> lagScores(static_cast<size_t>(maxLag - minLag + 1), -std::numeric_limits<double>::infinity());
   for (int lag = minLag; lag <= maxLag; ++lag) {
-    const double score = normalizedCorrelationAtLag(videoEnvelope, referenceEnvelope, lag, minimumOverlapSamples);
+    const double score = reashoot::core::normalizedCorrelationAtLag(videoEnvelope, referenceEnvelope, lag, minimumOverlapSamples);
     lagScores[static_cast<size_t>(lag - minLag)] = score;
     if (score > bestScore) {
       bestScore = score;
@@ -1300,7 +1099,8 @@ AlignmentResult alignVideoItemToReference(ReaProject *project,
   if (videoEnvelope.empty()) {
     return result;
   }
-  result.videoPeaks = static_cast<int>(strongestTransientPeaks(transientEnvelope(videoEnvelope)).size());
+  result.videoPeaks =
+      static_cast<int>(reashoot::core::strongestTransientPeaks(reashoot::core::transientEnvelope(videoEnvelope), kAlignmentPeakRate).size());
 
   const int itemCount = CountMediaItems(project);
   double bestScore = -std::numeric_limits<double>::infinity();
@@ -1366,7 +1166,8 @@ AlignmentResult alignVideoItemToReference(ReaProject *project,
     double referenceBestScore = -std::numeric_limits<double>::infinity();
     double referenceBestPosition = videoPosition;
     for (int lag = minLag; lag <= maxLag; ++lag) {
-      const double score = normalizedCorrelationAtLag(videoEnvelope, referenceEnvelope, lag);
+      const double score =
+          reashoot::core::normalizedCorrelationAtLag(videoEnvelope, referenceEnvelope, lag, static_cast<int>(kAlignmentPeakRate));
       if (score > referenceBestScore) {
         referenceBestScore = score;
         referenceBestPosition = referenceWindowProjectPosition + (static_cast<double>(lag) / kAlignmentPeakRate) - analysisOffset;
@@ -1488,7 +1289,7 @@ void queuePendingAlignment(ReaProject *project, MediaTrack *track, MediaItem *it
   g_nextAlignmentAttemptTime = std::time(nullptr) + 1;
 }
 
-bool insertRecordedMedia(const std::string &path, double position, bool fromIPhone, std::string &error) {
+bool insertRecordedMedia(const std::string &path, double position, std::string &error) {
   ReaProject *project = g_recordProject ? g_recordProject : currentProject();
   if (!project) {
     error = "Recording finished, but there is no active REAPER project to insert into:\n" + path;
@@ -1518,7 +1319,6 @@ bool insertRecordedMedia(const std::string &path, double position, bool fromIPho
     return false;
   }
 
-  (void)fromIPhone;
   queuePendingAlignment(project, track, videoItem);
   g_lastAlignmentStatus = "Recorded to ReaShoot track; aligning audio";
 
@@ -1545,9 +1345,7 @@ std::string followStatusText() {
 
 void setFollowEnabled(bool enabled) {
   g_followEnabled = enabled;
-  if (SetExtState) {
-    SetExtState(kExtStateSection, kFollowEnabledKey, enabled ? "1" : "0", true);
-  }
+  reashoot::reaper::setExtState(kExtStateSection, kFollowEnabledKey, enabled ? "1" : "0", true);
   updateFollowStatusText();
   refreshToolbarState();
 }
@@ -1592,9 +1390,9 @@ void setVideoEnabled(bool enabled);
 @property(nonatomic, strong) NSTextField *formatLabel;
 @property(nonatomic, strong) NSTextField *statusLabel;
 @property(nonatomic, strong) AVSampleBufferDisplayLayer *streamPreviewLayer;
+@property(nonatomic, strong) ReaShootMacH264PreviewRenderer *h264PreviewRenderer;
 @property(nonatomic, strong) NSURLSession *previewStreamSession;
 @property(nonatomic, strong) NSURLSessionWebSocketTask *previewStreamTask;
-@property(nonatomic, assign) CMVideoFormatDescriptionRef h264FormatDescription;
 @property(nonatomic, assign) BOOL iPhonePreviewProfileConfiguring;
 @property(nonatomic, assign) BOOL previewStreamStarting;
 @property(nonatomic, assign) BOOL previewStreamActive;
@@ -1629,13 +1427,13 @@ void setVideoEnabled(bool enabled);
 - (NSString *)runReaShootCommand:(NSString *)command
                    extraArguments:(NSArray<NSString *> *)extraArguments
                             error:(NSError **)error;
-- (NSTask *)runReaShootCommandAsync:(NSString *)command
-                      extraArguments:(NSArray<NSString *> *)extraArguments
-                          completion:(void (^)(NSString *output, NSError *error))completion;
-- (NSTask *)runReaShootCommandAsync:(NSString *)command
-                      extraArguments:(NSArray<NSString *> *)extraArguments
-                       outputHandler:(void (^)(NSString *line))outputHandler
-                          completion:(void (^)(NSString *output, NSError *error))completion;
+- (std::shared_ptr<reashoot::core::AsyncCommandHandle>)runReaShootCommandAsync:(NSString *)command
+                                                               extraArguments:(NSArray<NSString *> *)extraArguments
+                                                                   completion:(void (^)(NSString *output, NSError *error))completion;
+- (std::shared_ptr<reashoot::core::AsyncCommandHandle>)runReaShootCommandAsync:(NSString *)command
+                                                               extraArguments:(NSArray<NSString *> *)extraArguments
+                                                                outputHandler:(void (^)(NSString *line))outputHandler
+                                                                   completion:(void (^)(NSString *output, NSError *error))completion;
 - (void)handleReaShootProgressLine:(NSString *)line;
 - (NSDictionary<NSString *, NSString *> *)recordingDescriptorFromReaShootOutput:(NSString *)output;
 - (NSArray<NSDictionary<NSString *, NSString *> *> *)recordingDescriptorsFromReaShootOutput:(NSString *)output;
@@ -1687,9 +1485,7 @@ void setVideoEnabled(bool enabled);
   [self ensureDockView];
   self.floatingPreview = !self.floatingPreview;
   g_previewFloating = self.floatingPreview;
-  if (SetExtState) {
-    SetExtState(kExtStateSection, kPreviewFloatingKey, g_previewFloating ? "1" : "0", true);
-  }
+  reashoot::reaper::setExtState(kExtStateSection, kPreviewFloatingKey, g_previewFloating ? "1" : "0", true);
   if (self.floatingPreview) {
     [self hideDockedPreview];
     [self showFloatingPreview];
@@ -1703,11 +1499,6 @@ void setVideoEnabled(bool enabled);
 
 - (BOOL)isRecording {
   return self.remoteRecording;
-}
-
-- (NSString *)reashootHelperPath {
-  NSString *installedPath = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/REAPER/UserPlugins/reashoot-mac"];
-  return installedPath;
 }
 
 - (NSArray<NSString *> *)reashootArgumentsForCommand:(NSString *)command extraArguments:(NSArray<NSString *> *)extraArguments {
@@ -1724,168 +1515,65 @@ void setVideoEnabled(bool enabled);
   return arguments;
 }
 
+- (NSError *)errorFromHelperResult:(const reashoot::core::CommandResult &)result code:(NSInteger)code {
+  if (result.exitCode == 0) {
+    return nil;
+  }
+  NSString *message = result.errorMessage.empty() ? stringFromStd(result.output) : stringFromStd(result.errorMessage);
+  if (message.length == 0) {
+    message = @"reashoot-mac failed.";
+  }
+  return [NSError errorWithDomain:@"com.klong.reashoot"
+                            code:code
+                         userInfo:@{NSLocalizedDescriptionKey: message}];
+}
+
 - (NSString *)runReaShootCommand:(NSString *)command
                    extraArguments:(NSArray<NSString *> *)extraArguments
                            error:(NSError **)error {
-  NSTask *task = [[NSTask alloc] init];
-  NSString *helperPath = [self reashootHelperPath];
-  if (![[NSFileManager defaultManager] isExecutableFileAtPath:helperPath]) {
+  NSArray<NSString *> *arguments = [self reashootArgumentsForCommand:command extraArguments:extraArguments];
+  std::vector<std::string> helperArguments = stdVectorFromStringArray(arguments);
+  if (!helperArguments.empty()) {
+    helperArguments.erase(helperArguments.begin());
+  }
+  reashoot::core::CommandResult result = helperProcess().run(stdStringFromNSString(command ?: @""), helperArguments);
+  NSError *commandError = [self errorFromHelperResult:result code:20];
+  if (commandError) {
     if (error) {
-      *error = [NSError errorWithDomain:@"com.klong.reashoot"
-                                  code:19
-                              userInfo:@{NSLocalizedDescriptionKey: @"The bundled reashoot-mac helper is missing. Run make install again."}];
+      *error = commandError;
     }
     return nil;
   }
-  task.executableURL = [NSURL fileURLWithPath:helperPath];
-  task.arguments = [self reashootArgumentsForCommand:command extraArguments:extraArguments];
-  NSPipe *pipe = [NSPipe pipe];
-  task.standardOutput = pipe;
-  task.standardError = pipe;
-  NSFileHandle *readHandle = pipe.fileHandleForReading;
-  NSMutableData *outputData = [NSMutableData data];
-  readHandle.readabilityHandler = ^(NSFileHandle *handle) {
-    NSData *chunk = handle.availableData;
-    if (chunk.length == 0) {
-      return;
-    }
-    @synchronized (outputData) {
-      [outputData appendData:chunk];
-    }
-  };
-
-  NSError *launchError = nil;
-  if (![task launchAndReturnError:&launchError]) {
-    readHandle.readabilityHandler = nil;
-    if (error) {
-      *error = launchError;
-    }
-    return nil;
-  }
-  [task waitUntilExit];
-  readHandle.readabilityHandler = nil;
-  NSData *remainingData = [readHandle readDataToEndOfFile];
-  @synchronized (outputData) {
-    if (remainingData.length > 0) {
-      [outputData appendData:remainingData];
-    }
-  }
-  NSData *data = nil;
-  @synchronized (outputData) {
-    data = [outputData copy];
-  }
-  NSString *output = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
-  if (task.terminationStatus != 0) {
-    if (error) {
-      NSString *message = output.length > 0 ? output : @"reashoot-mac failed.";
-      *error = [NSError errorWithDomain:@"com.klong.reashoot"
-                                  code:20
-                              userInfo:@{NSLocalizedDescriptionKey: message}];
-    }
-    return nil;
-  }
-  return output;
+  return stringFromStd(result.output);
 }
 
-- (NSTask *)runReaShootCommandAsync:(NSString *)command
-                      extraArguments:(NSArray<NSString *> *)extraArguments
-                          completion:(void (^)(NSString *output, NSError *error))completion {
+- (std::shared_ptr<reashoot::core::AsyncCommandHandle>)runReaShootCommandAsync:(NSString *)command
+                                                               extraArguments:(NSArray<NSString *> *)extraArguments
+                                                                   completion:(void (^)(NSString *output, NSError *error))completion {
   return [self runReaShootCommandAsync:command extraArguments:extraArguments outputHandler:nil completion:completion];
 }
 
-- (NSTask *)runReaShootCommandAsync:(NSString *)command
-                      extraArguments:(NSArray<NSString *> *)extraArguments
-                       outputHandler:(void (^)(NSString *line))outputHandler
-                          completion:(void (^)(NSString *output, NSError *error))completion {
-  NSString *helperPath = [self reashootHelperPath];
-  if (![[NSFileManager defaultManager] isExecutableFileAtPath:helperPath]) {
-    NSError *missingError = [NSError errorWithDomain:@"com.klong.reashoot"
-                                                code:19
-                                            userInfo:@{NSLocalizedDescriptionKey: @"The bundled reashoot-mac helper is missing. Run make install again."}];
-    dispatch_async(dispatch_get_main_queue(), ^{
-      completion(nil, missingError);
-    });
-    return nil;
+- (std::shared_ptr<reashoot::core::AsyncCommandHandle>)runReaShootCommandAsync:(NSString *)command
+                                                               extraArguments:(NSArray<NSString *> *)extraArguments
+                                                                outputHandler:(void (^)(NSString *line))outputHandler
+                                                                   completion:(void (^)(NSString *output, NSError *error))completion {
+  NSArray<NSString *> *arguments = [self reashootArgumentsForCommand:command extraArguments:extraArguments];
+  std::vector<std::string> helperArguments = stdVectorFromStringArray(arguments);
+  if (!helperArguments.empty()) {
+    helperArguments.erase(helperArguments.begin());
   }
-
-  NSTask *task = [[NSTask alloc] init];
-  task.executableURL = [NSURL fileURLWithPath:helperPath];
-  task.arguments = [self reashootArgumentsForCommand:command extraArguments:extraArguments];
-  debugLog(@"helper async start command=%@ args=%@", command ?: @"", redactedArguments(task.arguments));
-  NSPipe *pipe = [NSPipe pipe];
-  task.standardOutput = pipe;
-  task.standardError = pipe;
-  NSFileHandle *readHandle = pipe.fileHandleForReading;
-  NSMutableData *outputData = [NSMutableData data];
-  NSMutableString *pendingLine = [NSMutableString string];
-  void (^consumeData)(NSData *) = ^(NSData *data) {
-    if (data.length == 0) {
-      return;
-    }
-    @synchronized (outputData) {
-      [outputData appendData:data];
-    }
-    if (!outputHandler) {
-      return;
-    }
-    NSString *chunk = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
-    NSArray<NSString *> *parts = [chunk componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet];
-    for (NSUInteger i = 0; i < parts.count; ++i) {
-      NSString *part = parts[i];
-      if (i == 0) {
-        [pendingLine appendString:part];
-      } else {
-        NSString *line = [pendingLine copy];
-        [pendingLine setString:part];
-        if (line.length > 0) {
-          dispatch_async(dispatch_get_main_queue(), ^{
-            outputHandler(line);
-          });
-        }
-      }
-    }
-  };
-  readHandle.readabilityHandler = ^(NSFileHandle *handle) {
-    NSData *data = handle.availableData;
-    consumeData(data);
-  };
-  task.terminationHandler = ^(NSTask *finishedTask) {
-    readHandle.readabilityHandler = nil;
-    consumeData([readHandle readDataToEndOfFile]);
-    if (outputHandler && pendingLine.length > 0) {
-      NSString *line = [pendingLine copy];
-      [pendingLine setString:@""];
-      dispatch_async(dispatch_get_main_queue(), ^{
-        outputHandler(line);
-      });
-    }
-    NSData *data = nil;
-    @synchronized (outputData) {
-      data = [outputData copy];
-    }
-    NSString *output = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
-    NSError *commandError = nil;
-    if (finishedTask.terminationStatus != 0) {
-      NSString *message = output.length > 0 ? output : @"reashoot-mac failed.";
-      commandError = [NSError errorWithDomain:@"com.klong.reashoot"
-                                        code:21
-                                    userInfo:@{NSLocalizedDescriptionKey: message}];
-    }
-    debugLog(@"helper async finish command=%@ status=%d output=%@", command ?: @"", finishedTask.terminationStatus, output ?: @"");
-    dispatch_async(dispatch_get_main_queue(), ^{
-      completion(output, commandError);
-    });
-  };
-
-  NSError *launchError = nil;
-  if (![task launchAndReturnError:&launchError]) {
-    debugLog(@"helper async launch failed command=%@ error=%@", command ?: @"", launchError.localizedDescription ?: @"");
-    dispatch_async(dispatch_get_main_queue(), ^{
-      completion(nil, launchError);
-    });
-    return nil;
-  }
-  return task;
+  std::string commandText = stdStringFromNSString(command ?: @"");
+  ReaShootRecorder *recorder = self;
+  return helperProcess().runAsync(commandText,
+                                 helperArguments,
+                                 outputHandler ? [outputHandler](const std::string &line) {
+                                   outputHandler(stringFromStd(line));
+                                 }
+                                               : reashoot::core::ProgressCallback(),
+                                 [recorder, completion](reashoot::core::CommandResult result) {
+                                   NSError *commandError = [recorder errorFromHelperResult:result code:21];
+                                   completion(stringFromStd(result.output), commandError);
+                                 });
 }
 
 - (BOOL)startIPhoneRecordingWithSuggestedPath:(const std::string &)path
@@ -1901,25 +1589,7 @@ void setVideoEnabled(bool enabled);
     return NO;
   }
 
-  NSArray<NSString *> *configureArguments = @[
-    @"--token",
-    [NSString stringWithUTF8String:g_iPhoneToken.c_str()],
-    @"--resolution",
-    [NSString stringWithUTF8String:g_iPhoneResolution.c_str()],
-    @"--fps",
-    [NSString stringWithUTF8String:g_iPhoneFPS.c_str()],
-    @"--orientation",
-    [NSString stringWithUTF8String:g_iPhoneOrientation.c_str()],
-    @"--aspect",
-    [NSString stringWithUTF8String:g_iPhoneAspect.c_str()],
-    @"--lens",
-    [NSString stringWithUTF8String:g_iPhoneLens.c_str()],
-    @"--zoom",
-    [NSString stringWithUTF8String:g_iPhoneZoom.c_str()],
-    @"--look",
-    [NSString stringWithUTF8String:g_iPhoneLook.c_str()]
-  ];
-  if (![self runReaShootCommand:@"configure" extraArguments:configureArguments error:error]) {
+  if (![self runReaShootCommand:@"configure" extraArguments:[self iPhoneConfigureArguments] error:error]) {
     return NO;
   }
 
@@ -1936,7 +1606,7 @@ void setVideoEnabled(bool enabled);
     return NO;
   }
 
-  NSString *sessionID = [NSString stringWithFormat:@"reaper-%s", timestampString().c_str()];
+  NSString *sessionID = [NSString stringWithFormat:@"reaper-%s", reashoot::core::timestampString().c_str()];
   NSArray<NSString *> *arguments = @[
     @"--token",
     [NSString stringWithUTF8String:g_iPhoneToken.c_str()],
@@ -1958,45 +1628,30 @@ void setVideoEnabled(bool enabled);
 }
 
 - (NSString *)downloadedPathFromReaShootOutput:(NSString *)output {
-  for (NSString *line in [output componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
-    if ([line hasPrefix:@"downloaded "]) {
-      return [line substringFromIndex:@"downloaded ".length];
-    }
-  }
-  return nil;
+  std::string path = reashoot::core::parseDownloadedPath(output.UTF8String ?: "");
+  return path.empty() ? nil : stringFromStd(path);
 }
 
 - (NSDictionary<NSString *, NSString *> *)recordingDescriptorFromReaShootOutput:(NSString *)output {
-  for (NSString *line in [output componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
-    if ([line hasPrefix:@"recording\t"]) {
-      return [self fieldsFromHelperLine:line];
-    }
+  std::vector<reashoot::core::FieldMap> recordings = reashoot::core::parseRecordings(output.UTF8String ?: "");
+  if (recordings.empty()) {
+    return nil;
   }
-  return nil;
+  return dictionaryFromFields(recordings.front());
 }
 
 - (NSArray<NSDictionary<NSString *, NSString *> *> *)recordingDescriptorsFromReaShootOutput:(NSString *)output {
   NSMutableArray<NSDictionary<NSString *, NSString *> *> *recordings = [NSMutableArray array];
-  for (NSString *line in [output componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
-    if ([line hasPrefix:@"recording\t"]) {
-      [recordings addObject:[self fieldsFromHelperLine:line]];
-    }
+  for (const reashoot::core::FieldMap &fields : reashoot::core::parseRecordings(output.UTF8String ?: "")) {
+    [recordings addObject:dictionaryFromFields(fields)];
   }
   return recordings;
 }
 
 - (void)handleReaShootProgressLine:(NSString *)line {
   if ([line hasPrefix:@"encode "]) {
-    NSMutableDictionary<NSString *, NSString *> *fields = [NSMutableDictionary dictionary];
-    for (NSString *part in [line componentsSeparatedByString:@" "]) {
-      NSRange equals = [part rangeOfString:@"="];
-      if (equals.location == NSNotFound || equals.location == 0) {
-        continue;
-      }
-      NSString *key = [part substringToIndex:equals.location];
-      NSString *value = [part substringFromIndex:equals.location + 1];
-      fields[key] = value;
-    }
+    NSDictionary<NSString *, NSString *> *fields =
+        dictionaryFromFields(reashoot::core::parseFields(line.UTF8String ?: "", ' '));
     NSString *percent = fields[@"percent"];
     if (percent.length > 0) {
       [self setStatus:[NSString stringWithFormat:@"Encoding iPhone look: %@%%", percent]];
@@ -2008,16 +1663,8 @@ void setVideoEnabled(bool enabled);
   if (![line hasPrefix:@"progress "]) {
     return;
   }
-  NSMutableDictionary<NSString *, NSString *> *fields = [NSMutableDictionary dictionary];
-  for (NSString *part in [line componentsSeparatedByString:@" "]) {
-    NSRange equals = [part rangeOfString:@"="];
-    if (equals.location == NSNotFound || equals.location == 0) {
-      continue;
-    }
-    NSString *key = [part substringToIndex:equals.location];
-    NSString *value = [part substringFromIndex:equals.location + 1];
-    fields[key] = value;
-  }
+  NSDictionary<NSString *, NSString *> *fields =
+      dictionaryFromFields(reashoot::core::parseFields(line.UTF8String ?: "", ' '));
   NSString *percent = fields[@"percent"];
   NSString *bytes = fields[@"bytes"];
   NSString *total = fields[@"total"];
@@ -2061,7 +1708,7 @@ void setVideoEnabled(bool enabled);
   }
   [self setStatus:@"Downloading iPhone video"];
   __block NSDate *lastProgressDate = [NSDate date];
-  __block NSTask *downloadTask = nil;
+  __block std::shared_ptr<reashoot::core::AsyncCommandHandle> downloadTask;
   __block dispatch_source_t watchdogTimer = nil;
   __block BOOL watchdogCanceled = NO;
   void (^cancelWatchdog)(void) = ^{
@@ -2101,15 +1748,15 @@ void setVideoEnabled(bool enabled);
     watchdogTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
     dispatch_source_set_timer(watchdogTimer, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(30.0 * NSEC_PER_SEC)), (uint64_t)(30.0 * NSEC_PER_SEC), (uint64_t)(1.0 * NSEC_PER_SEC));
     dispatch_source_set_event_handler(watchdogTimer, ^{
-      if (!downloadTask || !downloadTask.running) {
+      if (!downloadTask || !downloadTask->isRunning()) {
         debugLog(@"download watchdog stopping; task finished or missing");
         cancelWatchdog();
         return;
       }
       if ([[NSDate date] timeIntervalSinceDate:lastProgressDate] > 180.0) {
         [self setStatus:@"iPhone download stalled; retry from Pending"];
-        debugLog(@"download watchdog terminating stalled helper pid=%d", downloadTask.processIdentifier);
-        [downloadTask terminate];
+        debugLog(@"download watchdog terminating stalled helper pid=%d", downloadTask->processIdentifier());
+        downloadTask->terminate();
         cancelWatchdog();
       }
     });
@@ -2273,7 +1920,7 @@ void setVideoEnabled(bool enabled);
       ReaProject *project = currentProject();
       double position = GetCursorPositionEx ? GetCursorPositionEx(project) : 0.0;
       std::string insertError;
-      if (insertRecordedMedia(path.UTF8String ?: "", position, true, insertError)) {
+      if (insertRecordedMedia(path.UTF8String ?: "", position, insertError)) {
         const char *status = g_lastAlignmentStatus.empty() ? "Restored iPhone recording to ReaShoot track" : g_lastAlignmentStatus.c_str();
         [self setStatus:[NSString stringWithUTF8String:status]];
       } else {
@@ -2463,19 +2110,17 @@ void setVideoEnabled(bool enabled);
     NSString *look = self.iPhoneLookPopup.selectedItem.representedObject;
     g_iPhoneLook = look.UTF8String ?: "natural";
   }
-  if (SetExtState) {
-    SetExtState(kExtStateSection, kIPhoneHostKey, g_iPhoneHost.c_str(), true);
-    SetExtState(kExtStateSection, kIPhoneTokenKey, g_iPhoneToken.c_str(), true);
-    SetExtState(kExtStateSection, kIPhoneControlPortKey, g_iPhoneControlPort.c_str(), true);
-    SetExtState(kExtStateSection, kIPhoneHttpPortKey, g_iPhoneHttpPort.c_str(), true);
-    SetExtState(kExtStateSection, kIPhoneResolutionKey, g_iPhoneResolution.c_str(), true);
-    SetExtState(kExtStateSection, kIPhoneFPSKey, g_iPhoneFPS.c_str(), true);
-    SetExtState(kExtStateSection, kIPhoneOrientationKey, g_iPhoneOrientation.c_str(), true);
-    SetExtState(kExtStateSection, kIPhoneAspectKey, g_iPhoneAspect.c_str(), true);
-    SetExtState(kExtStateSection, kIPhoneLensKey, g_iPhoneLens.c_str(), true);
-    SetExtState(kExtStateSection, kIPhoneZoomKey, g_iPhoneZoom.c_str(), true);
-    SetExtState(kExtStateSection, kIPhoneLookKey, g_iPhoneLook.c_str(), true);
-  }
+  reashoot::reaper::setExtState(kExtStateSection, kIPhoneHostKey, g_iPhoneHost.c_str(), true);
+  reashoot::reaper::setExtState(kExtStateSection, kIPhoneTokenKey, g_iPhoneToken.c_str(), true);
+  reashoot::reaper::setExtState(kExtStateSection, kIPhoneControlPortKey, g_iPhoneControlPort.c_str(), true);
+  reashoot::reaper::setExtState(kExtStateSection, kIPhoneHttpPortKey, g_iPhoneHttpPort.c_str(), true);
+  reashoot::reaper::setExtState(kExtStateSection, kIPhoneResolutionKey, g_iPhoneResolution.c_str(), true);
+  reashoot::reaper::setExtState(kExtStateSection, kIPhoneFPSKey, g_iPhoneFPS.c_str(), true);
+  reashoot::reaper::setExtState(kExtStateSection, kIPhoneOrientationKey, g_iPhoneOrientation.c_str(), true);
+  reashoot::reaper::setExtState(kExtStateSection, kIPhoneAspectKey, g_iPhoneAspect.c_str(), true);
+  reashoot::reaper::setExtState(kExtStateSection, kIPhoneLensKey, g_iPhoneLens.c_str(), true);
+  reashoot::reaper::setExtState(kExtStateSection, kIPhoneZoomKey, g_iPhoneZoom.c_str(), true);
+  reashoot::reaper::setExtState(kExtStateSection, kIPhoneLookKey, g_iPhoneLook.c_str(), true);
 }
 
 - (void)profileSelectionChanged:(id)sender {
@@ -2489,27 +2134,9 @@ void setVideoEnabled(bool enabled);
   if (g_iPhoneHost.empty() || g_iPhoneToken.empty()) {
     return;
   }
-  NSArray<NSString *> *arguments = @[
-    @"--token",
-    [NSString stringWithUTF8String:g_iPhoneToken.c_str()],
-    @"--resolution",
-    [NSString stringWithUTF8String:g_iPhoneResolution.c_str()],
-    @"--fps",
-    [NSString stringWithUTF8String:g_iPhoneFPS.c_str()],
-    @"--orientation",
-    [NSString stringWithUTF8String:g_iPhoneOrientation.c_str()],
-    @"--aspect",
-    [NSString stringWithUTF8String:g_iPhoneAspect.c_str()],
-    @"--lens",
-    [NSString stringWithUTF8String:g_iPhoneLens.c_str()],
-    @"--zoom",
-    [NSString stringWithUTF8String:g_iPhoneZoom.c_str()],
-    @"--look",
-    [NSString stringWithUTF8String:g_iPhoneLook.c_str()]
-  ];
   [self setStatus:@"Configuring iPhone profile"];
   self.iPhonePreviewProfileConfiguring = YES;
-  [self runReaShootCommandAsync:@"configure" extraArguments:arguments completion:^(NSString *output, NSError *error) {
+  [self runReaShootCommandAsync:@"configure" extraArguments:[self iPhoneConfigureArguments] completion:^(NSString *output, NSError *error) {
     self.iPhonePreviewProfileConfiguring = NO;
     if (error) {
       [self setStatus:@"iPhone profile configure failed"];
@@ -2526,24 +2153,17 @@ void setVideoEnabled(bool enabled);
 }
 
 - (NSArray<NSString *> *)iPhoneConfigureArguments {
-  return @[
-    @"--token",
-    [NSString stringWithUTF8String:g_iPhoneToken.c_str()],
-    @"--resolution",
-    [NSString stringWithUTF8String:g_iPhoneResolution.c_str()],
-    @"--fps",
-    [NSString stringWithUTF8String:g_iPhoneFPS.c_str()],
-    @"--orientation",
-    [NSString stringWithUTF8String:g_iPhoneOrientation.c_str()],
-    @"--aspect",
-    [NSString stringWithUTF8String:g_iPhoneAspect.c_str()],
-    @"--lens",
-    [NSString stringWithUTF8String:g_iPhoneLens.c_str()],
-    @"--zoom",
-    [NSString stringWithUTF8String:g_iPhoneZoom.c_str()],
-    @"--look",
-    [NSString stringWithUTF8String:g_iPhoneLook.c_str()]
-  ];
+  reashoot::core::CaptureProfile profile{
+      g_iPhoneToken,
+      g_iPhoneResolution,
+      g_iPhoneFPS,
+      g_iPhoneOrientation,
+      g_iPhoneAspect,
+      g_iPhoneLens,
+      g_iPhoneZoom,
+      g_iPhoneLook,
+  };
+  return stringArrayFromStdVector(reashoot::core::captureProfileArguments(profile));
 }
 
 - (NSDictionary<NSString *, NSString *> *)fieldsFromHelperLine:(NSString *)line {
@@ -2561,31 +2181,26 @@ void setVideoEnabled(bool enabled);
 }
 
 - (BOOL)applyFirstDiscoveredIPhoneFromOutput:(NSString *)output {
-  for (NSString *line in [output componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
-    if (![line hasPrefix:@"device\t"]) {
-      continue;
-    }
-    NSDictionary<NSString *, NSString *> *fields = [self fieldsFromHelperLine:line];
-    NSString *host = fields[@"host"];
-    NSString *controlPort = fields[@"controlPort"];
-    NSString *httpPort = fields[@"httpPort"];
-    if (host.length == 0) {
-      continue;
-    }
-    g_iPhoneHost = host.UTF8String;
-    if (controlPort.length > 0) {
-      g_iPhoneControlPort = controlPort.UTF8String;
-    }
-    if (httpPort.length > 0) {
-      g_iPhoneHttpPort = httpPort.UTF8String;
-    }
-    self.iPhoneHostField.stringValue = host;
-    self.iPhoneSetupHostField.stringValue = host;
-    [self persistIPhoneSettings];
-    [self setStatus:[NSString stringWithFormat:@"Found iPhone: %@", fields[@"name"] ?: host]];
-    return YES;
+  NSDictionary<NSString *, NSString *> *fields =
+      dictionaryFromFields(reashoot::core::parseFirstDevice(output.UTF8String ?: ""));
+  NSString *host = fields[@"host"];
+  NSString *controlPort = fields[@"controlPort"];
+  NSString *httpPort = fields[@"httpPort"];
+  if (host.length == 0) {
+    return NO;
   }
-  return NO;
+  g_iPhoneHost = host.UTF8String;
+  if (controlPort.length > 0) {
+    g_iPhoneControlPort = controlPort.UTF8String;
+  }
+  if (httpPort.length > 0) {
+    g_iPhoneHttpPort = httpPort.UTF8String;
+  }
+  self.iPhoneHostField.stringValue = host;
+  self.iPhoneSetupHostField.stringValue = host;
+  [self persistIPhoneSettings];
+  [self setStatus:[NSString stringWithFormat:@"Found iPhone: %@", fields[@"name"] ?: host]];
+  return YES;
 }
 
 - (void)discoverIPhone:(id)sender {
@@ -2820,6 +2435,7 @@ void setVideoEnabled(bool enabled);
     self.streamPreviewLayer.autoresizingMask = kCALayerWidthSizable | kCALayerHeightSizable;
     self.streamPreviewLayer.hidden = YES;
     [self.previewView.layer addSublayer:self.streamPreviewLayer];
+    self.h264PreviewRenderer = [[ReaShootMacH264PreviewRenderer alloc] initWithLayer:self.streamPreviewLayer];
 
     self.iPhoneSetupButton = [[NSButton alloc] initWithFrame:NSMakeRect(frame.size.width - 112, 101, 100, 24)];
     self.iPhoneSetupButton.title = @"iPhone Setup";
@@ -3156,7 +2772,7 @@ void setVideoEnabled(bool enabled);
   self.previewStreamActive = NO;
   self.previewStreamFailureReason = nil;
   self.streamPreviewLayer.hidden = NO;
-  [self.streamPreviewLayer flushAndRemoveImage];
+  [self.h264PreviewRenderer reset];
   self.previewStreamSession = [NSURLSession sessionWithConfiguration:NSURLSessionConfiguration.defaultSessionConfiguration];
   self.previewStreamTask = [self.previewStreamSession webSocketTaskWithURL:url];
   [self.previewStreamTask resume];
@@ -3172,11 +2788,7 @@ void setVideoEnabled(bool enabled);
   [self.previewStreamSession invalidateAndCancel];
   self.previewStreamSession = nil;
   self.streamPreviewLayer.hidden = YES;
-  [self.streamPreviewLayer flushAndRemoveImage];
-  if (self.h264FormatDescription) {
-    CFRelease(self.h264FormatDescription);
-    self.h264FormatDescription = nil;
-  }
+  [self.h264PreviewRenderer reset];
 }
 
 - (void)receivePreviewStreamMessage {
@@ -3220,136 +2832,7 @@ void setVideoEnabled(bool enabled);
 }
 
 - (void)handlePreviewAccessUnit:(NSData *)accessUnit {
-  if (accessUnit.length < 5) {
-    return;
-  }
-  const uint8_t *bytes = static_cast<const uint8_t *>(accessUnit.bytes);
-  const NSUInteger length = accessUnit.length;
-  auto startCodeLengthAt = ^NSUInteger(NSUInteger offset) {
-    if (offset + 3 <= length && bytes[offset] == 0 && bytes[offset + 1] == 0 && bytes[offset + 2] == 1) {
-      return static_cast<NSUInteger>(3);
-    }
-    if (offset + 4 <= length && bytes[offset] == 0 && bytes[offset + 1] == 0 && bytes[offset + 2] == 0 && bytes[offset + 3] == 1) {
-      return static_cast<NSUInteger>(4);
-    }
-    return static_cast<NSUInteger>(0);
-  };
-
-  std::vector<std::pair<NSUInteger, NSUInteger>> ranges;
-  NSUInteger offset = 0;
-  while (offset < length) {
-    NSUInteger codeLength = 0;
-    while (offset < length && (codeLength = startCodeLengthAt(offset)) == 0) {
-      ++offset;
-    }
-    if (offset >= length) {
-      break;
-    }
-    const NSUInteger naluStart = offset + codeLength;
-    offset = naluStart;
-    while (offset < length && startCodeLengthAt(offset) == 0) {
-      ++offset;
-    }
-    if (offset > naluStart) {
-      ranges.push_back({naluStart, offset - naluStart});
-    }
-  }
-
-  NSData *sps = nil;
-  NSData *pps = nil;
-  NSMutableData *sampleData = [NSMutableData data];
-  for (const auto &range : ranges) {
-    const NSUInteger naluStart = range.first;
-    const NSUInteger naluLength = range.second;
-    if (naluLength == 0) {
-      continue;
-    }
-    const uint8_t naluType = bytes[naluStart] & 0x1f;
-    NSData *nalu = [NSData dataWithBytes:bytes + naluStart length:naluLength];
-    if (naluType == 7) {
-      sps = nalu;
-      continue;
-    }
-    if (naluType == 8) {
-      pps = nalu;
-      continue;
-    }
-    uint32_t bigEndianLength = CFSwapInt32HostToBig(static_cast<uint32_t>(naluLength));
-    [sampleData appendBytes:&bigEndianLength length:sizeof(bigEndianLength)];
-    [sampleData appendData:nalu];
-  }
-
-  if (sps && pps) {
-    const uint8_t *parameterSetPointers[2] = {
-        static_cast<const uint8_t *>(sps.bytes),
-        static_cast<const uint8_t *>(pps.bytes),
-    };
-    const size_t parameterSetSizes[2] = {sps.length, pps.length};
-    CMVideoFormatDescriptionRef formatDescription = nil;
-    OSStatus status = CMVideoFormatDescriptionCreateFromH264ParameterSets(kCFAllocatorDefault,
-                                                                          2,
-                                                                          parameterSetPointers,
-                                                                          parameterSetSizes,
-                                                                          4,
-                                                                          &formatDescription);
-    if (status == noErr && formatDescription) {
-      if (self.h264FormatDescription) {
-        CFRelease(self.h264FormatDescription);
-      }
-      self.h264FormatDescription = formatDescription;
-    }
-  }
-
-  if (!self.h264FormatDescription || sampleData.length == 0) {
-    return;
-  }
-
-  CMBlockBufferRef blockBuffer = nil;
-  OSStatus blockStatus = CMBlockBufferCreateWithMemoryBlock(kCFAllocatorDefault,
-                                                            nullptr,
-                                                            sampleData.length,
-                                                            kCFAllocatorDefault,
-                                                            nullptr,
-                                                            0,
-                                                            sampleData.length,
-                                                            0,
-                                                            &blockBuffer);
-  if (blockStatus != noErr || !blockBuffer) {
-    return;
-  }
-  blockStatus = CMBlockBufferReplaceDataBytes(sampleData.bytes, blockBuffer, 0, sampleData.length);
-  if (blockStatus != noErr) {
-    CFRelease(blockBuffer);
-    return;
-  }
-
-  CMSampleTimingInfo timing = {kCMTimeInvalid, kCMTimeInvalid, kCMTimeInvalid};
-  const size_t sampleSize = sampleData.length;
-  CMSampleBufferRef sampleBuffer = nil;
-  OSStatus sampleStatus = CMSampleBufferCreateReady(kCFAllocatorDefault,
-                                                    blockBuffer,
-                                                    self.h264FormatDescription,
-                                                    1,
-                                                    1,
-                                                    &timing,
-                                                    1,
-                                                    &sampleSize,
-                                                    &sampleBuffer);
-  CFRelease(blockBuffer);
-  if (sampleStatus != noErr || !sampleBuffer) {
-    return;
-  }
-
-  CFArrayRef attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, true);
-  if (attachments && CFArrayGetCount(attachments) > 0) {
-    CFMutableDictionaryRef attachment = static_cast<CFMutableDictionaryRef>(const_cast<void *>(CFArrayGetValueAtIndex(attachments, 0)));
-    CFDictionarySetValue(attachment, kCMSampleAttachmentKey_DisplayImmediately, kCFBooleanTrue);
-  }
-  if (self.streamPreviewLayer.status == AVQueuedSampleBufferRenderingStatusFailed) {
-    [self.streamPreviewLayer flush];
-  }
-  [self.streamPreviewLayer enqueueSampleBuffer:sampleBuffer];
-  CFRelease(sampleBuffer);
+  [self.h264PreviewRenderer renderAccessUnit:accessUnit];
 }
 
 - (void)showLivePreview {
@@ -3500,15 +2983,8 @@ void updateFollowStatusText() {
 }
 
 void refreshToolbarState() {
-  if (!RefreshToolbar2) {
-    return;
-  }
-  if (g_videoEnabledCommand != 0) {
-    RefreshToolbar2(0, g_videoEnabledCommand);
-  }
-  if (g_toggleFollowCommand != 0) {
-    RefreshToolbar2(0, g_toggleFollowCommand);
-  }
+  reashoot::reaper::refreshToolbar(g_videoEnabledCommand);
+  reashoot::reaper::refreshToolbar(g_toggleFollowCommand);
 }
 
 void setVideoEnabled(bool enabled) {
@@ -3598,7 +3074,7 @@ void processPendingInsert() {
   g_pendingInsertPath.clear();
 
   std::string error;
-  if (insertRecordedMedia(path, position, true, error)) {
+  if (insertRecordedMedia(path, position, error)) {
     const char *status = g_lastAlignmentStatus.empty() ? "Recorded to ReaShoot track" : g_lastAlignmentStatus.c_str();
     [recorder() setStatus:[NSString stringWithUTF8String:status]];
   } else {
@@ -3693,7 +3169,7 @@ bool itemUsesMovieFile(MediaItem *item) {
   }
   char filePath[4096] = {};
   GetMediaSourceFileName(source, filePath, sizeof(filePath));
-  return hasPathExtension(filePath, ".mov") || hasPathExtension(filePath, ".mp4") || hasPathExtension(filePath, ".m4v");
+  return reashoot::core::isVideoPath(filePath);
 }
 
 MediaItem *selectedMovieItem(ReaProject *project) {
@@ -3936,32 +3412,24 @@ void unregisterCallbacks(reaper_plugin_info_t *rec) {
 }
 
 void migrateLegacyExtState() {
-  if (!GetExtState || !SetExtState) {
-    return;
-  }
   for (const char *key : kExtStateKeys) {
-    const char *current = GetExtState(kExtStateSection, key);
-    if (current && current[0] != '\0') {
+    if (!reashoot::reaper::extState(kExtStateSection, key).empty()) {
       continue;
     }
-    const char *legacy = GetExtState(kLegacyExtStateSection, key);
-    if (legacy && legacy[0] != '\0') {
-      SetExtState(kExtStateSection, key, legacy, true);
+    std::string legacy = reashoot::reaper::extState(kLegacyExtStateSection, key);
+    if (!legacy.empty()) {
+      reashoot::reaper::setExtState(kExtStateSection, key, legacy.c_str(), true);
     }
   }
 }
 
 void migrateLegacyToolbarActions() {
-  if (!GetResourcePath) {
+  std::string resourcePath = reashoot::reaper::resourcePath();
+  if (resourcePath.empty()) {
     return;
   }
 
-  const char *resourcePath = GetResourcePath();
-  if (!resourcePath || resourcePath[0] == '\0') {
-    return;
-  }
-
-  NSString *menuPath = [[NSString stringWithUTF8String:resourcePath] stringByAppendingPathComponent:@"reaper-menu.ini"];
+  NSString *menuPath = [stringFromStd(resourcePath) stringByAppendingPathComponent:@"reaper-menu.ini"];
   NSError *readError = nil;
   NSMutableString *contents =
       [NSMutableString stringWithContentsOfFile:menuPath encoding:NSUTF8StringEncoding error:&readError];
@@ -3988,59 +3456,56 @@ void migrateLegacyToolbarActions() {
 }
 
 void loadSettings() {
-  if (!GetExtState) {
-    return;
+  std::string follow = reashoot::reaper::extState(kExtStateSection, kFollowEnabledKey);
+  if (!follow.empty()) {
+    g_followEnabled = follow != "0";
   }
-  const char *follow = GetExtState(kExtStateSection, kFollowEnabledKey);
-  if (follow && follow[0] != '\0') {
-    g_followEnabled = std::string(follow) != "0";
+  std::string previewFloating = reashoot::reaper::extState(kExtStateSection, kPreviewFloatingKey);
+  if (!previewFloating.empty()) {
+    g_previewFloating = previewFloating != "0";
   }
-  const char *previewFloating = GetExtState(kExtStateSection, kPreviewFloatingKey);
-  if (previewFloating && previewFloating[0] != '\0') {
-    g_previewFloating = std::string(previewFloating) != "0";
-  }
-  const char *iPhoneHost = GetExtState(kExtStateSection, kIPhoneHostKey);
-  if (iPhoneHost && iPhoneHost[0] != '\0') {
+  std::string iPhoneHost = reashoot::reaper::extState(kExtStateSection, kIPhoneHostKey);
+  if (!iPhoneHost.empty()) {
     g_iPhoneHost = iPhoneHost;
   }
-  const char *iPhoneControlPort = GetExtState(kExtStateSection, kIPhoneControlPortKey);
-  if (iPhoneControlPort && iPhoneControlPort[0] != '\0') {
+  std::string iPhoneControlPort = reashoot::reaper::extState(kExtStateSection, kIPhoneControlPortKey);
+  if (!iPhoneControlPort.empty()) {
     g_iPhoneControlPort = iPhoneControlPort;
   }
-  const char *iPhoneHttpPort = GetExtState(kExtStateSection, kIPhoneHttpPortKey);
-  if (iPhoneHttpPort && iPhoneHttpPort[0] != '\0') {
+  std::string iPhoneHttpPort = reashoot::reaper::extState(kExtStateSection, kIPhoneHttpPortKey);
+  if (!iPhoneHttpPort.empty()) {
     g_iPhoneHttpPort = iPhoneHttpPort;
   }
-  const char *iPhoneToken = GetExtState(kExtStateSection, kIPhoneTokenKey);
-  if (iPhoneToken && iPhoneToken[0] != '\0') {
+  std::string iPhoneToken = reashoot::reaper::extState(kExtStateSection, kIPhoneTokenKey);
+  if (!iPhoneToken.empty()) {
     g_iPhoneToken = iPhoneToken;
   }
-  const char *iPhoneResolution = GetExtState(kExtStateSection, kIPhoneResolutionKey);
-  if (iPhoneResolution && iPhoneResolution[0] != '\0') {
+  std::string iPhoneResolution = reashoot::reaper::extState(kExtStateSection, kIPhoneResolutionKey);
+  if (!iPhoneResolution.empty()) {
     g_iPhoneResolution = iPhoneResolution;
   }
-  const char *iPhoneFPS = GetExtState(kExtStateSection, kIPhoneFPSKey);
-  if (iPhoneFPS && iPhoneFPS[0] != '\0') {
+  std::string iPhoneFPS = reashoot::reaper::extState(kExtStateSection, kIPhoneFPSKey);
+  if (!iPhoneFPS.empty()) {
     g_iPhoneFPS = iPhoneFPS;
   }
-  const char *iPhoneOrientation = GetExtState(kExtStateSection, kIPhoneOrientationKey);
-  if (iPhoneOrientation && iPhoneOrientation[0] != '\0') {
+  std::string iPhoneOrientation = reashoot::reaper::extState(kExtStateSection, kIPhoneOrientationKey);
+  if (!iPhoneOrientation.empty()) {
     g_iPhoneOrientation = iPhoneOrientation;
   }
-  const char *iPhoneAspect = GetExtState(kExtStateSection, kIPhoneAspectKey);
-  if (iPhoneAspect && iPhoneAspect[0] != '\0') {
+  std::string iPhoneAspect = reashoot::reaper::extState(kExtStateSection, kIPhoneAspectKey);
+  if (!iPhoneAspect.empty()) {
     g_iPhoneAspect = iPhoneAspect;
   }
-  const char *iPhoneLens = GetExtState(kExtStateSection, kIPhoneLensKey);
-  if (iPhoneLens && iPhoneLens[0] != '\0') {
+  std::string iPhoneLens = reashoot::reaper::extState(kExtStateSection, kIPhoneLensKey);
+  if (!iPhoneLens.empty()) {
     g_iPhoneLens = iPhoneLens;
   }
-  const char *iPhoneZoom = GetExtState(kExtStateSection, kIPhoneZoomKey);
-  if (iPhoneZoom && iPhoneZoom[0] != '\0') {
+  std::string iPhoneZoom = reashoot::reaper::extState(kExtStateSection, kIPhoneZoomKey);
+  if (!iPhoneZoom.empty()) {
     g_iPhoneZoom = iPhoneZoom;
   }
-  const char *iPhoneLook = GetExtState(kExtStateSection, kIPhoneLookKey);
-  if (iPhoneLook && iPhoneLook[0] != '\0') {
+  std::string iPhoneLook = reashoot::reaper::extState(kExtStateSection, kIPhoneLookKey);
+  if (!iPhoneLook.empty()) {
     g_iPhoneLook = iPhoneLook;
   }
 }

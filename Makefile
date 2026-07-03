@@ -5,12 +5,22 @@ HELPER_PACKAGE := helper
 HELPER_BUILD_DIR := $(BUILD_DIR)/helper-build
 HELPER_TARGET := $(BUILD_DIR)/reashoot-mac
 SRC := src/reashoot.mm
+CORE_SRC := $(wildcard src/core/*.cpp)
+CORE_HEADERS := $(wildcard src/core/*.h)
+MAC_SRC := $(wildcard src/platform/mac/*.mm)
+MAC_HEADERS := $(wildcard src/platform/mac/*.h)
+REAPER_SRC := $(wildcard src/reaper/*.cpp)
+REAPER_HEADERS := $(wildcard src/reaper/*.h)
+WIN32_STUB_SRC := src/platform/win32/win32_portability_stub.cpp
+CORE_TEST_TARGET := $(BUILD_DIR)/core_tests
+WIN32_STUB_TARGET := $(BUILD_DIR)/win32_portability_stub.o
 HELPER_SRC := $(shell find $(HELPER_PACKAGE) -type f -name '*.swift' -o -name 'Package.swift')
 SWIFT_GIT_ENV := GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=all
 
 CXX ?= clang++
 ARCH_FLAGS ?= -arch $(shell uname -m)
-CXXFLAGS := -std=c++17 -fobjc-arc -Wall -Wextra -Wno-unused-parameter -isystem $(SDK_DIR) -F$(BUILD_DIR) $(ARCH_FLAGS)
+CXXFLAGS := -std=c++17 -fobjc-arc -Wall -Wextra -Wno-unused-parameter -Isrc -isystem $(SDK_DIR) -F$(BUILD_DIR) $(ARCH_FLAGS)
+CORE_TEST_CXXFLAGS := -std=c++17 -Wall -Wextra -Wno-unused-parameter -Isrc $(ARCH_FLAGS)
 LDFLAGS := -dynamiclib -undefined dynamic_lookup $(ARCH_FLAGS) \
   -framework Cocoa \
   -framework AVFoundation \
@@ -22,9 +32,9 @@ LDFLAGS := -dynamiclib -undefined dynamic_lookup $(ARCH_FLAGS) \
 
 all: $(TARGET) $(HELPER_TARGET)
 
-$(TARGET): $(SRC) Info.plist $(SDK_DIR)/reaper_plugin.h $(SDK_DIR)/reaper_plugin_functions.h
+$(TARGET): $(SRC) $(CORE_SRC) $(CORE_HEADERS) $(MAC_SRC) $(MAC_HEADERS) $(REAPER_SRC) $(REAPER_HEADERS) Info.plist $(SDK_DIR)/reaper_plugin.h $(SDK_DIR)/reaper_plugin_functions.h
 	mkdir -p $(BUILD_DIR)
-	$(CXX) $(CXXFLAGS) $(SRC) $(LDFLAGS) -o $(TARGET)
+	$(CXX) $(CXXFLAGS) $(SRC) $(CORE_SRC) $(MAC_SRC) $(REAPER_SRC) $(LDFLAGS) -o $(TARGET)
 
 $(HELPER_TARGET): $(HELPER_SRC)
 	mkdir -p $(BUILD_DIR)
@@ -42,6 +52,10 @@ install: $(TARGET) $(HELPER_TARGET)
 	codesign --force --sign - "$(HOME)/Library/Application Support/REAPER/UserPlugins/reaper_reashoot.dylib"
 
 check:
+	mkdir -p $(BUILD_DIR)
+	$(CXX) $(CORE_TEST_CXXFLAGS) tests/core_tests.cpp $(CORE_SRC) -o $(CORE_TEST_TARGET)
+	$(CORE_TEST_TARGET)
+	$(CXX) $(CORE_TEST_CXXFLAGS) -c $(WIN32_STUB_SRC) -o $(WIN32_STUB_TARGET)
 	./scripts/check_mirrored_swift.sh
 	$(SWIFT_GIT_ENV) swift test --package-path iphone
 	$(SWIFT_GIT_ENV) swift build --package-path helper
