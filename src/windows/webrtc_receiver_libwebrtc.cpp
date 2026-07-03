@@ -49,6 +49,31 @@ DebugLogger &rtcLog() {
 
 void logRtc(const std::string &message) { rtcLog().log("webrtc: " + message); }
 
+// Counts host candidates by transport in an SDP blob so the log shows at a
+// glance whether UDP host candidates were gathered (their absence points at a
+// blocked/failed UDP socket, which strands ICE on unusable TCP-only pairs).
+std::string summarizeCandidates(const std::string &sdp) {
+  int udp = 0, tcp = 0, other = 0;
+  std::size_t pos = 0;
+  while ((pos = sdp.find("a=candidate:", pos)) != std::string::npos) {
+    const std::size_t eol = sdp.find('\n', pos);
+    const std::string line =
+        sdp.substr(pos, eol == std::string::npos ? std::string::npos : eol - pos);
+    if (line.find(" udp ") != std::string::npos ||
+        line.find(" UDP ") != std::string::npos) {
+      ++udp;
+    } else if (line.find(" tcp ") != std::string::npos ||
+               line.find(" TCP ") != std::string::npos) {
+      ++tcp;
+    } else {
+      ++other;
+    }
+    pos = (eol == std::string::npos) ? sdp.size() : eol + 1;
+  }
+  return "udp=" + std::to_string(udp) + " tcp=" + std::to_string(tcp) +
+         " other=" + std::to_string(other);
+}
+
 // libwebrtc's global threads/SSL are process-wide. Initialize lazily on first
 // use and tear down explicitly on plugin unload.
 std::mutex g_globalMutex;
@@ -227,6 +252,11 @@ struct LibWebRTCReceiver::Impl
     if (!running || !peer) {
       return;
     }
+    logRtc(std::string("ice gathering wait done; state=") +
+           std::to_string(static_cast<int>(peer->ice_gathering_state())) +
+           (peer->ice_gathering_state() == lw::RTCIceGatheringStateComplete
+                ? " (complete)"
+                : " (timed out at 3s)"));
 
     std::string offer = fetchLocalDescription();
     if (offer.empty()) {
@@ -237,6 +267,7 @@ struct LibWebRTCReceiver::Impl
       logRtc("negotiation aborted: empty local offer");
       return;
     }
+    logRtc("local offer candidate summary: " + summarizeCandidates(offer));
 
     SignalHandler handler;
     {
@@ -267,7 +298,6 @@ struct LibWebRTCReceiver::Impl
   }
 
   void onRemoteDescriptionSet() {
-    logRtc("remote answer set; flushing buffered local candidates");
     std::vector<WebRTCSignal> flush;
     SignalHandler handler;
     {
@@ -276,6 +306,8 @@ struct LibWebRTCReceiver::Impl
       flush.swap(pendingLocalCandidates);
       handler = onSignal;
     }
+    logRtc("remote answer set; flushing " + std::to_string(flush.size()) +
+           " buffered local candidate(s)");
     if (handler) {
       for (const WebRTCSignal &candidate : flush) {
         handler(candidate);
@@ -285,6 +317,8 @@ struct LibWebRTCReceiver::Impl
 
   void addRemoteCandidate(const WebRTCSignal &signal) {
     if (peer) {
+      logRtc("adding remote candidate [mid=" + signal.mid + " mline=" +
+             std::to_string(signal.mlineIndex) + "] " + signal.payload);
       peer->AddCandidate(signal.mid, signal.mlineIndex, signal.payload);
     }
   }
@@ -358,7 +392,9 @@ struct LibWebRTCReceiver::Impl
   void OnPeerConnectionState(lw::RTCPeerConnectionState state) override {
     logRtc("peer connection state = " + std::to_string(static_cast<int>(state)));
   }
-  void OnIceGatheringState(lw::RTCIceGatheringState) override {}
+  void OnIceGatheringState(lw::RTCIceGatheringState state) override {
+    logRtc("ice gathering state = " + std::to_string(static_cast<int>(state)));
+  }
   void OnIceConnectionState(lw::RTCIceConnectionState state) override {
     logRtc("ice connection state = " + std::to_string(static_cast<int>(state)));
   }
@@ -384,6 +420,8 @@ struct LibWebRTCReceiver::Impl
         pendingLocalCandidates.push_back(signal);
       }
     }
+    logRtc(std::string("local candidate gathered (") +
+           (emitNow ? "emit now" : "buffered") + "): " + signal.payload);
     if (emitNow && handler) {
       handler(signal);
     }
