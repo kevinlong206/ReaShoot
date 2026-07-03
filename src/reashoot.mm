@@ -18,6 +18,7 @@
 #include "core/capture_profile.h"
 #include "core/helper_output_parser.h"
 #include "core/path_utils.h"
+#include "core/remote_camera.h"
 #import "platform/mac/mac_h264_preview_renderer.h"
 #include "platform/mac/mac_helper_process.h"
 #include "reaper/reaper_host.h"
@@ -36,10 +37,8 @@
 #define REAPERAPI_WANT_DockWindowAddEx
 #define REAPERAPI_WANT_DockWindowRefreshForHWND
 #define REAPERAPI_WANT_DockWindowRemove
-#define REAPERAPI_WANT_EnumProjects
 #define REAPERAPI_WANT_GetActiveTake
 #define REAPERAPI_WANT_GetAudioAccessorSamples
-#define REAPERAPI_WANT_GetCursorPositionEx
 #define REAPERAPI_WANT_GetExtState
 #define REAPERAPI_WANT_GetSet_LoopTimeRange2
 #define REAPERAPI_WANT_GetMediaItemInfo_Value
@@ -53,7 +52,6 @@
 #define REAPERAPI_WANT_GetMediaSourceFileName
 #define REAPERAPI_WANT_GetPlayPositionEx
 #define REAPERAPI_WANT_GetPlayStateEx
-#define REAPERAPI_WANT_GetProjectPathEx
 #define REAPERAPI_WANT_GetResourcePath
 #define REAPERAPI_WANT_GetSetMediaTrackInfo_String
 #define REAPERAPI_WANT_GetTrack
@@ -71,8 +69,6 @@
 #define REAPERAPI_WANT_SetMediaItemTake_Source
 #define REAPERAPI_WANT_SetMediaTrackInfo_Value
 #define REAPERAPI_WANT_ShowMessageBox
-#define REAPERAPI_WANT_UpdateArrange
-#define REAPERAPI_WANT_UpdateTimeline
 #define REAPERAPI_WANT_ValidatePtr2
 #include "reaper_plugin_functions.h"
 
@@ -205,6 +201,11 @@ reashoot::core::HelperProcess &helperProcess() {
   return *helper;
 }
 
+reashoot::core::RemoteCameraController &remoteCameraController() {
+  static reashoot::core::RemoteCameraController controller(helperProcess());
+  return controller;
+}
+
 reaper_plugin_info_t *g_reaper = nullptr;
 int g_videoEnabledCommand = 0;
 int g_showPreviewCommand = 0;
@@ -274,35 +275,21 @@ void showError(const std::string &message) {
 }
 
 ReaProject *currentProject() {
-  char projectFile[4096] = {};
-  if (EnumProjects) {
-    if (ReaProject *project = EnumProjects(-1, projectFile, sizeof(projectFile))) {
-      return project;
-    }
-  }
-  return nullptr;
+  return reashoot::reaper::currentProject();
 }
 
 std::string captureOutputPath(ReaProject *project) {
-  char projectPath[4096] = {};
-  char projectFile[4096] = {};
   std::string outputRoot;
   std::string projectName = "unsaved_project";
 
-  if (GetProjectPathEx && project) {
-    GetProjectPathEx(project, projectPath, sizeof(projectPath));
-  }
-  if (projectPath[0] != '\0') {
-    outputRoot = projectPath;
-  }
+  outputRoot = reashoot::reaper::projectPath(project);
 
-  if (EnumProjects) {
-    EnumProjects(-1, projectFile, sizeof(projectFile));
-    if (projectFile[0] != '\0') {
-      projectName = reashoot::core::baseNameWithoutExtension(projectFile);
-      if (outputRoot.empty()) {
-        outputRoot = reashoot::core::directoryName(projectFile);
-      }
+  std::string projectFile;
+  reashoot::reaper::currentProject(&projectFile);
+  if (!projectFile.empty()) {
+    projectName = reashoot::core::baseNameWithoutExtension(projectFile);
+    if (outputRoot.empty()) {
+      outputRoot = reashoot::core::directoryName(projectFile);
     }
   }
 
@@ -377,12 +364,7 @@ MediaTrack *ensureVideoTrackReady(ReaProject *project, bool useFreeItemPositioni
   if (SetMediaTrackInfo_Value) {
     SetMediaTrackInfo_Value(track, "I_FREEMODE", useFreeItemPositioning ? 1.0 : 0.0);
   }
-  if (UpdateTimeline) {
-    UpdateTimeline();
-  }
-  if (UpdateArrange) {
-    UpdateArrange();
-  }
+  reashoot::reaper::refreshArrangeTimeline();
   return track;
 }
 
@@ -460,7 +442,7 @@ MediaItem *insertMediaItem(MediaTrack *track,
 
   bool lengthIsQN = false;
   const double length = GetMediaSourceLength(source, &lengthIsQN);
-  SetMediaItemInfo_Value(item, "D_POSITION", position);
+  reashoot::reaper::moveMediaItem(item, position);
   if (!lengthIsQN && length > 0.0) {
     SetMediaItemInfo_Value(item, "D_LENGTH", length);
   }
@@ -1217,13 +1199,8 @@ AlignmentResult alignVideoItemToReference(ReaProject *project,
   if (std::isfinite(bestScore) && bestScore >= kAlignmentMinimumScore) {
     result.aligned = true;
     result.correction = bestPosition - videoPosition;
-    SetMediaItemInfo_Value(videoItem, "D_POSITION", bestPosition);
-    if (UpdateArrange) {
-      UpdateArrange();
-    }
-    if (UpdateTimeline) {
-      UpdateTimeline();
-    }
+    reashoot::reaper::moveMediaItem(videoItem, bestPosition);
+    reashoot::reaper::refreshArrangeTimeline();
   }
 
   return result;
@@ -1322,12 +1299,7 @@ bool insertRecordedMedia(const std::string &path, double position, std::string &
   queuePendingAlignment(project, track, videoItem);
   g_lastAlignmentStatus = "Recorded to ReaShoot track; aligning audio";
 
-  if (UpdateArrange) {
-    UpdateArrange();
-  }
-  if (UpdateTimeline) {
-    UpdateTimeline();
-  }
+  reashoot::reaper::refreshArrangeTimeline();
 
   return true;
 }
@@ -1416,6 +1388,7 @@ void setVideoEnabled(bool enabled);
 - (void)updateCaptureFormatLabel;
 - (void)persistIPhoneSettings;
 - (void)selectRelativeIPhoneLook:(NSInteger)offset;
+- (reashoot::core::RemoteCameraSettings)remoteCameraSettings;
 - (NSDictionary<NSString *, NSString *> *)fieldsFromHelperLine:(NSString *)line;
 - (NSArray<NSString *> *)iPhoneConfigureArguments;
 - (void)startRemotePreview;
@@ -1501,20 +1474,6 @@ void setVideoEnabled(bool enabled);
   return self.remoteRecording;
 }
 
-- (NSArray<NSString *> *)reashootArgumentsForCommand:(NSString *)command extraArguments:(NSArray<NSString *> *)extraArguments {
-  NSMutableArray<NSString *> *arguments = [NSMutableArray arrayWithObject:command];
-  if (![command isEqualToString:@"discover"]) {
-    [arguments addObjectsFromArray:@[
-      @"--host",
-      [NSString stringWithUTF8String:g_iPhoneHost.c_str()],
-      @"--port",
-      [NSString stringWithUTF8String:g_iPhoneControlPort.c_str()]
-    ]];
-  }
-  [arguments addObjectsFromArray:extraArguments ?: @[]];
-  return arguments;
-}
-
 - (NSError *)errorFromHelperResult:(const reashoot::core::CommandResult &)result code:(NSInteger)code {
   if (result.exitCode == 0) {
     return nil;
@@ -1531,12 +1490,9 @@ void setVideoEnabled(bool enabled);
 - (NSString *)runReaShootCommand:(NSString *)command
                    extraArguments:(NSArray<NSString *> *)extraArguments
                            error:(NSError **)error {
-  NSArray<NSString *> *arguments = [self reashootArgumentsForCommand:command extraArguments:extraArguments];
-  std::vector<std::string> helperArguments = stdVectorFromStringArray(arguments);
-  if (!helperArguments.empty()) {
-    helperArguments.erase(helperArguments.begin());
-  }
-  reashoot::core::CommandResult result = helperProcess().run(stdStringFromNSString(command ?: @""), helperArguments);
+  reashoot::core::CommandResult result = remoteCameraController().run([self remoteCameraSettings],
+                                                                      stdStringFromNSString(command ?: @""),
+                                                                      stdVectorFromStringArray(extraArguments ?: @[]));
   NSError *commandError = [self errorFromHelperResult:result code:20];
   if (commandError) {
     if (error) {
@@ -1557,23 +1513,19 @@ void setVideoEnabled(bool enabled);
                                                                extraArguments:(NSArray<NSString *> *)extraArguments
                                                                 outputHandler:(void (^)(NSString *line))outputHandler
                                                                    completion:(void (^)(NSString *output, NSError *error))completion {
-  NSArray<NSString *> *arguments = [self reashootArgumentsForCommand:command extraArguments:extraArguments];
-  std::vector<std::string> helperArguments = stdVectorFromStringArray(arguments);
-  if (!helperArguments.empty()) {
-    helperArguments.erase(helperArguments.begin());
-  }
   std::string commandText = stdStringFromNSString(command ?: @"");
   ReaShootRecorder *recorder = self;
-  return helperProcess().runAsync(commandText,
-                                 helperArguments,
-                                 outputHandler ? [outputHandler](const std::string &line) {
-                                   outputHandler(stringFromStd(line));
-                                 }
-                                               : reashoot::core::ProgressCallback(),
-                                 [recorder, completion](reashoot::core::CommandResult result) {
-                                   NSError *commandError = [recorder errorFromHelperResult:result code:21];
-                                   completion(stringFromStd(result.output), commandError);
-                                 });
+  return remoteCameraController().runAsync([self remoteCameraSettings],
+                                          commandText,
+                                          stdVectorFromStringArray(extraArguments ?: @[]),
+                                          outputHandler ? [outputHandler](const std::string &line) {
+                                            outputHandler(stringFromStd(line));
+                                          }
+                                                        : reashoot::core::ProgressCallback(),
+                                          [recorder, completion](reashoot::core::CommandResult result) {
+                                            NSError *commandError = [recorder errorFromHelperResult:result code:21];
+                                            completion(stringFromStd(result.output), commandError);
+                                          });
 }
 
 - (BOOL)startIPhoneRecordingWithSuggestedPath:(const std::string &)path
@@ -1607,12 +1559,8 @@ void setVideoEnabled(bool enabled);
   }
 
   NSString *sessionID = [NSString stringWithFormat:@"reaper-%s", reashoot::core::timestampString().c_str()];
-  NSArray<NSString *> *arguments = @[
-    @"--token",
-    [NSString stringWithUTF8String:g_iPhoneToken.c_str()],
-    @"--session",
-    sessionID
-  ];
+  NSArray<NSString *> *arguments =
+      stringArrayFromStdVector(reashoot::core::startArguments([self remoteCameraSettings], stdStringFromNSString(sessionID)));
   if (![self runReaShootCommand:@"start" extraArguments:arguments error:error]) {
     return NO;
   }
@@ -1685,27 +1633,14 @@ void setVideoEnabled(bool enabled);
 - (void)downloadIPhoneRecording:(NSDictionary<NSString *, NSString *> *)recording
                       directory:(NSString *)directory
                      completion:(void (^)(NSString *path, NSError *error))completion {
-  NSMutableArray<NSString *> *arguments = [NSMutableArray arrayWithObjects:
-    @"--http-port",
-    [NSString stringWithUTF8String:g_iPhoneHttpPort.c_str()],
-    @"--token",
-    [NSString stringWithUTF8String:g_iPhoneToken.c_str()],
-    @"--recording-id",
-    recording[@"id"] ?: @"",
-    @"--filename",
-    recording[@"filename"] ?: @"recording.mov",
-    @"--byte-count",
-    recording[@"byteCount"] ?: @"0",
-    @"--download-path",
-    recording[@"downloadPath"] ?: @"",
-    @"--download-dir",
-    directory ?: NSHomeDirectory(),
-    @"--progress",
-    nil];
-  NSString *checksum = recording[@"checksum"];
-  if (checksum.length > 0) {
-    [arguments addObjectsFromArray:@[ @"--checksum", checksum ]];
-  }
+  reashoot::core::RemoteRecordingDescriptor descriptor;
+  descriptor.id = stdStringFromNSString(recording[@"id"] ?: @"");
+  descriptor.filename = stdStringFromNSString(recording[@"filename"] ?: @"recording.mov");
+  descriptor.byteCount = stdStringFromNSString(recording[@"byteCount"] ?: @"0");
+  descriptor.downloadPath = stdStringFromNSString(recording[@"downloadPath"] ?: @"");
+  descriptor.checksum = stdStringFromNSString(recording[@"checksum"] ?: @"");
+  NSArray<NSString *> *arguments = stringArrayFromStdVector(
+      reashoot::core::downloadArguments([self remoteCameraSettings], descriptor, stdStringFromNSString(directory ?: NSHomeDirectory())));
   [self setStatus:@"Downloading iPhone video"];
   __block NSDate *lastProgressDate = [NSDate date];
   __block std::shared_ptr<reashoot::core::AsyncCommandHandle> downloadTask;
@@ -1797,12 +1732,8 @@ void setVideoEnabled(bool enabled);
     return;
   }
   [self setStatus:@"Deleting iPhone video"];
-  NSArray<NSString *> *arguments = @[
-    @"--token",
-    [NSString stringWithUTF8String:g_iPhoneToken.c_str()],
-    @"--recording-id",
-    recordingID
-  ];
+  NSArray<NSString *> *arguments =
+      stringArrayFromStdVector(reashoot::core::recordingIDArguments([self remoteCameraSettings], stdStringFromNSString(recordingID)));
   [self runReaShootCommandAsync:@"delete-recording" extraArguments:arguments completion:^(NSString *output, NSError *error) {
     (void)output;
     if (error) {
@@ -1860,7 +1791,7 @@ void setVideoEnabled(bool enabled);
 
   [self setStatus:@"Checking iPhone recordings"];
   [self runReaShootCommandAsync:@"list-recordings"
-                  extraArguments:@[ @"--token", [NSString stringWithUTF8String:g_iPhoneToken.c_str()] ]
+                  extraArguments:stringArrayFromStdVector(reashoot::core::tokenArguments([self remoteCameraSettings]))
                       completion:^(NSString *output, NSError *error) {
     if (error) {
       [self setStatus:@"iPhone recording list failed"];
@@ -1918,7 +1849,7 @@ void setVideoEnabled(bool enabled);
       }
 
       ReaProject *project = currentProject();
-      double position = GetCursorPositionEx ? GetCursorPositionEx(project) : 0.0;
+      double position = reashoot::reaper::cursorPosition(project);
       std::string insertError;
       if (insertRecordedMedia(path.UTF8String ?: "", position, insertError)) {
         const char *status = g_lastAlignmentStatus.empty() ? "Restored iPhone recording to ReaShoot track" : g_lastAlignmentStatus.c_str();
@@ -1959,7 +1890,7 @@ void setVideoEnabled(bool enabled);
 
   [self setStatus:@"Checking iPhone recordings"];
   [self runReaShootCommandAsync:@"list-recordings"
-                  extraArguments:@[ @"--token", [NSString stringWithUTF8String:g_iPhoneToken.c_str()] ]
+                  extraArguments:stringArrayFromStdVector(reashoot::core::tokenArguments([self remoteCameraSettings]))
                       completion:^(NSString *output, NSError *error) {
     if (error) {
       [self setStatus:@"iPhone recording list failed"];
@@ -2030,10 +1961,7 @@ void setVideoEnabled(bool enabled);
     return;
   }
   [self setStatus:@"Stopping iPhone recording"];
-  NSArray<NSString *> *arguments = @[
-    @"--token",
-    [NSString stringWithUTF8String:g_iPhoneToken.c_str()]
-  ];
+  NSArray<NSString *> *arguments = stringArrayFromStdVector(reashoot::core::stopArguments([self remoteCameraSettings]));
   [self runReaShootCommandAsync:@"stop-only" extraArguments:arguments completion:^(NSString *output, NSError *error) {
     self.remoteRecording = NO;
     [self setRecordingVisualState:NO];
@@ -2152,18 +2080,24 @@ void setVideoEnabled(bool enabled);
   }];
 }
 
+- (reashoot::core::RemoteCameraSettings)remoteCameraSettings {
+  reashoot::core::RemoteCameraSettings settings;
+  settings.host = g_iPhoneHost;
+  settings.controlPort = g_iPhoneControlPort;
+  settings.httpPort = g_iPhoneHttpPort;
+  settings.token = g_iPhoneToken;
+  settings.resolution = g_iPhoneResolution;
+  settings.fps = g_iPhoneFPS;
+  settings.orientation = g_iPhoneOrientation;
+  settings.aspect = g_iPhoneAspect;
+  settings.lens = g_iPhoneLens;
+  settings.zoom = g_iPhoneZoom;
+  settings.look = g_iPhoneLook;
+  return settings;
+}
+
 - (NSArray<NSString *> *)iPhoneConfigureArguments {
-  reashoot::core::CaptureProfile profile{
-      g_iPhoneToken,
-      g_iPhoneResolution,
-      g_iPhoneFPS,
-      g_iPhoneOrientation,
-      g_iPhoneAspect,
-      g_iPhoneLens,
-      g_iPhoneZoom,
-      g_iPhoneLook,
-  };
-  return stringArrayFromStdVector(reashoot::core::captureProfileArguments(profile));
+  return stringArrayFromStdVector(reashoot::core::configureArguments([self remoteCameraSettings]));
 }
 
 - (NSDictionary<NSString *, NSString *> *)fieldsFromHelperLine:(NSString *)line {
@@ -2265,9 +2199,9 @@ void setVideoEnabled(bool enabled);
     [self setStatus:@"Enter iPhone host first"];
     return;
   }
-  NSMutableArray<NSString *> *arguments = [NSMutableArray array];
+  NSArray<NSString *> *arguments = @[];
   if (!g_iPhoneToken.empty()) {
-    [arguments addObjectsFromArray:@[ @"--token", [NSString stringWithUTF8String:g_iPhoneToken.c_str()] ]];
+    arguments = stringArrayFromStdVector(reashoot::core::tokenArguments([self remoteCameraSettings]));
   }
   [self setStatus:@"Testing iPhone connection"];
   [self runReaShootCommandAsync:@"ping" extraArguments:arguments completion:^(NSString *output, NSError *error) {
@@ -2701,7 +2635,7 @@ void setVideoEnabled(bool enabled);
         [self setStatus:message];
       }
       [self runReaShootCommandAsync:@"start-preview"
-                       extraArguments:@[ @"--token", [NSString stringWithUTF8String:g_iPhoneToken.c_str()] ]
+                       extraArguments:stringArrayFromStdVector(reashoot::core::tokenArguments([self remoteCameraSettings]))
                            completion:^(NSString *previewOutput, NSError *previewError) {
         if (previewError) {
           self.previewStreamFailed = YES;
@@ -2725,7 +2659,7 @@ void setVideoEnabled(bool enabled);
   self.previewStreamFailureReason = nil;
   if (!g_iPhoneHost.empty() && !g_iPhoneToken.empty()) {
     [self runReaShootCommandAsync:@"stop-preview"
-                    extraArguments:@[ @"--token", [NSString stringWithUTF8String:g_iPhoneToken.c_str()] ]
+                    extraArguments:stringArrayFromStdVector(reashoot::core::tokenArguments([self remoteCameraSettings]))
                         completion:^(NSString *output, NSError *error) {
       (void)output;
       (void)error;
@@ -3022,7 +2956,7 @@ void startTransportRecording(ReaProject *project) {
 
   g_recordProject = project;
   ensureVideoTrackReady(project, false);
-  g_recordStartPosition = GetCursorPositionEx ? GetCursorPositionEx(project) : 0.0;
+  g_recordStartPosition = reashoot::reaper::cursorPosition(project);
   if (g_recordStartPosition < 0.0 && GetPlayPositionEx) {
     g_recordStartPosition = GetPlayPositionEx(project);
   }

@@ -3,6 +3,7 @@
 #include "../src/core/h264_annex_b.h"
 #include "../src/core/helper_output_parser.h"
 #include "../src/core/path_utils.h"
+#include "../src/core/remote_camera.h"
 
 #include <cassert>
 #include <cmath>
@@ -40,6 +41,38 @@ void testCaptureProfileArguments() {
   assert(args[15] == "natural");
 }
 
+void testRemoteCameraArguments() {
+  RemoteCameraSettings settings;
+  settings.host = "iphone.local";
+  settings.controlPort = "8787";
+  settings.httpPort = "8788";
+  settings.token = "secret";
+  settings.resolution = "1080p";
+  settings.fps = "60";
+
+  std::vector<std::string> configure = commandArguments(settings, "configure", configureArguments(settings));
+  assert(configure.size() == 20);
+  assert(configure[0] == "--host");
+  assert(configure[1] == "iphone.local");
+  assert(configure[2] == "--port");
+  assert(configure[3] == "8787");
+  assert(configure[4] == "--token");
+  assert(configure[5] == "secret");
+  assert(configure[7] == "1080p");
+
+  std::vector<std::string> discover = commandArguments(settings, "discover", {"--timeout", "3"});
+  assert(discover.size() == 2);
+  assert(discover[0] == "--timeout");
+
+  RemoteRecordingDescriptor recording;
+  recording.id = "abc";
+  std::vector<std::string> download = downloadArguments(settings, recording, "/tmp");
+  assert(download[0] == "--http-port");
+  assert(download[1] == "8788");
+  assert(download[5] == "abc");
+  assert(download[7] == "recording.mov");
+}
+
 void testH264AnnexB() {
   const uint8_t bytes[] = {
       0, 0, 0, 1, 0x67, 1, 2,
@@ -70,6 +103,7 @@ int main() {
   testPathUtils();
   testHelperParsing();
   testCaptureProfileArguments();
+  testRemoteCameraArguments();
   testH264AnnexB();
   testAlignmentMath();
   return 0;
