@@ -1,9 +1,11 @@
 #pragma once
 
-#import <Cocoa/Cocoa.h>
+#import <Foundation/Foundation.h>
+
+typedef void (^ReaShootMacPlaybackFrameHandler)(const void *pixels, int width, int height, int strideBytes);
 
 @interface ReaShootMacPlaybackPreviewRenderer : NSObject
-- (instancetype)initWithContainerView:(NSView *)containerView;
+- (instancetype)initWithFrameHandler:(ReaShootMacPlaybackFrameHandler)frameHandler;
 - (void)showPath:(NSString *)path
        itemStart:(double)itemStart
     sourceOffset:(double)sourceOffset

@@ -2125,6 +2125,11 @@ void setVideoEnabled(bool enabled);
         reashoot::platform::swell::setSwellPanelPreviewFrame(g_swellPanelPrototype, pixels, width, height, strideBytes);
       }
     }];
+    self.playbackPreviewRenderer = [[ReaShootMacPlaybackPreviewRenderer alloc] initWithFrameHandler:^(const void *pixels, int width, int height, int strideBytes) {
+      if (g_swellPanelPrototype) {
+        reashoot::platform::swell::setSwellPanelPreviewFrame(g_swellPanelPrototype, pixels, width, height, strideBytes);
+      }
+    }];
     self.previewStreamClient = [[ReaShootMacPreviewStreamClient alloc] init];
     [self updateCaptureFormatLabel];
   }
@@ -2297,12 +2302,15 @@ void setVideoEnabled(bool enabled);
                    sourceOffset:(double)sourceOffset
                 projectPosition:(double)projectPosition {
   [self ensureDockView];
+  const BOOL enteringPlayback = !self.showingPlayback;
   self.showingPlayback = YES;
   if (self.playbackPreviewRenderer) {
-    [self stopRemotePreview];
+    if (enteringPlayback) {
+      [self stopRemotePreview];
+    }
     [self.playbackPreviewRenderer showPath:[NSString stringWithUTF8String:path.c_str()]
-                                 itemStart:itemStart
-                              sourceOffset:sourceOffset
+                                itemStart:itemStart
+                             sourceOffset:sourceOffset
                            projectPosition:projectPosition];
     [self setStatus:@"Playback"];
   } else {
