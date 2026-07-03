@@ -36,7 +36,7 @@ std::wstring helperExecutablePath() {
   buffer.resize(length);
   const std::size_t slash = buffer.find_last_of(L"\\/");
   const std::wstring directory = slash == std::wstring::npos ? std::wstring() : buffer.substr(0, slash + 1);
-  return directory + L"video-sync-win.exe";
+  return directory + L"reashoot-helper.exe";
 }
 
 reashoot::ProcessOptions withTimeout() {

@@ -130,15 +130,15 @@ std::wstring widen(const std::string &value) {
   return result;
 }
 
-// Resolves video-sync-win.exe relative to the loaded plugin DLL.
+// Resolves reashoot-helper.exe relative to the loaded plugin DLL.
 std::wstring helperExecutablePath() {
   wchar_t buffer[MAX_PATH] = {0};
   const DWORD length = GetModuleFileNameW(g_instance, buffer, MAX_PATH);
   if (length == 0 || length == MAX_PATH) {
-    return L"video-sync-win.exe";
+    return L"reashoot-helper.exe";
   }
   std::filesystem::path modulePath(std::wstring(buffer, length));
-  return (modulePath.parent_path() / L"video-sync-win.exe").wstring();
+  return (modulePath.parent_path() / L"reashoot-helper.exe").wstring();
 }
 
 void report(const std::string &message) {

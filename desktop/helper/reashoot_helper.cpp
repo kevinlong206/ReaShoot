@@ -1,4 +1,4 @@
-// video-sync-win: the Windows control helper CLI. It mirrors the macOS
+// reashoot-helper: the Windows control helper CLI. It mirrors the macOS
 // video-sync-mac tool (helper/Sources/video-sync-mac/VideoSyncMacCLI.swift) for
 // the control-socket commands, driving the portable reashoot::ControlClient and
 // printing the same line formats the REAPER plugin parses. Commands that need
@@ -253,7 +253,7 @@ int downloadAndAcknowledge(const Arguments &args, const std::string &token,
 }
 
 void printHelp() {
-  std::cout << "video-sync-win commands:\n"
+  std::cout << "reashoot-helper commands:\n"
                "  pair --host HOST [--port 8787] --code CODE\n"
                "  configure --host HOST [--port 8787] --token TOKEN [--resolution 4K] [--fps 30]"
                " [--orientation portrait] [--aspect 9:16] [--lens wide] [--zoom 1.0] [--look natural]\n"

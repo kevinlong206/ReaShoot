@@ -51,10 +51,10 @@ if(WIN32)
   # The Windows control helper CLI, mirroring the macOS video-sync-mac tool. The
   # REAPER plugin launches it as a subprocess (via the process adapter) for each
   # pairing/control command.
-  add_executable(video-sync-win
-    desktop/helper/video_sync_win.cpp
+  add_executable(reashoot-helper
+    desktop/helper/reashoot_helper.cpp
   )
-  target_link_libraries(video-sync-win PRIVATE reashoot_core)
+  target_link_libraries(reashoot-helper PRIVATE reashoot_core)
 endif()
 
 include(CTest)
@@ -130,7 +130,7 @@ if(BUILD_TESTING)
       desktop/core/tests/helper_launcher_tests.cpp
     )
     target_link_libraries(reashoot_helper_launcher_tests PRIVATE reashoot_core)
-    add_dependencies(reashoot_helper_launcher_tests video-sync-win)
+    add_dependencies(reashoot_helper_launcher_tests reashoot-helper)
     add_test(NAME reashoot_helper_launcher_tests COMMAND reashoot_helper_launcher_tests)
 
     add_executable(reashoot_recording_downloader_tests
