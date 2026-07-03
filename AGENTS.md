@@ -2,11 +2,11 @@
 
 ## Project
 
-This repository contains ReaPhoneVideo: a macOS-only native REAPER extension plus its companion iPhone camera app.
+This repository contains ReaShoot: a native REAPER extension (macOS, plus a Windows port in progress) with a companion iPhone camera app.
 
-- The REAPER extension is implemented in Objective-C++ with the REAPER Extension SDK, AVFoundation, Cocoa, and LiveKit WebRTC.
+- The REAPER extension is implemented in Objective-C++ (macOS) with the REAPER Extension SDK, AVFoundation, Cocoa, and LiveKit WebRTC, and a portable C++ core shared with the Windows port.
 - The companion iPhone app lives in `iphone/` and records full-quality iPhone video while REAPER controls it over the local Wi-Fi/Bonjour network.
-- The GitHub repository is named `ReaPhoneVideo`; deeper code/action/bundle renames are intentionally deferred.
+- The GitHub repository is still named `ReaPhoneVideo`; the project/product has been renamed to `ReaShoot` (actions, UI, settings keys, and code identifiers). The iPhone app is intentionally left under its original names.
 - `~/iphone_reapervideosync` was the old development copy and has been moved to Trash. Do not use or recreate it; `reaper_video_recorder/iphone` is the source of truth.
 
 ## Important files
@@ -67,28 +67,28 @@ rm -rf iphone/Package.resolved iphone/.build helper/.build
 ## Current behavior
 
 - Registers actions:
-  - `Video Recorder: Enable/Disable video features`
-  - `Video Recorder: Show/Hide Preview`
-  - `Video Recorder: Float/Dock Preview`
-  - `Video Recorder: Align Selected Video Item`
-  - `Video Recorder: Restore Pending iPhone Recording`
-  - `Video Recorder: Delete All Pending iPhone Recordings`
-  - `Video Recorder: Enable/Disable Transport Follow`
-- The user has a main-toolbar button wired to `_KLONG_VIDEO_RECORDER_ENABLE` in `~/Library/Application Support/REAPER/reaper-menu.ini`.
-- Video features are off by default. Enabling video shows the floating preview by default and creates/reuses a `Video Recorder` track.
-- The `Video Recorder` track is forced to REAPER record-disabled state: unarmed, no input, record mode `none`, monitoring off, item monitoring off, and auto-recarm off.
+  - `ReaShoot: Enable/Disable video features`
+  - `ReaShoot: Show/Hide Preview`
+  - `ReaShoot: Float/Dock Preview`
+  - `ReaShoot: Align Selected Video Item`
+  - `ReaShoot: Restore Pending iPhone Recording`
+  - `ReaShoot: Delete All Pending iPhone Recordings`
+  - `ReaShoot: Enable/Disable Transport Follow`
+- The user has a main-toolbar button wired to `_KLONG_REASHOOT_ENABLE` in `~/Library/Application Support/REAPER/reaper-menu.ini`.
+- Video features are off by default. Enabling video shows the floating preview by default and creates/reuses a `ReaShoot` track.
+- The `ReaShoot` track is forced to REAPER record-disabled state: unarmed, no input, record mode `none`, monitoring off, item monitoring off, and auto-recarm off.
 - The extension is iPhone-only. The preview has iPhone setup/profile controls and a format/status area below the video. The format label shows the transport (Wi-Fi), resolution, FPS, orientation, aspect, lens, zoom, selected look, and WebRTC preview state. The look row has `Prev`/`Next` buttons for quick auditioning. Format/status text turns red while recording.
 - For `iPhone Video Sync`, REAPER controls the companion iPhone app over WebSocket port `8787`, downloads recordings over HTTP port `8788`, and uses authenticated WebRTC control messages for preview, all over the local Wi-Fi network using the host saved from setup/discovery (Bonjour).
 - The helper `stop --progress` command emits `encode percent=...` while preparing non-natural looks and `progress bytes=... total=... percent=...` while downloading; REAPER parses these live and shows progress in the dock status label.
 - REAPER's iPhone stop flow uses helper `stop-only` to receive raw pending recording metadata immediately, prompts for Download vs Delete before look encoding, then calls either `download-recording --progress` or confirmed `delete-recording`. Canceling delete confirmation downloads instead.
-- Failed/canceled downloads remain pending on the phone because the Mac only sends transfer acknowledgement after verifying the downloaded file. The preview window has `Pending...` and `Delete All` buttons. `Pending...` / `Video Recorder: Restore Pending iPhone Recording` calls helper `list-recordings`, prompts for a clip, then can either download/insert with `download-recording --progress` at the current edit cursor or delete the pending recording with `delete-recording`. `Delete All` / `Video Recorder: Delete All Pending iPhone Recordings` lists pending clips, confirms, then deletes them all.
+- Failed/canceled downloads remain pending on the phone because the Mac only sends transfer acknowledgement after verifying the downloaded file. The preview window has `Pending...` and `Delete All` buttons. `Pending...` / `ReaShoot: Restore Pending iPhone Recording` calls helper `list-recordings`, prompts for a clip, then can either download/insert with `download-recording --progress` at the current edit cursor or delete the pending recording with `delete-recording`. `Delete All` / `ReaShoot: Delete All Pending iPhone Recordings` lists pending clips, confirms, then deletes them all.
 - After the helper verifies checksum and sends `transferComplete`, the iPhone app deletes the transferred local `.mov` immediately.
 - iPhone preview uses WebRTC only with `LiveKitWebRTC.framework` and a docked `LKRTCMTLVideoView`; there is no HTTP preview fallback.
 - WebRTC signaling uses the existing authenticated control WebSocket. REAPER sends a receive-only offer, the iPhone returns an answer, REAPER strips inline iPhone ICE candidates before `setRemoteDescription`, adds them separately, and trickles Mac ICE candidates back with `addWebRTCIceCandidate`.
 - The helper validates complete WebSocket handshake headers, including `Sec-WebSocket-Accept`; keep the iPhone server response terminated with `\r\n\r\n`.
 - The iPhone app UI has a `Preview` row showing `Idle`, `WebRTC`, or `WebRTC failed`.
 - The iPhone capture profile includes resolution, FPS, orientation, aspect, lens, zoom, and look. The look picker keeps custom looks plus a curated raw Core Image subset, not the full Core Image catalog. Lens availability is hardware-dependent; zoom is clamped by AVFoundation on iPhone and is not guaranteed optical for every value.
-- The iPhone app records a single `.mov` with video and camera audio embedded. The extension inserts only one media item on the `Video Recorder` track.
+- The iPhone app records a single `.mov` with video and camera audio embedded. The extension inserts only one media item on the `ReaShoot` track.
 - The docked preview uses an `AVPlayerLayer` for video playback preview but mutes that internal player so audio is heard only through REAPER. Avoid aggressive per-timer exact seeking; the player should seek on source changes/playback start and only correct larger drift.
 - After inserting the movie item, the extension tries to auto-align it to the first non-video track item that overlaps the video item using peak-envelope correlation.
 
@@ -97,7 +97,7 @@ rm -rf iphone/Package.resolved iphone/.build helper/.build
 - Keep the implementation native; do not move iPhone control, preview, or media insertion into JSFX, VST3, or Lua.
 - Preserve the single-item model: one recorded `.mov` item with embedded camera audio. Do not add a separate reference-audio item unless the user explicitly asks.
 - Keep routine status in the preview UI, not REAPER popups. Use REAPER message boxes only for real errors.
-- Avoid enabling REAPER audio recording on the `Video Recorder` track.
+- Avoid enabling REAPER audio recording on the `ReaShoot` track.
 - Be careful editing `~/Library/Application Support/REAPER/reaper-menu.ini`; preserve user toolbar config and avoid duplicate toolbar entries.
 - Keep the iPhone app and REAPER helper protocol definitions aligned. Prefer copying shared protocol/CLI changes both ways or extracting a single shared package before adding divergent behavior.
 - Keep the curated raw look lists aligned between `src/reaper_video_recorder.mm` and `iphone/Sources/iPhoneVideoSyncKit/CaptureRecordingEngine.swift`; saved removed `ci:` looks should fall back to `natural`.

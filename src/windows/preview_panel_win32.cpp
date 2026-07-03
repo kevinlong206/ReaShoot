@@ -6,12 +6,12 @@
 
 #include <algorithm>
 
-namespace reaphone {
+namespace reashoot {
 
 namespace {
 
-constexpr wchar_t kWindowClassName[] = L"ReaPhoneVideoPreviewPanel";
-constexpr wchar_t kWindowTitle[] = L"ReaPhoneVideo Preview";
+constexpr wchar_t kWindowClassName[] = L"ReaShootPreviewPanel";
+constexpr wchar_t kWindowTitle[] = L"ReaShoot Preview";
 constexpr wchar_t kPlaceholder[] = L"Waiting for WebRTC preview\u2026";
 constexpr COLORREF kBackgroundColor = RGB(24, 24, 28);
 constexpr COLORREF kPlaceholderColor = RGB(160, 160, 168);
@@ -475,4 +475,4 @@ LRESULT CALLBACK Win32PreviewPanel::windowProc(HWND hwnd, UINT message, WPARAM w
   return DefWindowProcW(hwnd, message, wParam, lParam);
 }
 
-} // namespace reaphone
+} // namespace reashoot

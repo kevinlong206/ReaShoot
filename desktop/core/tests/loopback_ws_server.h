@@ -1,7 +1,7 @@
 #pragma once
 
 // A minimal single-connection loopback WebSocket server for tests. It accepts
-// one client, completes the RFC 6455 handshake using the reaphone core helpers,
+// one client, completes the RFC 6455 handshake using the reashoot core helpers,
 // reads the client's masked command frame, hands the decoded payload to a
 // responder, and writes the responder's reply back as an unmasked server text
 // frame. When handshakeOk is false it replies 400 instead, to exercise client
@@ -16,8 +16,8 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 
-#include "reaphone/http_headers.h"
-#include "reaphone/websocket.h"
+#include "reashoot/http_headers.h"
+#include "reashoot/websocket.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -26,7 +26,7 @@
 #include <string>
 #include <thread>
 
-namespace reaphone {
+namespace reashoot {
 namespace testing {
 
 class LoopbackWebSocketServer {
@@ -176,4 +176,4 @@ private:
 };
 
 } // namespace testing
-} // namespace reaphone
+} // namespace reashoot

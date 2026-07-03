@@ -17,7 +17,7 @@
 #import <LiveKitWebRTC/RTCVideoTrack.h>
 #import <QuartzCore/QuartzCore.h>
 
-#include "reaphone_action_ids.h"
+#include "reashoot_action_ids.h"
 
 #include <algorithm>
 #include <cstdarg>
@@ -86,7 +86,7 @@
 
 namespace {
 
-constexpr const char *kExtStateSection = "klong_reaper_video_recorder";
+constexpr const char *kExtStateSection = "klong_reashoot";
 constexpr const char *kFollowEnabledKey = "follow_enabled";
 constexpr const char *kPreviewFloatingKey = "preview_floating";
 constexpr const char *kIPhoneHostKey = "iphone_host";
@@ -100,8 +100,8 @@ constexpr const char *kIPhoneAspectKey = "iphone_aspect";
 constexpr const char *kIPhoneLensKey = "iphone_lens";
 constexpr const char *kIPhoneZoomKey = "iphone_zoom";
 constexpr const char *kIPhoneLookKey = "iphone_look";
-constexpr const char *kDockIdent = "klong_reaper_video_recorder_preview";
-constexpr const char *kVideoTrackName = "Video Recorder";
+constexpr const char *kDockIdent = "klong_reashoot_preview";
+constexpr const char *kVideoTrackName = "ReaShoot";
 constexpr const char *kRepoHelperPath = "/Users/klong/reaper_video_recorder/build/video-sync-mac";
 constexpr const char *kDefaultIPhoneHost = "kevin-long-iphone.local";
 constexpr int kRecordBit = 4;
@@ -116,7 +116,7 @@ constexpr double kAlignmentSampleRefineSearchSeconds = 0.030;
 constexpr double kAlignmentSearchSeconds = 5.0;
 constexpr double kAlignmentMinimumScore = 0.15;
 constexpr int kAlignmentRetryLimit = 15;
-NSString *kDebugLogPath = @"/tmp/reaper_video_recorder_debug.log";
+NSString *kDebugLogPath = @"/tmp/reashoot_debug.log";
 
 void debugLog(NSString *format, ...) {
   va_list args;
@@ -234,7 +234,7 @@ bool isVideoPath(const std::string &path) {
 
 void showError(const std::string &message) {
   if (ShowMessageBox) {
-    ShowMessageBox(message.c_str(), "REAPER Video Recorder", 0);
+    ShowMessageBox(message.c_str(), "REAPER ReaShoot", 0);
   }
 }
 
@@ -355,7 +355,7 @@ MediaTrack *findOrCreateVideoTrack(ReaProject *project) {
   InsertTrackAtIndex(trackCount, true);
   MediaTrack *track = GetTrack(project, trackCount);
   if (track) {
-    char name[] = "Video Recorder";
+    char name[] = "ReaShoot";
     GetSetMediaTrackInfo_String(track, "P_NAME", name, true);
   }
   return track;
@@ -1419,7 +1419,7 @@ std::string alignmentStatusText(const AlignmentResult &alignment) {
     char message[160] = {};
     std::snprintf(message,
                   sizeof(message),
-                  "Recorded to Video Recorder track; aligned %.0f ms (score %.2f)",
+                  "Recorded to ReaShoot track; aligned %.0f ms (score %.2f)",
                   correctionMs,
                   alignment.score);
     return message;
@@ -1488,7 +1488,7 @@ bool insertRecordedMedia(const std::string &path, double position, bool fromIPho
 
   MediaTrack *track = ensureVideoTrackReady(project, false);
   if (!track) {
-    error = "Recording finished, but REAPER could not create or find the Video Recorder track.";
+    error = "Recording finished, but REAPER could not create or find the ReaShoot track.";
     return false;
   }
 
@@ -1505,7 +1505,7 @@ bool insertRecordedMedia(const std::string &path, double position, bool fromIPho
 
   (void)fromIPhone;
   queuePendingAlignment(project, track, videoItem);
-  g_lastAlignmentStatus = "Recorded to Video Recorder track; aligning audio";
+  g_lastAlignmentStatus = "Recorded to ReaShoot track; aligning audio";
 
   if (UpdateArrange) {
     UpdateArrange();
@@ -2268,7 +2268,7 @@ void setVideoEnabled(bool enabled);
       double position = GetCursorPositionEx ? GetCursorPositionEx(project) : 0.0;
       std::string insertError;
       if (insertRecordedMedia(path.UTF8String ?: "", position, true, insertError)) {
-        const char *status = g_lastAlignmentStatus.empty() ? "Restored iPhone recording to Video Recorder track" : g_lastAlignmentStatus.c_str();
+        const char *status = g_lastAlignmentStatus.empty() ? "Restored iPhone recording to ReaShoot track" : g_lastAlignmentStatus.c_str();
         [self setStatus:[NSString stringWithUTF8String:status]];
       } else {
         [self setStatus:@"iPhone restore import failed"];
@@ -3488,7 +3488,7 @@ void setVideoEnabled(bool enabled);
   [self hideFloatingPreview];
   HWND hwnd = (__bridge HWND)self.dockView;
   if (!self.docked) {
-    DockWindowAddEx(hwnd, "Video Recorder", kDockIdent, true);
+    DockWindowAddEx(hwnd, "ReaShoot", kDockIdent, true);
     self.docked = YES;
   }
   if (DockWindowActivate) {
@@ -3509,7 +3509,7 @@ void setVideoEnabled(bool enabled);
                                                              styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable
                                                                backing:NSBackingStoreBuffered
                                                                  defer:NO];
-    self.floatingPreviewWindow.title = @"Video Recorder Preview";
+    self.floatingPreviewWindow.title = @"ReaShoot Preview";
     self.floatingPreviewWindow.releasedWhenClosed = NO;
   }
   self.dockView.frame = self.floatingPreviewWindow.contentView.bounds;
@@ -3667,7 +3667,7 @@ void processPendingInsert() {
 
   std::string error;
   if (insertRecordedMedia(path, position, true, error)) {
-    const char *status = g_lastAlignmentStatus.empty() ? "Recorded to Video Recorder track" : g_lastAlignmentStatus.c_str();
+    const char *status = g_lastAlignmentStatus.empty() ? "Recorded to ReaShoot track" : g_lastAlignmentStatus.c_str();
     [recorder() setStatus:[NSString stringWithUTF8String:status]];
   } else {
     [recorder() setStatus:@"Import error"];
@@ -3718,7 +3718,7 @@ void processPendingAlignment() {
   }
 
   g_nextAlignmentAttemptTime = now + 1;
-  [recorder() setStatus:@"Recorded to Video Recorder track; aligning audio"];
+  [recorder() setStatus:@"Recorded to ReaShoot track; aligning audio"];
 }
 
 MediaItem *selectedOrLatestVideoTrackItem(MediaTrack *track) {
@@ -3818,7 +3818,7 @@ void alignSelectedVideoItem() {
     g_lastAlignmentStatus += " using time selection";
   }
   [recorder() setStatus:[NSString stringWithUTF8String:g_lastAlignmentStatus.c_str()]];
-  ShowMessageBox(g_lastAlignmentStatus.c_str(), "Video Recorder Alignment", 0);
+  ShowMessageBox(g_lastAlignmentStatus.c_str(), "ReaShoot Alignment", 0);
 }
 
 void timerPoll() {
@@ -3938,44 +3938,44 @@ void cleanup() {
 bool registerActions(reaper_plugin_info_t *rec) {
   custom_action_register_t videoEnabledAction = {
       0,
-      reaphone::actions::kVideoEnabledId,
-      reaphone::actions::kVideoEnabledName,
+      reashoot::actions::kVideoEnabledId,
+      reashoot::actions::kVideoEnabledName,
       nullptr,
   };
   custom_action_register_t showPreviewAction = {
       0,
-      reaphone::actions::kShowPreviewId,
-      reaphone::actions::kShowPreviewName,
+      reashoot::actions::kShowPreviewId,
+      reashoot::actions::kShowPreviewName,
       nullptr,
   };
   custom_action_register_t floatPreviewAction = {
       0,
-      reaphone::actions::kFloatPreviewId,
-      reaphone::actions::kFloatPreviewName,
+      reashoot::actions::kFloatPreviewId,
+      reashoot::actions::kFloatPreviewName,
       nullptr,
   };
   custom_action_register_t alignSelectedAction = {
       0,
-      reaphone::actions::kAlignSelectedId,
-      reaphone::actions::kAlignSelectedName,
+      reashoot::actions::kAlignSelectedId,
+      reashoot::actions::kAlignSelectedName,
       nullptr,
   };
   custom_action_register_t restoreIPhoneAction = {
       0,
-      reaphone::actions::kRestoreIPhoneId,
-      reaphone::actions::kRestoreIPhoneName,
+      reashoot::actions::kRestoreIPhoneId,
+      reashoot::actions::kRestoreIPhoneName,
       nullptr,
   };
   custom_action_register_t deleteAllIPhoneAction = {
       0,
-      reaphone::actions::kDeleteAllIPhoneId,
-      reaphone::actions::kDeleteAllIPhoneName,
+      reashoot::actions::kDeleteAllIPhoneId,
+      reashoot::actions::kDeleteAllIPhoneName,
       nullptr,
   };
   custom_action_register_t toggleFollowAction = {
       0,
-      reaphone::actions::kToggleFollowId,
-      reaphone::actions::kToggleFollowName,
+      reashoot::actions::kToggleFollowId,
+      reashoot::actions::kToggleFollowName,
       nullptr,
   };
 
@@ -4085,7 +4085,7 @@ REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(REAPER_PLUGIN_HINSTANCE hI
 
     loadSettings();
     if (!registerActions(rec)) {
-      showError("REAPER Video Recorder failed to register its actions.");
+      showError("REAPER ReaShoot failed to register its actions.");
       return 0;
     }
 

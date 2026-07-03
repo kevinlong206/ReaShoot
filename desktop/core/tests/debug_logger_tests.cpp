@@ -1,4 +1,4 @@
-#include "reaphone/debug_logger.h"
+#include "reashoot/debug_logger.h"
 
 #include <cassert>
 #include <filesystem>
@@ -18,7 +18,7 @@ std::string readFile(const std::string &path) {
 
 std::string uniqueTempPath() {
   std::filesystem::path base = std::filesystem::temp_directory_path();
-  base /= "reaphone_logger_test_" + std::to_string(std::rand()) + ".log";
+  base /= "reashoot_logger_test_" + std::to_string(std::rand()) + ".log";
   return base.string();
 }
 
@@ -27,7 +27,7 @@ void testAppendsTimestampedLines() {
   std::filesystem::remove(path);
 
   {
-    reaphone::DebugLogger logger(path);
+    reashoot::DebugLogger logger(path);
     logger.log("first message");
     logger.log("second message");
   }
@@ -54,13 +54,13 @@ void testAppendsTimestampedLines() {
 }
 
 void testMissingDirectoryDoesNotThrow() {
-  reaphone::DebugLogger logger("Z:/definitely/missing/dir/log.txt");
+  reashoot::DebugLogger logger("Z:/definitely/missing/dir/log.txt");
   logger.log("should be swallowed");
 }
 
 void testDefaultPathHasExpectedName() {
-  const std::string path = reaphone::DebugLogger::defaultPath();
-  assert(path.find("reaphonevideo_debug.log") != std::string::npos);
+  const std::string path = reashoot::DebugLogger::defaultPath();
+  assert(path.find("reashoot_debug.log") != std::string::npos);
 }
 
 } // namespace

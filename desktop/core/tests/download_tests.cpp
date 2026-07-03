@@ -1,6 +1,6 @@
-#include "reaphone/http_download.h"
-#include "reaphone/http_headers.h"
-#include "reaphone/sha256.h"
+#include "reashoot/http_download.h"
+#include "reashoot/http_headers.h"
+#include "reashoot/sha256.h"
 
 #include <cstdlib>
 #include <iostream>
@@ -17,20 +17,20 @@ void require(bool condition, const char *message) {
 }
 
 void hashesNistKnownAnswers() {
-  require(reaphone::sha256Hex("") ==
+  require(reashoot::sha256Hex("") ==
               "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "empty string digest");
-  require(reaphone::sha256Hex("abc") ==
+  require(reashoot::sha256Hex("abc") ==
               "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
           "abc digest");
   // 56-byte message forces the padding into a second block (length lands at 56).
-  require(reaphone::sha256Hex("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq") ==
+  require(reashoot::sha256Hex("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq") ==
               "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1",
           "56-byte message digest");
 }
 
 void hashesIncrementallyAcrossBlocks() {
-  reaphone::Sha256 hasher;
+  reashoot::Sha256 hasher;
   const std::string chunk(1000, 'a');
   for (int i = 0; i < 1000; ++i) {
     hasher.update(chunk);
@@ -41,7 +41,7 @@ void hashesIncrementallyAcrossBlocks() {
 }
 
 void reusesHasherAfterFinalize() {
-  reaphone::Sha256 hasher;
+  reashoot::Sha256 hasher;
   hasher.update("abc");
   require(hasher.finalizeHex() ==
               "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
@@ -53,21 +53,21 @@ void reusesHasherAfterFinalize() {
 }
 
 void computesResumeRangeHeader() {
-  require(!reaphone::downloadRangeHeaderValue(0, std::nullopt).has_value(),
+  require(!reashoot::downloadRangeHeaderValue(0, std::nullopt).has_value(),
           "offset 0 with unknown size sends no Range header");
-  require(reaphone::downloadRangeHeaderValue(50, std::nullopt) == "bytes=50-",
+  require(reashoot::downloadRangeHeaderValue(50, std::nullopt) == "bytes=50-",
           "open-ended range when size unknown");
-  require(reaphone::downloadRangeHeaderValue(0, std::optional<std::int64_t>(100)) == "bytes=0-99",
+  require(reashoot::downloadRangeHeaderValue(0, std::optional<std::int64_t>(100)) == "bytes=0-99",
           "closed range from start");
-  require(reaphone::downloadRangeHeaderValue(50, std::optional<std::int64_t>(200)) == "bytes=50-199",
+  require(reashoot::downloadRangeHeaderValue(50, std::optional<std::int64_t>(200)) == "bytes=50-199",
           "closed range from offset");
   // Chunk cap: end is offset+chunk-1 when smaller than the last byte.
-  require(reaphone::downloadRangeHeaderValue(0, std::optional<std::int64_t>(100), 10) == "bytes=0-9",
+  require(reashoot::downloadRangeHeaderValue(0, std::optional<std::int64_t>(100), 10) == "bytes=0-9",
           "range should cap at the chunk size");
 }
 
 void buildsDownloadRequestWithoutRange() {
-  const std::string request = reaphone::buildDownloadRequest(
+  const std::string request = reashoot::buildDownloadRequest(
       "/recordings/clip.mov", "phone.local", 8788, "deadbeef", 0, std::nullopt);
   const std::string expected =
       "GET /recordings/clip.mov?token=deadbeef HTTP/1.1\r\n"
@@ -79,7 +79,7 @@ void buildsDownloadRequestWithoutRange() {
 }
 
 void buildsDownloadRequestWithRange() {
-  const std::string request = reaphone::buildDownloadRequest(
+  const std::string request = reashoot::buildDownloadRequest(
       "/recordings/clip.mov", "phone.local", 8788, "deadbeef", 50,
       std::optional<std::int64_t>(200), 10);
   const std::string expected =
@@ -93,23 +93,23 @@ void buildsDownloadRequestWithRange() {
 }
 
 void parsesPartialContentResponse() {
-  const reaphone::HttpHeaders headers = reaphone::parseHttpHeaders(
+  const reashoot::HttpHeaders headers = reashoot::parseHttpHeaders(
       "HTTP/1.1 206 Partial Content\r\n"
       "Content-Length: 150\r\n"
       "Content-Range: bytes 50-199/200\r\n"
       "\r\n");
-  const reaphone::DownloadResponseInfo info = reaphone::parseDownloadResponse(headers);
+  const reashoot::DownloadResponseInfo info = reashoot::parseDownloadResponse(headers);
   require(info.status == 206, "status should parse");
   require(info.contentLength == 150, "content length should parse");
   require(info.totalBytes == 200, "total bytes should parse from content-range");
 }
 
 void parsesOkResponseWithoutContentRange() {
-  const reaphone::HttpHeaders headers = reaphone::parseHttpHeaders(
+  const reashoot::HttpHeaders headers = reashoot::parseHttpHeaders(
       "HTTP/1.1 200 OK\r\n"
       "Content-Length: 4096\r\n"
       "\r\n");
-  const reaphone::DownloadResponseInfo info = reaphone::parseDownloadResponse(headers);
+  const reashoot::DownloadResponseInfo info = reashoot::parseDownloadResponse(headers);
   require(info.status == 200, "status should parse");
   require(info.contentLength == 4096, "content length should parse");
   require(!info.totalBytes.has_value(), "total bytes should be absent without content-range");

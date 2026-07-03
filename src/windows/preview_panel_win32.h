@@ -4,8 +4,8 @@
 #error "preview_panel_win32.h is only intended for Windows builds."
 #endif
 
-#include "reaphone/preview_panel.h"
-#include "reaphone/preview_renderer.h"
+#include "reashoot/preview_panel.h"
+#include "reashoot/preview_renderer.h"
 
 #include <windows.h>
 
@@ -15,7 +15,7 @@
 #include <string>
 #include <vector>
 
-namespace reaphone {
+namespace reashoot {
 
 // GDI-backed preview renderer. Stores the most recent frame as a top-down BGRA
 // DIB and blits it (letterboxed) on WM_PAINT. Thread-safe: frames may arrive on
@@ -118,4 +118,4 @@ private:
   GdiPreviewRenderer renderer_;
 };
 
-} // namespace reaphone
+} // namespace reashoot

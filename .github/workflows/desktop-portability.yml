@@ -26,11 +26,11 @@ jobs:
         run: cmake -S . -B build/cmake-ci -DBUILD_TESTING=ON
 
       - name: Build portable core tests
-        run: cmake --build build/cmake-ci --target reaphone_core_tests --config Release
+        run: cmake --build build/cmake-ci --target reashoot_core_tests --config Release
 
       - name: Build Windows skeleton
         if: runner.os == 'Windows'
-        run: cmake --build build/cmake-ci --target reaphonevideo --config Release
+        run: cmake --build build/cmake-ci --target reashoot --config Release
 
       - name: Test
         run: ctest --test-dir build/cmake-ci --build-config Release --output-on-failure

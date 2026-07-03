@@ -1,13 +1,13 @@
 // video-sync-win: the Windows control helper CLI. It mirrors the macOS
 // video-sync-mac tool (helper/Sources/video-sync-mac/VideoSyncMacCLI.swift) for
-// the control-socket commands, driving the portable reaphone::ControlClient and
+// the control-socket commands, driving the portable reashoot::ControlClient and
 // printing the same line formats the REAPER plugin parses. Commands that need
 // the media downloader or Bonjour discovery are not yet ported and report a
 // clear error.
 
-#include "reaphone/control_protocol.h"
-#include "reaphone/windows/control_client.h"
-#include "reaphone/windows/recording_downloader.h"
+#include "reashoot/control_protocol.h"
+#include "reashoot/windows/control_client.h"
+#include "reashoot/windows/recording_downloader.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -126,18 +126,18 @@ std::string makeRequestID() {
   return uuid;
 }
 
-reaphone::ControlCommand baseCommand(reaphone::CommandType type) {
-  reaphone::ControlCommand command;
+reashoot::ControlCommand baseCommand(reashoot::CommandType type) {
+  reashoot::ControlCommand command;
   command.requestID = makeRequestID();
   command.type = type;
   return command;
 }
 
-reaphone::ControlEvent send(const Arguments &args, const reaphone::ControlCommand &command,
+reashoot::ControlEvent send(const Arguments &args, const reashoot::ControlCommand &command,
                             std::chrono::seconds timeout = std::chrono::seconds{20}) {
   const std::string host = require(args.value("--host"), "--host");
   const int port = args.intValue("--port", 8787);
-  reaphone::ControlClient client(host, port, timeout);
+  reashoot::ControlClient client(host, port, timeout);
   return client.send(command);
 }
 
@@ -166,7 +166,7 @@ std::string narrowPath(const std::wstring &value) {
 
 // Reports an unexpected event the way the macOS helper's unexpectedEvent error
 // does: the event message when present, otherwise a generic description.
-[[noreturn]] void unexpectedEvent(const reaphone::ControlEvent &event) {
+[[noreturn]] void unexpectedEvent(const reashoot::ControlEvent &event) {
   const std::string message = event.message && !event.message->empty()
                                   ? *event.message
                                   : std::string("unexpected control event");
@@ -174,7 +174,7 @@ std::string narrowPath(const std::wstring &value) {
   std::exit(1);
 }
 
-void printRecording(const reaphone::RecordingDescriptor &recording) {
+void printRecording(const reashoot::RecordingDescriptor &recording) {
   std::ostringstream line;
   line << "recording"
        << "\tid=" << recording.id
@@ -198,13 +198,13 @@ void printProgress(std::int64_t bytes, std::int64_t total) {
 
 // Sends prepareRecording and returns the prepared descriptor, mirroring the
 // macOS helper's prepareRecording (long timeout to allow on-device encoding).
-reaphone::RecordingDescriptor prepareRecording(const Arguments &args, const std::string &token,
+reashoot::RecordingDescriptor prepareRecording(const Arguments &args, const std::string &token,
                                                const std::string &recordingID) {
-  reaphone::ControlCommand cmd = baseCommand(reaphone::CommandType::PrepareRecording);
+  reashoot::ControlCommand cmd = baseCommand(reashoot::CommandType::PrepareRecording);
   cmd.token = token;
   cmd.recordingID = recordingID;
-  const reaphone::ControlEvent event = send(args, cmd, std::chrono::seconds{900});
-  if (event.type != reaphone::EventType::RecordingPrepared || !event.recording) {
+  const reashoot::ControlEvent event = send(args, cmd, std::chrono::seconds{900});
+  if (event.type != reashoot::EventType::RecordingPrepared || !event.recording) {
     unexpectedEvent(event);
   }
   return *event.recording;
@@ -215,7 +215,7 @@ reaphone::RecordingDescriptor prepareRecording(const Arguments &args, const std:
 void acknowledgeTransfer(const Arguments &args, const std::string &token,
                          const std::string &recordingID) {
   try {
-    reaphone::ControlCommand cmd = baseCommand(reaphone::CommandType::TransferComplete);
+    reashoot::ControlCommand cmd = baseCommand(reashoot::CommandType::TransferComplete);
     cmd.token = token;
     cmd.recordingID = recordingID;
     send(args, cmd);
@@ -234,19 +234,19 @@ int downloadAndAcknowledge(const Arguments &args, const std::string &token,
   const int httpPort = args.intValue("--http-port", 8788);
   const bool showProgress = args.hasFlag("--progress");
 
-  const reaphone::RecordingDescriptor recording = prepareRecording(args, token, recordingID);
+  const reashoot::RecordingDescriptor recording = prepareRecording(args, token, recordingID);
 
   const std::wstring destinationDirectory =
       args.value("--download-dir") ? widenPath(*args.value("--download-dir"))
                                    : std::filesystem::current_path().wstring();
 
-  reaphone::DownloadProgressCallback progress;
+  reashoot::DownloadProgressCallback progress;
   if (showProgress) {
     progress = [](std::int64_t bytes, std::int64_t total) { printProgress(bytes, total); };
   }
 
   const std::wstring path =
-      reaphone::downloadRecording(recording, host, httpPort, token, destinationDirectory, progress);
+      reashoot::downloadRecording(recording, host, httpPort, token, destinationDirectory, progress);
   acknowledgeTransfer(args, token, recording.id);
   std::cout << "downloaded " << narrowPath(path) << '\n';
   return 0;
@@ -275,9 +275,9 @@ int run(const Arguments &args) {
   const std::string command = args.command();
 
   if (command == "pair") {
-    reaphone::ControlCommand cmd = baseCommand(reaphone::CommandType::Pair);
+    reashoot::ControlCommand cmd = baseCommand(reashoot::CommandType::Pair);
     cmd.pairingCode = require(args.value("--code"), "--code");
-    const reaphone::ControlEvent event = send(args, cmd);
+    const reashoot::ControlEvent event = send(args, cmd);
     if (!event.token) {
       unexpectedEvent(event);
     }
@@ -286,10 +286,10 @@ int run(const Arguments &args) {
   }
 
   if (command == "ping") {
-    reaphone::ControlCommand cmd = baseCommand(reaphone::CommandType::Ping);
+    reashoot::ControlCommand cmd = baseCommand(reashoot::CommandType::Ping);
     cmd.token = args.value("--token");
-    const reaphone::ControlEvent event = send(args, cmd);
-    if (event.type != reaphone::EventType::Pong) {
+    const reashoot::ControlEvent event = send(args, cmd);
+    if (event.type != reashoot::EventType::Pong) {
       unexpectedEvent(event);
     }
     std::cout << (event.message ? *event.message : std::string("pong")) << '\n';
@@ -297,7 +297,7 @@ int run(const Arguments &args) {
   }
 
   if (command == "configure") {
-    reaphone::CaptureProfile profile;
+    reashoot::CaptureProfile profile;
     profile.resolution = args.value("--resolution", "4K");
     profile.fps = args.intValue("--fps", 30);
     profile.orientation = args.value("--orientation", "portrait");
@@ -306,11 +306,11 @@ int run(const Arguments &args) {
     profile.zoomFactor = args.doubleValue("--zoom", 1.0);
     profile.look = args.value("--look", "natural");
 
-    reaphone::ControlCommand cmd = baseCommand(reaphone::CommandType::ConfigureCapture);
+    reashoot::ControlCommand cmd = baseCommand(reashoot::CommandType::ConfigureCapture);
     cmd.token = require(args.value("--token"), "--token");
     cmd.captureProfile = profile;
-    const reaphone::ControlEvent event = send(args, cmd);
-    if (event.type != reaphone::EventType::CaptureConfigured) {
+    const reashoot::ControlEvent event = send(args, cmd);
+    if (event.type != reashoot::EventType::CaptureConfigured) {
       unexpectedEvent(event);
     }
     std::cout << (event.message ? *event.message : std::string("captureConfigured")) << '\n';
@@ -318,11 +318,11 @@ int run(const Arguments &args) {
   }
 
   if (command == "start") {
-    reaphone::ControlCommand cmd = baseCommand(reaphone::CommandType::StartRecording);
+    reashoot::ControlCommand cmd = baseCommand(reashoot::CommandType::StartRecording);
     cmd.token = require(args.value("--token"), "--token");
     cmd.sessionID = args.value("--session");
-    const reaphone::ControlEvent event = send(args, cmd);
-    if (event.type != reaphone::EventType::RecordingStarted) {
+    const reashoot::ControlEvent event = send(args, cmd);
+    if (event.type != reashoot::EventType::RecordingStarted) {
       unexpectedEvent(event);
     }
     std::cout << (event.message ? *event.message : std::string("recordingStarted")) << '\n';
@@ -330,11 +330,11 @@ int run(const Arguments &args) {
   }
 
   if (command == "prepare-recording") {
-    reaphone::ControlCommand cmd = baseCommand(reaphone::CommandType::PrepareRecording);
+    reashoot::ControlCommand cmd = baseCommand(reashoot::CommandType::PrepareRecording);
     cmd.token = require(args.value("--token"), "--token");
     cmd.recordingID = require(args.value("--recording-id"), "--recording-id");
-    const reaphone::ControlEvent event = send(args, cmd, std::chrono::seconds{900});
-    if (event.type != reaphone::EventType::RecordingPrepared || !event.recording) {
+    const reashoot::ControlEvent event = send(args, cmd, std::chrono::seconds{900});
+    if (event.type != reashoot::EventType::RecordingPrepared || !event.recording) {
       unexpectedEvent(event);
     }
     printRecording(*event.recording);
@@ -342,9 +342,9 @@ int run(const Arguments &args) {
   }
 
   if (command == "stop-only") {
-    reaphone::ControlCommand cmd = baseCommand(reaphone::CommandType::StopRecording);
+    reashoot::ControlCommand cmd = baseCommand(reashoot::CommandType::StopRecording);
     cmd.token = require(args.value("--token"), "--token");
-    const reaphone::ControlEvent event = send(args, cmd);
+    const reashoot::ControlEvent event = send(args, cmd);
     if (!event.recording) {
       unexpectedEvent(event);
     }
@@ -354,9 +354,9 @@ int run(const Arguments &args) {
 
   if (command == "stop") {
     const std::string token = require(args.value("--token"), "--token");
-    reaphone::ControlCommand cmd = baseCommand(reaphone::CommandType::StopRecording);
+    reashoot::ControlCommand cmd = baseCommand(reashoot::CommandType::StopRecording);
     cmd.token = token;
-    const reaphone::ControlEvent event = send(args, cmd);
+    const reashoot::ControlEvent event = send(args, cmd);
     if (!event.recording) {
       unexpectedEvent(event);
     }
@@ -370,24 +370,24 @@ int run(const Arguments &args) {
   }
 
   if (command == "list-recordings") {
-    reaphone::ControlCommand cmd = baseCommand(reaphone::CommandType::ListRecordings);
+    reashoot::ControlCommand cmd = baseCommand(reashoot::CommandType::ListRecordings);
     cmd.token = require(args.value("--token"), "--token");
-    const reaphone::ControlEvent event = send(args, cmd);
-    if (event.type != reaphone::EventType::RecordingsListed) {
+    const reashoot::ControlEvent event = send(args, cmd);
+    if (event.type != reashoot::EventType::RecordingsListed) {
       unexpectedEvent(event);
     }
-    for (const reaphone::RecordingDescriptor &recording : event.recordings) {
+    for (const reashoot::RecordingDescriptor &recording : event.recordings) {
       printRecording(recording);
     }
     return 0;
   }
 
   if (command == "delete-recording") {
-    reaphone::ControlCommand cmd = baseCommand(reaphone::CommandType::DeleteRecording);
+    reashoot::ControlCommand cmd = baseCommand(reashoot::CommandType::DeleteRecording);
     cmd.token = require(args.value("--token"), "--token");
     cmd.recordingID = require(args.value("--recording-id"), "--recording-id");
-    const reaphone::ControlEvent event = send(args, cmd);
-    if (event.type != reaphone::EventType::RecordingDeleted) {
+    const reashoot::ControlEvent event = send(args, cmd);
+    if (event.type != reashoot::EventType::RecordingDeleted) {
       unexpectedEvent(event);
     }
     std::cout << (event.message ? *event.message : std::string("recording deleted")) << '\n';
@@ -404,11 +404,11 @@ int run(const Arguments &args) {
     std::ostringstream contents;
     contents << stream.rdbuf();
 
-    reaphone::ControlCommand cmd = baseCommand(reaphone::CommandType::StartWebRTCPreview);
+    reashoot::ControlCommand cmd = baseCommand(reashoot::CommandType::StartWebRTCPreview);
     cmd.token = require(args.value("--token"), "--token");
     cmd.webRTCOfferSDP = contents.str();
-    const reaphone::ControlEvent event = send(args, cmd);
-    if (event.type != reaphone::EventType::WebRTCPreviewAnswer || !event.webRTCAnswerSDP) {
+    const reashoot::ControlEvent event = send(args, cmd);
+    if (event.type != reashoot::EventType::WebRTCPreviewAnswer || !event.webRTCAnswerSDP) {
       unexpectedEvent(event);
     }
     std::cout << *event.webRTCAnswerSDP << '\n';
@@ -416,13 +416,13 @@ int run(const Arguments &args) {
   }
 
   if (command == "webrtc-candidate") {
-    reaphone::ControlCommand cmd = baseCommand(reaphone::CommandType::AddWebRTCIceCandidate);
+    reashoot::ControlCommand cmd = baseCommand(reashoot::CommandType::AddWebRTCIceCandidate);
     cmd.token = require(args.value("--token"), "--token");
     cmd.webRTCIceCandidateSDP = require(args.value("--candidate"), "--candidate");
     cmd.webRTCIceCandidateMid = args.value("--mid");
     cmd.webRTCIceCandidateMLineIndex = static_cast<std::int32_t>(args.intValue("--mline", 0));
-    const reaphone::ControlEvent event = send(args, cmd);
-    if (event.type != reaphone::EventType::WebRTCIceCandidateAdded) {
+    const reashoot::ControlEvent event = send(args, cmd);
+    if (event.type != reashoot::EventType::WebRTCIceCandidateAdded) {
       unexpectedEvent(event);
     }
     std::cout << (event.message ? *event.message : std::string("candidate accepted")) << '\n';
@@ -430,10 +430,10 @@ int run(const Arguments &args) {
   }
 
   if (command == "stop-webrtc") {
-    reaphone::ControlCommand cmd = baseCommand(reaphone::CommandType::StopWebRTCPreview);
+    reashoot::ControlCommand cmd = baseCommand(reashoot::CommandType::StopWebRTCPreview);
     cmd.token = require(args.value("--token"), "--token");
-    const reaphone::ControlEvent event = send(args, cmd);
-    if (event.type != reaphone::EventType::WebRTCPreviewStopped) {
+    const reashoot::ControlEvent event = send(args, cmd);
+    if (event.type != reashoot::EventType::WebRTCPreviewStopped) {
       unexpectedEvent(event);
     }
     std::cout << (event.message ? *event.message : std::string("webRTCPreviewStopped")) << '\n';

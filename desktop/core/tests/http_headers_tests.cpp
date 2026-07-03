@@ -1,5 +1,5 @@
-#include "reaphone/http_headers.h"
-#include "reaphone/websocket.h"
+#include "reashoot/http_headers.h"
+#include "reashoot/websocket.h"
 
 #include <cstdlib>
 #include <iostream>
@@ -15,7 +15,7 @@ void require(bool condition, const char *message) {
 }
 
 void detectsCompleteHeadersOnlyAtDoubleCrlf() {
-  require(!reaphone::completeHeaderLength("HTTP/1.1 101 Switching Protocols\r\n").has_value(),
+  require(!reashoot::completeHeaderLength("HTTP/1.1 101 Switching Protocols\r\n").has_value(),
           "partial headers should not be complete");
 
   const std::string response =
@@ -23,7 +23,7 @@ void detectsCompleteHeadersOnlyAtDoubleCrlf() {
       "Sec-WebSocket-Accept: abc\r\n"
       "\r\n"
       "body";
-  const auto length = reaphone::completeHeaderLength(response);
+  const auto length = reashoot::completeHeaderLength(response);
   require(length.has_value(), "complete headers should be detected");
   require(*length == response.find("body"), "header length should exclude body bytes");
 }
@@ -35,7 +35,7 @@ void parsesHeadersCaseInsensitively() {
       "Sec-WebSocket-Accept:  expected-value \r\n"
       "\r\n";
 
-  const reaphone::HttpHeaders headers = reaphone::parseHttpHeaders(response);
+  const reashoot::HttpHeaders headers = reashoot::parseHttpHeaders(response);
   require(headers.startLine == "HTTP/1.1 101 Switching Protocols", "start line should parse");
   require(headers.value("sec-websocket-accept") == "expected-value", "lookup should ignore case and trim");
   require(headers.value("missing") == std::nullopt, "missing header should return nullopt");
@@ -44,7 +44,7 @@ void parsesHeadersCaseInsensitively() {
 void rejectsMalformedOrIncompleteHeaders() {
   bool threw = false;
   try {
-    (void)reaphone::parseHttpHeaders("HTTP/1.1 200 OK\r\nBadHeader\r\n\r\n");
+    (void)reashoot::parseHttpHeaders("HTTP/1.1 200 OK\r\nBadHeader\r\n\r\n");
   } catch (const std::invalid_argument &) {
     threw = true;
   }
@@ -52,7 +52,7 @@ void rejectsMalformedOrIncompleteHeaders() {
 
   threw = false;
   try {
-    (void)reaphone::parseHttpHeaders("HTTP/1.1 200 OK\r\nHeader: value\r\n");
+    (void)reashoot::parseHttpHeaders("HTTP/1.1 200 OK\r\nHeader: value\r\n");
   } catch (const std::invalid_argument &) {
     threw = true;
   }
@@ -60,7 +60,7 @@ void rejectsMalformedOrIncompleteHeaders() {
 }
 
 void validatesWebSocketAcceptKey() {
-  require(reaphone::webSocketAcceptKey("dGhlIHNhbXBsZSBub25jZQ==") ==
+  require(reashoot::webSocketAcceptKey("dGhlIHNhbXBsZSBub25jZQ==") ==
               "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=",
           "accept key should match RFC 6455 example");
 }
@@ -74,7 +74,7 @@ void validatesWebSocketSwitchingProtocolResponse() {
       "Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n"
       "\r\n";
 
-  require(reaphone::isWebSocketSwitchingProtocolsResponse(reaphone::parseHttpHeaders(response), clientKey),
+  require(reashoot::isWebSocketSwitchingProtocolsResponse(reashoot::parseHttpHeaders(response), clientKey),
           "valid WebSocket switching response should pass");
 
   const std::string badResponse =
@@ -83,7 +83,7 @@ void validatesWebSocketSwitchingProtocolResponse() {
       "Connection: Upgrade\r\n"
       "Sec-WebSocket-Accept: wrong\r\n"
       "\r\n";
-  require(!reaphone::isWebSocketSwitchingProtocolsResponse(reaphone::parseHttpHeaders(badResponse), clientKey),
+  require(!reashoot::isWebSocketSwitchingProtocolsResponse(reashoot::parseHttpHeaders(badResponse), clientKey),
           "wrong Sec-WebSocket-Accept should fail");
 }
 

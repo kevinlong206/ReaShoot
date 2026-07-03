@@ -1,5 +1,5 @@
-#include "reaphone/control_protocol.h"
-#include "reaphone/json.h"
+#include "reashoot/control_protocol.h"
+#include "reashoot/json.h"
 
 #include <cstdlib>
 #include <iostream>
@@ -15,26 +15,26 @@ void require(bool condition, const char *message) {
 }
 
 void jsonWriterSortsKeysAndEscapes() {
-  reaphone::json::Value object = reaphone::json::Value::object();
-  object.set("b", reaphone::json::Value::integer(2));
-  object.set("a", reaphone::json::Value::string("x\"y\\z\n"));
+  reashoot::json::Value object = reashoot::json::Value::object();
+  object.set("b", reashoot::json::Value::integer(2));
+  object.set("a", reashoot::json::Value::string("x\"y\\z\n"));
   require(object.dump() == "{\"a\":\"x\\\"y\\\\z\\n\",\"b\":2}",
           "object keys should sort and strings should escape");
 
-  reaphone::json::Value array = reaphone::json::Value::array();
-  array.add(reaphone::json::Value::boolean(true));
-  array.add(reaphone::json::Value());
-  array.add(reaphone::json::Value::real(1.5));
+  reashoot::json::Value array = reashoot::json::Value::array();
+  array.add(reashoot::json::Value::boolean(true));
+  array.add(reashoot::json::Value());
+  array.add(reashoot::json::Value::real(1.5));
   require(array.dump() == "[true,null,1.5]", "array should serialize in order");
 
-  require(reaphone::json::Value::real(1.0).dump() == "1",
+  require(reashoot::json::Value::real(1.0).dump() == "1",
           "whole doubles should format without a decimal point");
 }
 
 void encodesPingCommandWithSortedKeys() {
-  reaphone::ControlCommand command;
+  reashoot::ControlCommand command;
   command.requestID = "E621E1F8-C36C-495A-93FC-0C247A3E6E5F";
-  command.type = reaphone::CommandType::Ping;
+  command.type = reashoot::CommandType::Ping;
   command.token = "abc";
 
   const std::string expected =
@@ -43,16 +43,16 @@ void encodesPingCommandWithSortedKeys() {
       "\"requestID\":\"E621E1F8-C36C-495A-93FC-0C247A3E6E5F\","
       "\"token\":\"abc\","
       "\"type\":\"ping\"}";
-  require(reaphone::encodeControlCommand(command) == expected,
+  require(reashoot::encodeControlCommand(command) == expected,
           "ping command should encode with sorted keys and omitted optionals");
 }
 
 void encodesConfigureCaptureWithProfile() {
-  reaphone::ControlCommand command;
+  reashoot::ControlCommand command;
   command.requestID = "11111111-2222-3333-4444-555555555555";
-  command.type = reaphone::CommandType::ConfigureCapture;
+  command.type = reashoot::CommandType::ConfigureCapture;
   command.token = "tok";
-  command.captureProfile = reaphone::CaptureProfile{}; // defaults
+  command.captureProfile = reashoot::CaptureProfile{}; // defaults
 
   const std::string expected =
       "{\"captureProfile\":{"
@@ -63,14 +63,14 @@ void encodesConfigureCaptureWithProfile() {
       "\"requestID\":\"11111111-2222-3333-4444-555555555555\","
       "\"token\":\"tok\","
       "\"type\":\"configureCapture\"}";
-  require(reaphone::encodeControlCommand(command) == expected,
+  require(reashoot::encodeControlCommand(command) == expected,
           "configureCapture should encode a sorted-key capture profile");
 }
 
 void encodesIceCandidateAndMetadata() {
-  reaphone::ControlCommand command;
+  reashoot::ControlCommand command;
   command.requestID = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE";
-  command.type = reaphone::CommandType::AddWebRTCIceCandidate;
+  command.type = reashoot::CommandType::AddWebRTCIceCandidate;
   command.token = "tok";
   command.webRTCIceCandidateSDP = "candidate:1 1 udp";
   command.webRTCIceCandidateMid = "0";
@@ -86,18 +86,18 @@ void encodesIceCandidateAndMetadata() {
       "\"webRTCIceCandidateMLineIndex\":0,"
       "\"webRTCIceCandidateMid\":\"0\","
       "\"webRTCIceCandidateSDP\":\"candidate:1 1 udp\"}";
-  require(reaphone::encodeControlCommand(command) == expected,
+  require(reashoot::encodeControlCommand(command) == expected,
           "ICE candidate command should encode sorted keys and escaped metadata");
 }
 
 void mapsAllCommandTypeRawValues() {
-  require(reaphone::commandTypeRawValue(reaphone::CommandType::Pair) == "pair", "pair");
-  require(reaphone::commandTypeRawValue(reaphone::CommandType::StartRecording) == "startRecording",
+  require(reashoot::commandTypeRawValue(reashoot::CommandType::Pair) == "pair", "pair");
+  require(reashoot::commandTypeRawValue(reashoot::CommandType::StartRecording) == "startRecording",
           "startRecording");
-  require(reaphone::commandTypeRawValue(reaphone::CommandType::StopWebRTCPreview) ==
+  require(reashoot::commandTypeRawValue(reashoot::CommandType::StopWebRTCPreview) ==
               "stopWebRTCPreview",
           "stopWebRTCPreview");
-  require(reaphone::commandTypeRawValue(reaphone::CommandType::TransferComplete) ==
+  require(reashoot::commandTypeRawValue(reashoot::CommandType::TransferComplete) ==
               "transferComplete",
           "transferComplete");
 }

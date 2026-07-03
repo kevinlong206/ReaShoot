@@ -7,11 +7,11 @@
 #include <string>
 #include <vector>
 
-namespace reaphone {
+namespace reashoot {
 
 namespace {
 
-constexpr wchar_t kDialogClassName[] = L"ReaPhoneVideoSettingsDialog";
+constexpr wchar_t kDialogClassName[] = L"ReaShootSettingsDialog";
 
 enum ControlId : int {
   kIdHost = 1001,
@@ -196,7 +196,7 @@ bool showSettingsDialog(HWND parent, HINSTANCE instance, PluginSettings &setting
     y = parentRect.top + ((parentRect.bottom - parentRect.top) - height) / 2;
   }
 
-  HWND dialog = CreateWindowExW(WS_EX_DLGMODALFRAME, kDialogClassName, L"ReaPhoneVideo Settings",
+  HWND dialog = CreateWindowExW(WS_EX_DLGMODALFRAME, kDialogClassName, L"ReaShoot Settings",
                                 WS_POPUP | WS_CAPTION | WS_SYSMENU, x, y, width, height, parent, nullptr, instance,
                                 &state);
   if (!dialog) {
@@ -225,4 +225,4 @@ bool showSettingsDialog(HWND parent, HINSTANCE instance, PluginSettings &setting
   return state.ok;
 }
 
-} // namespace reaphone
+} // namespace reashoot

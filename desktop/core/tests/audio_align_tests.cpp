@@ -1,4 +1,4 @@
-#include "reaphone/audio_align.h"
+#include "reashoot/audio_align.h"
 
 #include <cassert>
 #include <cmath>
@@ -32,13 +32,13 @@ void testRecoversKnownLag() {
     video[static_cast<std::size_t>(i)] = base[static_cast<std::size_t>(i + knownLag)];
   }
 
-  const std::vector<double> shapedVideo = reaphone::normalizedSampleShape(video);
-  const std::vector<double> shapedReference = reaphone::normalizedSampleShape(reference);
+  const std::vector<double> shapedVideo = reashoot::normalizedSampleShape(video);
+  const std::vector<double> shapedReference = reashoot::normalizedSampleShape(reference);
   assert(!shapedVideo.empty());
   assert(!shapedReference.empty());
 
-  const reaphone::LagMatch match =
-      reaphone::findBestLag(shapedVideo, shapedReference, 0, 300, 500);
+  const reashoot::LagMatch match =
+      reashoot::findBestLag(shapedVideo, shapedReference, 0, 300, 500);
 
   assert(match.valid);
   // Smoothing can nudge the peak by a couple of samples; allow a small tolerance.
@@ -49,13 +49,13 @@ void testRecoversKnownLag() {
 void testEmptyRangeIsInvalid() {
   std::vector<double> a(100, 1.0);
   std::vector<double> b(100, 1.0);
-  const reaphone::LagMatch match = reaphone::findBestLag(a, b, 10, 5, 10);
+  const reashoot::LagMatch match = reashoot::findBestLag(a, b, 10, 5, 10);
   assert(!match.valid);
 }
 
 void testNormalizedEnvelopeDropsFlatSignal() {
   std::vector<double> flat(100, 3.0);
-  const std::vector<double> result = reaphone::normalizedEnvelope(std::move(flat));
+  const std::vector<double> result = reashoot::normalizedEnvelope(std::move(flat));
   assert(result.empty()); // zero residual energy after mean removal
 }
 
@@ -64,9 +64,9 @@ void testCorrelationSelfMatchIsOne() {
   for (std::size_t i = 0; i < signal.size(); ++i) {
     signal[i] = std::sin(static_cast<double>(i) * 0.3);
   }
-  const std::vector<double> prepared = reaphone::normalizedEnvelope(signal);
+  const std::vector<double> prepared = reashoot::normalizedEnvelope(signal);
   assert(!prepared.empty());
-  const double score = reaphone::normalizedCorrelationAtLag(prepared, prepared, 0, 10);
+  const double score = reashoot::normalizedCorrelationAtLag(prepared, prepared, 0, 10);
   assert(std::abs(score - 1.0) < 1e-9);
 }
 
@@ -74,7 +74,7 @@ void testMinimumOverlapEnforced() {
   std::vector<double> video(100, 1.0);
   std::vector<double> reference(100, 1.0);
   // A lag that leaves only a tiny overlap must be rejected by the overlap floor.
-  const double score = reaphone::normalizedCorrelationAtLag(video, reference, 95, 50);
+  const double score = reashoot::normalizedCorrelationAtLag(video, reference, 95, 50);
   assert(!std::isfinite(score));
 }
 

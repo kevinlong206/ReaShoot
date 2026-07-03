@@ -1,4 +1,4 @@
-#include "reaphone/windows/recording_downloader.h"
+#include "reashoot/windows/recording_downloader.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -10,7 +10,7 @@
 #include <ws2tcpip.h>
 #include <windows.h>
 
-#include "reaphone/sha256.h"
+#include "reashoot/sha256.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -154,20 +154,20 @@ std::string makePayload(std::size_t size) {
 
 fs::path uniqueTempDir() {
   const fs::path directory =
-      fs::temp_directory_path() / ("reaphone_dl_" + std::to_string(GetCurrentProcessId()) + "_" +
+      fs::temp_directory_path() / ("reashoot_dl_" + std::to_string(GetCurrentProcessId()) + "_" +
                                    std::to_string(GetTickCount64()));
   fs::create_directories(directory);
   return directory;
 }
 
-reaphone::RecordingDescriptor makeRecording(const std::string &payload, bool withChecksum) {
-  reaphone::RecordingDescriptor recording;
+reashoot::RecordingDescriptor makeRecording(const std::string &payload, bool withChecksum) {
+  reashoot::RecordingDescriptor recording;
   recording.id = "rec-1";
   recording.filename = "clip.mov";
   recording.byteCount = static_cast<std::int64_t>(payload.size());
   recording.downloadPath = "/recordings/clip.mov";
   if (withChecksum) {
-    recording.checksumSHA256 = reaphone::sha256Hex(payload);
+    recording.checksumSHA256 = reashoot::sha256Hex(payload);
   }
   return recording;
 }
@@ -184,7 +184,7 @@ void downloadsAndVerifiesChecksum() {
   const fs::path directory = uniqueTempDir();
   LoopbackHttpServer server(payload);
 
-  const std::wstring path = reaphone::downloadRecording(makeRecording(payload, true), "127.0.0.1",
+  const std::wstring path = reashoot::downloadRecording(makeRecording(payload, true), "127.0.0.1",
                                                         server.port(), "hexToken", directory.wstring());
   require(readFile(fs::path(path)) == payload, "downloaded content should match the payload");
   require(!fs::exists(directory / ".clip.mov.download"), "temp file should be removed after success");
@@ -200,7 +200,7 @@ void resumesFromPartialTempFile() {
   }
   LoopbackHttpServer server(payload);
 
-  const std::wstring path = reaphone::downloadRecording(makeRecording(payload, true), "127.0.0.1",
+  const std::wstring path = reashoot::downloadRecording(makeRecording(payload, true), "127.0.0.1",
                                                         server.port(), "hexToken", directory.wstring());
   require(readFile(fs::path(path)) == payload, "resumed download should reconstruct the full payload");
   fs::remove_all(directory);
@@ -214,7 +214,7 @@ void skipsWhenDestinationAlreadyComplete() {
     complete.write(payload.data(), static_cast<std::streamsize>(payload.size()));
   }
   // No server: a network attempt would block, proving the early-return path runs.
-  const std::wstring path = reaphone::downloadRecording(makeRecording(payload, true), "127.0.0.1",
+  const std::wstring path = reashoot::downloadRecording(makeRecording(payload, true), "127.0.0.1",
                                                         1, "hexToken", directory.wstring());
   require(readFile(fs::path(path)) == payload, "already-complete file should be returned untouched");
   fs::remove_all(directory);
@@ -225,12 +225,12 @@ void throwsOnChecksumMismatch() {
   const fs::path directory = uniqueTempDir();
   LoopbackHttpServer server(payload);
 
-  reaphone::RecordingDescriptor recording = makeRecording(payload, true);
+  reashoot::RecordingDescriptor recording = makeRecording(payload, true);
   recording.checksumSHA256 = std::string(64, '0'); // wrong checksum
 
   bool threw = false;
   try {
-    reaphone::downloadRecording(recording, "127.0.0.1", server.port(), "hexToken", directory.wstring());
+    reashoot::downloadRecording(recording, "127.0.0.1", server.port(), "hexToken", directory.wstring());
   } catch (const std::runtime_error &) {
     threw = true;
   }

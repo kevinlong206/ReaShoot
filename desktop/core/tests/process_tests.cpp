@@ -1,4 +1,4 @@
-#include "reaphone/windows/process_runner.h"
+#include "reashoot/windows/process_runner.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -55,22 +55,22 @@ std::wstring selfPath() {
 }
 
 void quotesCommandLineArguments() {
-  require(reaphone::buildWindowsCommandLine(L"prog", {}) == L"prog", "bare program name");
-  require(reaphone::buildWindowsCommandLine(L"prog", {L"simple"}) == L"prog simple",
+  require(reashoot::buildWindowsCommandLine(L"prog", {}) == L"prog", "bare program name");
+  require(reashoot::buildWindowsCommandLine(L"prog", {L"simple"}) == L"prog simple",
           "plain argument is not quoted");
-  require(reaphone::buildWindowsCommandLine(L"prog", {L"hello world"}) == L"prog \"hello world\"",
+  require(reashoot::buildWindowsCommandLine(L"prog", {L"hello world"}) == L"prog \"hello world\"",
           "argument with a space is quoted");
-  require(reaphone::buildWindowsCommandLine(L"prog", {L""}) == L"prog \"\"",
+  require(reashoot::buildWindowsCommandLine(L"prog", {L""}) == L"prog \"\"",
           "empty argument is quoted");
-  require(reaphone::buildWindowsCommandLine(L"C:\\Program Files\\a.exe", {}) ==
+  require(reashoot::buildWindowsCommandLine(L"C:\\Program Files\\a.exe", {}) ==
               L"\"C:\\Program Files\\a.exe\"",
           "executable with a space is quoted");
-  require(reaphone::buildWindowsCommandLine(L"prog", {L"a\"b"}) == L"prog \"a\\\"b\"",
+  require(reashoot::buildWindowsCommandLine(L"prog", {L"a\"b"}) == L"prog \"a\\\"b\"",
           "embedded quote is escaped");
 }
 
 void capturesConcurrentStdoutAndStderr() {
-  const reaphone::ProcessResult result = reaphone::runProcess(selfPath(), {L"--emit-child"});
+  const reashoot::ProcessResult result = reashoot::runProcess(selfPath(), {L"--emit-child"});
   require(result.started, "child should start");
   require(!result.timedOut, "child should not time out");
   require(result.exitCode == 3, "child exit code should propagate");
@@ -83,17 +83,17 @@ void capturesConcurrentStdoutAndStderr() {
 }
 
 void reportsTimeout() {
-  reaphone::ProcessOptions options;
+  reashoot::ProcessOptions options;
   options.timeout = std::chrono::milliseconds(300);
-  const reaphone::ProcessResult result =
-      reaphone::runProcess(selfPath(), {L"--sleep-child"}, options);
+  const reashoot::ProcessResult result =
+      reashoot::runProcess(selfPath(), {L"--sleep-child"}, options);
   require(result.started, "sleeping child should start");
   require(result.timedOut, "slow child should be reported as timed out");
 }
 
 void reportsMissingExecutable() {
-  const reaphone::ProcessResult result =
-      reaphone::runProcess(L"C:\\this\\path\\does\\not\\exist_reaphone.exe", {});
+  const reashoot::ProcessResult result =
+      reashoot::runProcess(L"C:\\this\\path\\does\\not\\exist_reashoot.exe", {});
   require(!result.started, "missing executable should not start");
 }
 

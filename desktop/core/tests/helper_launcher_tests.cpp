@@ -1,4 +1,4 @@
-#include "reaphone/windows/helper_launcher.h"
+#include "reashoot/windows/helper_launcher.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -21,7 +21,7 @@
 
 namespace {
 
-using reaphone::testing::LoopbackWebSocketServer;
+using reashoot::testing::LoopbackWebSocketServer;
 
 void require(bool condition, const char *message) {
   if (!condition) {
@@ -39,55 +39,55 @@ std::wstring helperExecutablePath() {
   return directory + L"video-sync-win.exe";
 }
 
-reaphone::ProcessOptions withTimeout() {
-  reaphone::ProcessOptions options;
+reashoot::ProcessOptions withTimeout() {
+  reashoot::ProcessOptions options;
   options.timeout = std::chrono::seconds{30};
   return options;
 }
 
 void buildsArgumentsMirroringPlugin() {
-  reaphone::HelperConnection connection;
+  reashoot::HelperConnection connection;
   connection.host = "phone";
   connection.controlPort = 8787;
 
   const std::vector<std::wstring> ping =
-      reaphone::videoSyncArguments("ping", connection, {L"--token", L"abc"});
+      reashoot::videoSyncArguments("ping", connection, {L"--token", L"abc"});
   const std::vector<std::wstring> expectedPing = {L"ping",  L"--host",  L"phone", L"--port",
                                                   L"8787",  L"--token", L"abc"};
   require(ping == expectedPing, "ping arguments should include host/port then extras");
 
   const std::vector<std::wstring> discover =
-      reaphone::videoSyncArguments("discover", connection, {L"--timeout", L"3"});
+      reashoot::videoSyncArguments("discover", connection, {L"--timeout", L"3"});
   const std::vector<std::wstring> expectedDiscover = {L"discover", L"--timeout", L"3"};
   require(discover == expectedDiscover, "discover should omit host/port");
 }
 
 void parsesPairedToken() {
-  require(reaphone::parsePairedToken("noise\r\npaired token=TOK-1\r\nmore") == "TOK-1",
+  require(reashoot::parsePairedToken("noise\r\npaired token=TOK-1\r\nmore") == "TOK-1",
           "paired token should be parsed from stdout");
-  require(!reaphone::parsePairedToken("pong\nrecording\tid=1").has_value(),
+  require(!reashoot::parsePairedToken("pong\nrecording\tid=1").has_value(),
           "absent paired line should yield nullopt");
 }
 
 void parsesDownloadedPath() {
-  require(reaphone::parseDownloadedPath("progress bytes=1\r\ndownloaded C:\\rec\\a.mov\r\n") ==
+  require(reashoot::parseDownloadedPath("progress bytes=1\r\ndownloaded C:\\rec\\a.mov\r\n") ==
               "C:\\rec\\a.mov",
           "downloaded path should be parsed from stdout");
-  require(reaphone::parseDownloadedPath("downloaded first.mov\ndownloaded second.mov") == "second.mov",
+  require(reashoot::parseDownloadedPath("downloaded first.mov\ndownloaded second.mov") == "second.mov",
           "last downloaded path should win");
-  require(!reaphone::parseDownloadedPath("pong").has_value(),
+  require(!reashoot::parseDownloadedPath("pong").has_value(),
           "absent downloaded line should yield nullopt");
 }
 
 void parsesDeviceFields() {
   const std::string output =
       "searching\ndevice\tname=iPhone\thost=1.2.3.4\tcontrolPort=8787\thttpPort=8788\n";
-  const auto fields = reaphone::firstDeviceFields(output);
+  const auto fields = reashoot::firstDeviceFields(output);
   require(fields.has_value(), "a device line should be found");
   require(fields->at("host") == "1.2.3.4", "device host should parse");
   require(fields->at("name") == "iPhone", "device name should parse");
   require(fields->at("controlPort") == "8787", "device controlPort should parse");
-  require(!reaphone::firstDeviceFields("no devices here").has_value(),
+  require(!reashoot::firstDeviceFields("no devices here").has_value(),
           "no device line should yield nullopt");
 }
 
@@ -98,17 +98,17 @@ void launchesHelperPairEndToEnd() {
                : std::string("{\"type\":\"error\",\"message\":\"unexpected\"}");
   });
 
-  reaphone::HelperConnection connection;
+  reashoot::HelperConnection connection;
   connection.host = "127.0.0.1";
   connection.controlPort = server.port();
 
-  const reaphone::ProcessResult result = reaphone::runVideoSyncCommand(
+  const reashoot::ProcessResult result = reashoot::runVideoSyncCommand(
       helperExecutablePath(), "pair", connection, {L"--code", L"1234"}, withTimeout());
 
   require(result.started, "helper should start");
   require(!result.timedOut, "helper should not time out");
   require(result.exitCode == 0, "helper pair should exit cleanly");
-  require(reaphone::parsePairedToken(result.standardOutput) == "tok-xyz",
+  require(reashoot::parsePairedToken(result.standardOutput) == "tok-xyz",
           "helper stdout should report the paired token");
   require(server.receivedCommand().find("\"pairingCode\":\"1234\"") != std::string::npos,
           "helper should forward the pairing code to the phone");
@@ -118,12 +118,12 @@ void launchesHelperPingEndToEnd() {
   LoopbackWebSocketServer server(
       [](const std::string &) { return std::string("{\"type\":\"pong\"}"); });
 
-  reaphone::HelperConnection connection;
+  reashoot::HelperConnection connection;
   connection.host = "127.0.0.1";
   connection.controlPort = server.port();
 
-  const reaphone::ProcessResult result =
-      reaphone::runVideoSyncCommand(helperExecutablePath(), "ping", connection, {}, withTimeout());
+  const reashoot::ProcessResult result =
+      reashoot::runVideoSyncCommand(helperExecutablePath(), "ping", connection, {}, withTimeout());
 
   require(result.started, "helper should start");
   require(result.exitCode == 0, "helper ping should exit cleanly");
@@ -132,12 +132,12 @@ void launchesHelperPingEndToEnd() {
 }
 
 void reportsConnectionFailure() {
-  reaphone::HelperConnection connection;
+  reashoot::HelperConnection connection;
   connection.host = "127.0.0.1";
   connection.controlPort = 1; // virtually always refused
 
-  const reaphone::ProcessResult result =
-      reaphone::runVideoSyncCommand(helperExecutablePath(), "ping", connection, {}, withTimeout());
+  const reashoot::ProcessResult result =
+      reashoot::runVideoSyncCommand(helperExecutablePath(), "ping", connection, {}, withTimeout());
 
   require(result.started, "helper should start even when the phone is unreachable");
   require(result.exitCode != 0, "helper should exit non-zero on connection failure");
@@ -146,12 +146,12 @@ void reportsConnectionFailure() {
 }
 
 void reportsMissingArgument() {
-  reaphone::HelperConnection connection;
+  reashoot::HelperConnection connection;
   connection.host = "127.0.0.1";
   connection.controlPort = 1;
 
-  const reaphone::ProcessResult result =
-      reaphone::runVideoSyncCommand(helperExecutablePath(), "pair", connection, {}, withTimeout());
+  const reashoot::ProcessResult result =
+      reashoot::runVideoSyncCommand(helperExecutablePath(), "pair", connection, {}, withTimeout());
 
   require(result.started, "helper should start");
   require(result.exitCode == 2, "missing required argument should exit with code 2");

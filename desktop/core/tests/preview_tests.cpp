@@ -1,5 +1,5 @@
-#include "reaphone/preview_renderer.h"
-#include "reaphone/webrtc_receiver.h"
+#include "reashoot/preview_renderer.h"
+#include "reashoot/webrtc_receiver.h"
 
 #include <cassert>
 #include <cstdint>
@@ -9,10 +9,10 @@
 namespace {
 
 void testNullRendererCounts() {
-  reaphone::NullPreviewRenderer renderer;
+  reashoot::NullPreviewRenderer renderer;
 
   std::vector<std::uint8_t> pixels(4 * 2 * 3, 0);
-  reaphone::VideoFrame frame;
+  reashoot::VideoFrame frame;
   frame.width = 4;
   frame.height = 3;
   frame.stride = 16;
@@ -29,38 +29,38 @@ void testNullRendererCounts() {
 }
 
 void testStubReceiverEmitsOfferOnStart() {
-  reaphone::StubWebRTCReceiver receiver;
-  reaphone::NullPreviewRenderer renderer;
+  reashoot::StubWebRTCReceiver receiver;
+  reashoot::NullPreviewRenderer renderer;
   receiver.setRenderer(&renderer);
 
   assert(!receiver.isRunning());
 
-  std::vector<reaphone::WebRTCSignal> emitted;
-  receiver.start([&](const reaphone::WebRTCSignal &signal) { emitted.push_back(signal); });
+  std::vector<reashoot::WebRTCSignal> emitted;
+  receiver.start([&](const reashoot::WebRTCSignal &signal) { emitted.push_back(signal); });
 
   assert(receiver.isRunning());
   assert(emitted.size() == 1);
-  assert(emitted.front().type == reaphone::WebRTCSignal::Type::Offer);
+  assert(emitted.front().type == reashoot::WebRTCSignal::Type::Offer);
   assert(emitted.front().payload == "stub-offer");
   assert(receiver.renderer() == &renderer);
 }
 
 void testStubReceiverRecordsRemoteSignal() {
-  reaphone::StubWebRTCReceiver receiver;
+  reashoot::StubWebRTCReceiver receiver;
   receiver.start(nullptr);
 
-  reaphone::WebRTCSignal answer;
-  answer.type = reaphone::WebRTCSignal::Type::Answer;
+  reashoot::WebRTCSignal answer;
+  answer.type = reashoot::WebRTCSignal::Type::Answer;
   answer.payload = "remote-answer";
   receiver.handleRemoteSignal(answer);
 
-  assert(receiver.lastRemoteSignal().type == reaphone::WebRTCSignal::Type::Answer);
+  assert(receiver.lastRemoteSignal().type == reashoot::WebRTCSignal::Type::Answer);
   assert(receiver.lastRemoteSignal().payload == "remote-answer");
 }
 
 void testStubReceiverStopClearsRenderer() {
-  reaphone::StubWebRTCReceiver receiver;
-  reaphone::NullPreviewRenderer renderer;
+  reashoot::StubWebRTCReceiver receiver;
+  reashoot::NullPreviewRenderer renderer;
   receiver.setRenderer(&renderer);
 
   receiver.start(nullptr);

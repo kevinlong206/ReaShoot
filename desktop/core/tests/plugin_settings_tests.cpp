@@ -1,4 +1,4 @@
-#include "reaphone/plugin_settings.h"
+#include "reashoot/plugin_settings.h"
 
 #include <cassert>
 #include <iostream>
@@ -7,7 +7,7 @@
 
 namespace {
 
-class InMemoryStore : public reaphone::ISettingsStore {
+class InMemoryStore : public reashoot::ISettingsStore {
 public:
   std::string getString(const std::string &section, const std::string &key) const override {
     const auto it = values_.find(section + "|" + key);
@@ -23,7 +23,7 @@ public:
 
 void testDefaultsAreEmpty() {
   InMemoryStore store;
-  const reaphone::PluginSettings settings = reaphone::loadSettings(store);
+  const reashoot::PluginSettings settings = reashoot::loadSettings(store);
 
   assert(settings.host.empty());
   assert(settings.token.empty());
@@ -36,7 +36,7 @@ void testDefaultsAreEmpty() {
 void testRoundTrip() {
   InMemoryStore store;
 
-  reaphone::PluginSettings settings;
+  reashoot::PluginSettings settings;
   settings.host = "kevin-long-iphone.local";
   settings.controlPort = "8787";
   settings.httpPort = "8788";
@@ -51,8 +51,8 @@ void testRoundTrip() {
   settings.followEnabled = true;
   settings.previewFloating = true;
 
-  reaphone::saveSettings(store, settings);
-  const reaphone::PluginSettings loaded = reaphone::loadSettings(store);
+  reashoot::saveSettings(store, settings);
+  const reashoot::PluginSettings loaded = reashoot::loadSettings(store);
 
   assert(loaded.host == settings.host);
   assert(loaded.controlPort == settings.controlPort);
@@ -72,26 +72,26 @@ void testRoundTrip() {
 void testBooleanEncoding() {
   InMemoryStore store;
 
-  reaphone::PluginSettings settings;
+  reashoot::PluginSettings settings;
   settings.followEnabled = false;
   settings.previewFloating = true;
-  reaphone::saveSettings(store, settings);
+  reashoot::saveSettings(store, settings);
 
-  assert(store.getString(reaphone::settings_keys::kSection, reaphone::settings_keys::kFollowEnabled) == "0");
-  assert(store.getString(reaphone::settings_keys::kSection, reaphone::settings_keys::kPreviewFloating) == "1");
+  assert(store.getString(reashoot::settings_keys::kSection, reashoot::settings_keys::kFollowEnabled) == "0");
+  assert(store.getString(reashoot::settings_keys::kSection, reashoot::settings_keys::kPreviewFloating) == "1");
 }
 
 void testUsesMacOsCompatibleKeys() {
   InMemoryStore store;
 
-  reaphone::PluginSettings settings;
+  reashoot::PluginSettings settings;
   settings.host = "host.local";
   settings.token = "tok";
-  reaphone::saveSettings(store, settings);
+  reashoot::saveSettings(store, settings);
 
   // These exact section/key strings must match the macOS plugin's ExtState.
-  assert(store.getString("klong_reaper_video_recorder", "iphone_host") == "host.local");
-  assert(store.getString("klong_reaper_video_recorder", "iphone_token") == "tok");
+  assert(store.getString("klong_reashoot", "iphone_host") == "host.local");
+  assert(store.getString("klong_reashoot", "iphone_token") == "tok");
 }
 
 } // namespace
