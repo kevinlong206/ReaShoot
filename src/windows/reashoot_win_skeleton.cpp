@@ -533,6 +533,10 @@ void launchHelperCommand(HelperAction action, const std::string &command,
 // main thread (from onTimer) so REAPER API calls (ExtState, media insert) and
 // status reporting are safe.
 std::string trimWhitespace(const std::string &value);
+// (Re)starts the WebRTC preview when the panel is visible; defined with the
+// preview controller below. Called after pairing so a freshly obtained token
+// takes effect without the user having to hide/show the panel.
+void restartPreviewIfVisible();
 
 void dispatchHelperResult(const HelperCommandResult &result) {
   const std::string trimmedOut = trimWhitespace(result.standardOutput);
@@ -552,6 +556,7 @@ void dispatchHelperResult(const HelperCommandResult &result) {
       settings.token = *token;
       reashoot::saveSettings(store, settings);
       report("ReaShoot: paired and saved token.");
+      restartPreviewIfVisible();
     } else {
       report("ReaShoot: pairing succeeded but no token was returned.");
     }
@@ -917,13 +922,17 @@ private:
     DeleteFileW(offerFile.c_str());
 
     if (result.exitCode != 0 || result.standardOutput.empty()) {
-      logger().log("webrtc: webrtc-answer failed exit=" + std::to_string(result.exitCode));
+      logger().log("webrtc: webrtc-answer failed exit=" + std::to_string(result.exitCode) +
+                   (result.standardError.empty() ? std::string()
+                                                  : (" stderr=" + trimWhitespace(result.standardError))));
       report("ReaShoot: WebRTC signaling failed; check the iPhone connection.");
       return;
     }
 
     const reashoot::StrippedAnswer stripped =
         reashoot::stripInlineIceCandidates(trimWhitespace(result.standardOutput));
+    logger().log("webrtc: received answer, " + std::to_string(stripped.candidates.size()) +
+                 " inline candidate(s)");
     if (!receiver_) {
       return;
     }
@@ -981,6 +990,16 @@ private:
 };
 
 WebRTCPreviewController g_webrtcPreview;
+
+// Called on the main thread after pairing succeeds. If the preview panel is on
+// screen, restart the receiver so the freshly saved token is used (mirrors the
+// macOS stop+start-on-configure). Safe no-op when the panel is hidden.
+void restartPreviewIfVisible() {
+  if (g_previewPanel && g_previewPanel->isVisible()) {
+    g_webrtcPreview.stop();
+    g_webrtcPreview.start();
+  }
+}
 
 void handleShowPreview() {
   ensurePanelConfigured();

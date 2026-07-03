@@ -4,6 +4,7 @@
 
 #include "webrtc_receiver_libwebrtc.h"
 
+#include "reashoot/debug_logger.h"
 #include "reashoot/webrtc_sdp.h"
 
 // libwebrtc (webrtc-sdk) C++ wrapper API. Confined to this translation unit.
@@ -37,6 +38,16 @@ namespace lw = libwebrtc;
 namespace {
 
 using namespace std::chrono_literals;
+
+// Shared debug log (same %TEMP%\reashoot_debug.log the plugin writes to) so the
+// WebRTC negotiation is observable without a debugger. Prefixes lines with
+// "webrtc:" for easy filtering.
+DebugLogger &rtcLog() {
+  static DebugLogger instance(DebugLogger::defaultPath());
+  return instance;
+}
+
+void logRtc(const std::string &message) { rtcLog().log("webrtc: " + message); }
 
 // libwebrtc's global threads/SSL are process-wide. Initialize lazily on first
 // use and tear down explicitly on plugin unload.
@@ -82,6 +93,7 @@ struct LibWebRTCReceiver::Impl
   std::vector<WebRTCSignal> pendingLocalCandidates;
 
   std::vector<std::uint8_t> frameScratch; // reused BGRA buffer (decoder thread)
+  std::atomic<bool> loggedFirstFrame{false};
 
   ~Impl() override { teardown(); }
 
@@ -101,6 +113,7 @@ struct LibWebRTCReceiver::Impl
     ensureGlobalInit();
     factory = lw::LibWebRTC::CreateRTCPeerConnectionFactory();
     if (!factory || !factory->Initialize()) {
+      logRtc("factory init failed");
       running = false;
       return;
     }
@@ -114,10 +127,12 @@ struct LibWebRTCReceiver::Impl
         lw::RTCMediaConstraints::Create();
     peer = factory->Create(config, constraints);
     if (!peer) {
+      logRtc("peer connection create failed");
       running = false;
       return;
     }
     peer->RegisterRTCPeerConnectionObserver(this);
+    logRtc("peer connection created; creating recv-only video offer");
 
     // Recv-only video transceiver so the offer requests the iPhone's stream.
     lw::scoped_refptr<lw::RTCRtpTransceiverInit> init =
@@ -160,6 +175,7 @@ struct LibWebRTCReceiver::Impl
   }
 
   void onLocalDescriptionResult(bool ok) {
+    logRtc(ok ? "local description set" : "local description failed");
     {
       std::lock_guard<std::mutex> lock(mutex);
       localDescriptionSet = ok;
@@ -195,6 +211,7 @@ struct LibWebRTCReceiver::Impl
       cv.wait_for(lock, 3s,
                   [this] { return localDescriptionSet || localDescriptionFailed; });
       if (!localDescriptionSet) {
+        logRtc("negotiation aborted: local description not ready");
         return;
       }
     }
@@ -217,6 +234,7 @@ struct LibWebRTCReceiver::Impl
       offer = localOfferSdp;
     }
     if (offer.empty()) {
+      logRtc("negotiation aborted: empty local offer");
       return;
     }
 
@@ -226,6 +244,7 @@ struct LibWebRTCReceiver::Impl
       handler = onSignal;
     }
     if (handler) {
+      logRtc("emitting local offer (" + std::to_string(offer.size()) + " bytes)");
       WebRTCSignal signal;
       signal.type = WebRTCSignal::Type::Offer;
       signal.payload = offer;
@@ -237,13 +256,18 @@ struct LibWebRTCReceiver::Impl
     if (!peer) {
       return;
     }
+    logRtc("applying remote answer (" + std::to_string(sdp.size()) + " bytes)");
     Impl *self = this;
     peer->SetRemoteDescription(
         sdp, "answer", [self] { self->onRemoteDescriptionSet(); },
-        [self](const char *error) { (void)error; });
+        [self](const char *error) {
+          logRtc(std::string("set remote answer failed: ") + (error ? error : "?"));
+          (void)self;
+        });
   }
 
   void onRemoteDescriptionSet() {
+    logRtc("remote answer set; flushing buffered local candidates");
     std::vector<WebRTCSignal> flush;
     SignalHandler handler;
     {
@@ -270,8 +294,10 @@ struct LibWebRTCReceiver::Impl
       return;
     }
     if (track->kind().std_string() != "video") {
+      logRtc("ignoring non-video track: " + track->kind().std_string());
       return;
     }
+    logRtc("video track received; attaching renderer");
     lw::RTCVideoTrack *raw = static_cast<lw::RTCVideoTrack *>(track.get());
     if (videoTrack) {
       videoTrack->RemoveRenderer(this);
@@ -316,6 +342,9 @@ struct LibWebRTCReceiver::Impl
     frameScratch.resize(static_cast<std::size_t>(stride) * height);
     frame->ConvertToARGB(lw::RTCVideoFrame::Type::kBGRA, frameScratch.data(), stride,
                          width, height);
+    if (!loggedFirstFrame.exchange(true)) {
+      logRtc("first decoded frame " + std::to_string(width) + "x" + std::to_string(height));
+    }
     VideoFrame out;
     out.width = width;
     out.height = height;
@@ -326,9 +355,13 @@ struct LibWebRTCReceiver::Impl
 
   // --- RTCPeerConnectionObserver ---
   void OnSignalingState(lw::RTCSignalingState) override {}
-  void OnPeerConnectionState(lw::RTCPeerConnectionState) override {}
+  void OnPeerConnectionState(lw::RTCPeerConnectionState state) override {
+    logRtc("peer connection state = " + std::to_string(static_cast<int>(state)));
+  }
   void OnIceGatheringState(lw::RTCIceGatheringState) override {}
-  void OnIceConnectionState(lw::RTCIceConnectionState) override {}
+  void OnIceConnectionState(lw::RTCIceConnectionState state) override {
+    logRtc("ice connection state = " + std::to_string(static_cast<int>(state)));
+  }
 
   void OnIceCandidate(lw::scoped_refptr<lw::RTCIceCandidate> candidate) override {
     if (!candidate) {
