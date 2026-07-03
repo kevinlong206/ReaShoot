@@ -69,6 +69,9 @@ std::string g_token;
 SwellPanelCallbacks g_callbacks;
 HWND g_setupWindow = nullptr;
 HWND g_manageWindow = nullptr;
+HWND g_dragWindow = nullptr;
+POINT g_dragStartCursor = {};
+RECT g_dragStartWindow = {};
 
 int lookIndexForID(const char *lookID) {
   if (!lookID || !lookID[0]) {
@@ -103,8 +106,8 @@ void captureSetupFields() {
   }
 }
 
-void showSetupWindow(HWND parent);
-void showManageWindow(HWND parent);
+void showSetupWindow();
+void showManageWindow();
 
 void updatePlaceholderPreviewFrame() {
   g_previewFrame.resize(static_cast<size_t>(g_previewWidth * g_previewHeight));
@@ -142,8 +145,95 @@ void paintPreview(HWND hwnd) {
   endPaint(hwnd, &paint);
 }
 
+void paintPopup(HWND hwnd, const char *title) {
+  PAINTSTRUCT paint = {};
+  HDC hdc = beginPaint(hwnd, &paint);
+  if (!hdc) {
+    return;
+  }
+
+  RECT client = {};
+  if (getClientRect(hwnd, &client)) {
+    fillDialogBackground(hdc, &client, 0);
+    RECT header = {0, 0, client.right - client.left, 30};
+    fillDialogBackground(hdc, &header, 1);
+    RECT titleRect = {12, 6, client.right - 12, 28};
+    drawText(hdc, title, &titleRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+  }
+  endPaint(hwnd, &paint);
+}
+
+int lParamY(LPARAM lParam) {
+  return static_cast<int>(static_cast<int16_t>((static_cast<uintptr_t>(lParam) >> 16) & 0xffff));
+}
+
+bool handlePopupDrag(HWND hwnd, UINT msg, LPARAM lParam) {
+  if (msg == WM_NCHITTEST) {
+    RECT windowRect = {};
+    if (getWindowRect(hwnd, &windowRect)) {
+      const int screenY = lParamY(lParam);
+      if (screenY >= windowRect.top && screenY <= windowRect.top + 30) {
+        return true;
+      }
+    }
+  }
+  if (msg == WM_LBUTTONDOWN && lParamY(lParam) <= 30) {
+    g_dragWindow = hwnd;
+    getCursorPos(&g_dragStartCursor);
+    getWindowRect(hwnd, &g_dragStartWindow);
+    setCapture(hwnd);
+    return true;
+  }
+  if (msg == WM_MOUSEMOVE && g_dragWindow == hwnd) {
+    POINT cursor = {};
+    getCursorPos(&cursor);
+    const int dx = cursor.x - g_dragStartCursor.x;
+    const int dy = cursor.y - g_dragStartCursor.y;
+    setWindowPos(hwnd,
+                 nullptr,
+                 g_dragStartWindow.left + dx,
+                 g_dragStartWindow.top + dy,
+                 g_dragStartWindow.right - g_dragStartWindow.left,
+                 g_dragStartWindow.bottom - g_dragStartWindow.top,
+                 0);
+    return true;
+  }
+  if (msg == WM_LBUTTONUP && g_dragWindow == hwnd) {
+    g_dragWindow = nullptr;
+    releaseCapture();
+    return true;
+  }
+  return false;
+}
+
+void configurePopupWindow(HWND hwnd, const char *title, int x, int y, int width, int height) {
+  setDlgItemText(hwnd, 0, title);
+  const LONG_PTR style = getWindowLong(hwnd, GWL_STYLE);
+  setWindowLong(hwnd, GWL_STYLE, style | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME);
+  setWindowPos(hwnd, nullptr, x, y, width, height, 0);
+}
+
 static LRESULT setupWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
   (void)lParam;
+  if (msg == WM_PAINT) {
+    paintPopup(hwnd, "ReaShoot Setup");
+    return 0;
+  }
+  if (msg == WM_ERASEBKGND) {
+    return 1;
+  }
+  if (msg == WM_NCHITTEST) {
+    RECT windowRect = {};
+    if (getWindowRect(hwnd, &windowRect)) {
+      const int screenY = lParamY(lParam);
+      if (screenY >= windowRect.top && screenY <= windowRect.top + 30) {
+        return HTCAPTION;
+      }
+    }
+  }
+  if (handlePopupDrag(hwnd, msg, lParam)) {
+    return 0;
+  }
   if (msg == WM_CLOSE) {
     captureSetupFields();
     showWindow(hwnd, SW_HIDE);
@@ -190,6 +280,25 @@ static LRESULT setupWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
 
 static LRESULT manageWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
   (void)lParam;
+  if (msg == WM_PAINT) {
+    paintPopup(hwnd, "ReaShoot Recordings");
+    return 0;
+  }
+  if (msg == WM_ERASEBKGND) {
+    return 1;
+  }
+  if (msg == WM_NCHITTEST) {
+    RECT windowRect = {};
+    if (getWindowRect(hwnd, &windowRect)) {
+      const int screenY = lParamY(lParam);
+      if (screenY >= windowRect.top && screenY <= windowRect.top + 30) {
+        return HTCAPTION;
+      }
+    }
+  }
+  if (handlePopupDrag(hwnd, msg, lParam)) {
+    return 0;
+  }
   if (msg == WM_CLOSE) {
     showWindow(hwnd, SW_HIDE);
     return 0;
@@ -234,14 +343,14 @@ static LRESULT swellProbeWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
   if (msg == WM_COMMAND) {
     const int controlID = LOWORD(wParam);
     if (controlID == kSetupButton) {
-      showSetupWindow(hwnd);
+      showSetupWindow();
       if (g_callbacks.setup) {
         g_callbacks.setup(g_callbacks.context);
       }
       return 0;
     }
     if (controlID == kManageButton) {
-      showManageWindow(hwnd);
+      showManageWindow();
       return 0;
     }
     if (controlID == kPreviousLookButton) {
@@ -267,38 +376,40 @@ static LRESULT swellProbeWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
   return 0;
 }
 
-void showSetupWindow(HWND parent) {
+void showSetupWindow() {
   if (!g_setupWindow) {
-    g_setupWindow = createDialog(nullptr, nullptr, parent, reinterpret_cast<DLGPROC>(setupWindowProc), 0);
+    g_setupWindow = createDialog(nullptr, nullptr, nullptr, reinterpret_cast<DLGPROC>(setupWindowProc), 0);
     if (!g_setupWindow) {
       return;
     }
+    configurePopupWindow(g_setupWindow, "ReaShoot Setup", 200, 200, 510, 210);
     makeSetCurParms(1.0f, 1.0f, 0.0f, 0.0f, g_setupWindow, false, false);
-    makeLabel(0, "Host", -1, 12, 118, 80, 18, 0);
-    makeEditField(kSetupHostField, 96, 116, 300, 22, 0);
-    makeButton(0, "Discover", kSetupDiscoverButton, 404, 116, 82, 24, 0);
-    makeLabel(0, "Token", -1, 12, 84, 80, 18, 0);
-    makeEditField(kSetupTokenField, 96, 82, 390, 22, 0);
-    makeLabel(0, "Pair code", -1, 12, 50, 80, 18, 0);
-    makeEditField(kSetupPairingCodeField, 96, 48, 180, 22, 0);
-    makeButton(0, "Pair", kSetupPairButton, 284, 48, 70, 24, 0);
-    makeButton(0, "Test", kSetupTestButton, 362, 48, 70, 24, 0);
+    makeLabel(0, "Host", -1, 12, 124, 80, 18, 0);
+    makeEditField(kSetupHostField, 96, 122, 300, 22, 0);
+    makeButton(0, "Discover", kSetupDiscoverButton, 404, 122, 82, 24, 0);
+    makeLabel(0, "Token", -1, 12, 90, 80, 18, 0);
+    makeEditField(kSetupTokenField, 96, 88, 390, 22, 0);
+    makeLabel(0, "Pair code", -1, 12, 56, 80, 18, 0);
+    makeEditField(kSetupPairingCodeField, 96, 54, 180, 22, 0);
+    makeButton(0, "Pair", kSetupPairButton, 284, 54, 70, 24, 0);
+    makeButton(0, "Test", kSetupTestButton, 362, 54, 70, 24, 0);
     makeButton(0, "Close", kSetupCloseButton, 416, 12, 70, 24, 0);
   }
   syncSetupFields();
   showWindow(g_setupWindow, SW_SHOW);
 }
 
-void showManageWindow(HWND parent) {
+void showManageWindow() {
   if (!g_manageWindow) {
-    g_manageWindow = createDialog(nullptr, nullptr, parent, reinterpret_cast<DLGPROC>(manageWindowProc), 0);
+    g_manageWindow = createDialog(nullptr, nullptr, nullptr, reinterpret_cast<DLGPROC>(manageWindowProc), 0);
     if (!g_manageWindow) {
       return;
     }
+    configurePopupWindow(g_manageWindow, "ReaShoot Recordings", 240, 240, 390, 150);
     makeSetCurParms(1.0f, 1.0f, 0.0f, 0.0f, g_manageWindow, false, false);
-    makeLabel(0, "Manage recordings stored on the paired iPhone.", -1, 12, 86, 360, 18, 0);
-    makeButton(0, "Pending Videos...", kManagePendingButton, 12, 50, 150, 26, 0);
-    makeButton(0, "Delete All", kManageDeleteAllButton, 172, 50, 110, 26, 0);
+    makeLabel(0, "Manage recordings stored on the paired iPhone.", -1, 12, 82, 360, 18, 0);
+    makeButton(0, "Pending Videos...", kManagePendingButton, 12, 46, 150, 26, 0);
+    makeButton(0, "Delete All", kManageDeleteAllButton, 172, 46, 110, 26, 0);
     makeButton(0, "Close", kManageCloseButton, 302, 12, 70, 24, 0);
   }
   showWindow(g_manageWindow, SW_SHOW);

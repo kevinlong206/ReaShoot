@@ -15,6 +15,13 @@ using SwellGetFunc = void *(*)(const char *);
 using MakeSetCurParmsFn = void (*)(float, float, float, float, HWND, bool, bool);
 using CreateDialogFn = HWND (*)(void *, const char *, HWND, DLGPROC, LPARAM);
 using ShowWindowFn = void (*)(HWND, int);
+using SetWindowPosFn = void (*)(HWND, HWND, int, int, int, int, int);
+using GetWindowRectFn = bool (*)(HWND, RECT *);
+using GetWindowLongFn = LONG_PTR (*)(HWND, int);
+using SetWindowLongFn = LONG_PTR (*)(HWND, int, LONG_PTR);
+using SetCaptureFn = HWND (*)(HWND);
+using ReleaseCaptureFn = void (*)();
+using GetCursorPosFn = void (*)(POINT *);
 using MakeButtonFn = HWND (*)(int, const char *, int, int, int, int, int, int);
 using MakeEditFieldFn = HWND (*)(int, int, int, int, int, int);
 using MakeLabelFn = HWND (*)(int, const char *, int, int, int, int, int, int);
@@ -35,11 +42,19 @@ using DeleteGfxContextFn = void (*)(HDC);
 using GetCtxFrameBufferFn = void *(*)(HDC);
 using StretchBltFn = void (*)(HDC, int, int, int, int, HDC, int, int, int, int, int);
 using DrawTextFn = int (*)(HDC, const char *, int, RECT *, int);
+using FillDialogBackgroundFn = void (*)(HDC, const RECT *, int);
 
 SwellGetFunc g_getFunc = nullptr;
 MakeSetCurParmsFn g_makeSetCurParms = nullptr;
 CreateDialogFn g_createDialog = nullptr;
 ShowWindowFn g_showWindow = nullptr;
+SetWindowPosFn g_setWindowPos = nullptr;
+GetWindowRectFn g_getWindowRect = nullptr;
+GetWindowLongFn g_getWindowLong = nullptr;
+SetWindowLongFn g_setWindowLong = nullptr;
+SetCaptureFn g_setCapture = nullptr;
+ReleaseCaptureFn g_releaseCapture = nullptr;
+GetCursorPosFn g_getCursorPos = nullptr;
 MakeButtonFn g_makeButton = nullptr;
 MakeEditFieldFn g_makeEditField = nullptr;
 MakeLabelFn g_makeLabel = nullptr;
@@ -60,6 +75,7 @@ DeleteGfxContextFn g_deleteGfxContext = nullptr;
 GetCtxFrameBufferFn g_getCtxFrameBuffer = nullptr;
 StretchBltFn g_stretchBlt = nullptr;
 DrawTextFn g_drawText = nullptr;
+FillDialogBackgroundFn g_fillDialogBackground = nullptr;
 
 template <typename T>
 T loadFunction(const char *name) {
@@ -103,6 +119,13 @@ bool initializeSwellRuntime() {
   g_makeSetCurParms = loadFunction<MakeSetCurParmsFn>("SWELL_MakeSetCurParms");
   g_createDialog = loadFunction<CreateDialogFn>("SWELL_CreateDialog");
   g_showWindow = loadFunction<ShowWindowFn>("ShowWindow");
+  g_setWindowPos = loadFunction<SetWindowPosFn>("SetWindowPos");
+  g_getWindowRect = loadFunction<GetWindowRectFn>("GetWindowRect");
+  g_getWindowLong = loadFunction<GetWindowLongFn>("GetWindowLong");
+  g_setWindowLong = loadFunction<SetWindowLongFn>("SetWindowLong");
+  g_setCapture = loadFunction<SetCaptureFn>("SetCapture");
+  g_releaseCapture = loadFunction<ReleaseCaptureFn>("ReleaseCapture");
+  g_getCursorPos = loadFunction<GetCursorPosFn>("GetCursorPos");
   g_makeButton = loadFunction<MakeButtonFn>("SWELL_MakeButton");
   g_makeEditField = loadFunction<MakeEditFieldFn>("SWELL_MakeEditField");
   g_makeLabel = loadFunction<MakeLabelFn>("SWELL_MakeLabel");
@@ -123,6 +146,7 @@ bool initializeSwellRuntime() {
   g_getCtxFrameBuffer = loadFunction<GetCtxFrameBufferFn>("SWELL_GetCtxFrameBuffer");
   g_stretchBlt = loadFunction<StretchBltFn>("StretchBlt");
   g_drawText = loadFunction<DrawTextFn>("SWELL_DrawText");
+  g_fillDialogBackground = loadFunction<FillDialogBackgroundFn>("SWELL_FillDialogBackground");
   return hasSwellRuntime();
 #endif
 }
@@ -149,6 +173,40 @@ HWND createDialog(void *resourceHead, const char *resourceID, HWND parent, DLGPR
 void showWindow(HWND hwnd, int command) {
   if (g_showWindow && hwnd) {
     g_showWindow(hwnd, command);
+  }
+}
+
+void setWindowPos(HWND hwnd, HWND insertAfter, int x, int y, int width, int height, int flags) {
+  if (g_setWindowPos && hwnd) {
+    g_setWindowPos(hwnd, insertAfter, x, y, width, height, flags);
+  }
+}
+
+bool getWindowRect(HWND hwnd, RECT *rect) {
+  return g_getWindowRect && hwnd && rect && g_getWindowRect(hwnd, rect);
+}
+
+LONG_PTR getWindowLong(HWND hwnd, int index) {
+  return g_getWindowLong && hwnd ? g_getWindowLong(hwnd, index) : 0;
+}
+
+LONG_PTR setWindowLong(HWND hwnd, int index, LONG_PTR value) {
+  return g_setWindowLong && hwnd ? g_setWindowLong(hwnd, index, value) : 0;
+}
+
+HWND setCapture(HWND hwnd) {
+  return g_setCapture ? g_setCapture(hwnd) : nullptr;
+}
+
+void releaseCapture() {
+  if (g_releaseCapture) {
+    g_releaseCapture();
+  }
+}
+
+void getCursorPos(POINT *point) {
+  if (g_getCursorPos && point) {
+    g_getCursorPos(point);
   }
 }
 
@@ -220,6 +278,12 @@ HDC beginPaint(HWND hwnd, PAINTSTRUCT *paint) {
 
 bool endPaint(HWND hwnd, PAINTSTRUCT *paint) {
   return g_endPaint && g_endPaint(hwnd, paint);
+}
+
+void fillDialogBackground(HDC hdc, const RECT *rect, int level) {
+  if (g_fillDialogBackground && hdc && rect) {
+    g_fillDialogBackground(hdc, rect, level);
+  }
 }
 
 bool drawFrame(HDC output, int x, int y, int width, int height, const void *bits, int sourceWidth, int sourceHeight) {
