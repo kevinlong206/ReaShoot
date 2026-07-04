@@ -213,11 +213,27 @@ void paintPreview(HWND hwnd) {
 
   RECT client = {};
   if (getClientRect(hwnd, &client)) {
-    fillDialogBackground(hdc, &client, 0);
-    const int margin = 12;
-    const int controlsHeight = 150;
+    HDC paintDC = hdc;
+#ifdef _WIN32
+    HDC memoryDC = CreateCompatibleDC(hdc);
+    HBITMAP memoryBitmap = nullptr;
+    HGDIOBJ oldBitmap = nullptr;
     const int clientWidth = static_cast<int>(client.right - client.left);
     const int clientHeight = static_cast<int>(client.bottom - client.top);
+    if (memoryDC && clientWidth > 0 && clientHeight > 0) {
+      memoryBitmap = CreateCompatibleBitmap(hdc, clientWidth, clientHeight);
+      if (memoryBitmap) {
+        oldBitmap = SelectObject(memoryDC, memoryBitmap);
+        paintDC = memoryDC;
+      }
+    }
+#else
+    const int clientWidth = static_cast<int>(client.right - client.left);
+    const int clientHeight = static_cast<int>(client.bottom - client.top);
+#endif
+    fillDialogBackground(paintDC, &client, 0);
+    const int margin = 12;
+    const int controlsHeight = 150;
     const int width = (std::max)(1, clientWidth - margin * 2);
     const int height = (std::max)(1, clientHeight - controlsHeight - margin);
     if (!g_previewFrame.empty()) {
@@ -232,12 +248,26 @@ void paintPreview(HWND hwnd) {
       }
       const int targetX = margin + (width - targetWidth) / 2;
       const int targetY = controlsHeight + (height - targetHeight) / 2;
-      drawFrame(hdc, targetX, targetY, targetWidth, targetHeight, g_previewFrame.data(), g_previewWidth, g_previewHeight);
+      drawFrame(paintDC, targetX, targetY, targetWidth, targetHeight, g_previewFrame.data(), g_previewWidth, g_previewHeight);
     }
     if (!g_usingLivePreview && !g_previewMessage.empty()) {
       RECT textRect = {margin + 16, controlsHeight + 16, client.right - margin - 16, client.bottom - margin - 16};
-      drawText(hdc, g_previewMessage.c_str(), &textRect, DT_CENTER | DT_VCENTER | DT_WORDBREAK);
+      drawText(paintDC, g_previewMessage.c_str(), &textRect, DT_CENTER | DT_VCENTER | DT_WORDBREAK);
     }
+#ifdef _WIN32
+    if (paintDC == memoryDC) {
+      BitBlt(hdc, 0, 0, clientWidth, clientHeight, memoryDC, 0, 0, SRCCOPY);
+    }
+    if (oldBitmap) {
+      SelectObject(memoryDC, oldBitmap);
+    }
+    if (memoryBitmap) {
+      DeleteObject(memoryBitmap);
+    }
+    if (memoryDC) {
+      DeleteDC(memoryDC);
+    }
+#endif
   }
   endPaint(hwnd, &paint);
 }
@@ -441,6 +471,9 @@ static LRESULT swellProbeWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
   if (msg == WM_PAINT) {
     paintPreview(hwnd);
     return 0;
+  }
+  if (msg == WM_ERASEBKGND) {
+    return 1;
   }
   if (msg == WM_CLOSE) {
     showWindow(hwnd, SW_HIDE);

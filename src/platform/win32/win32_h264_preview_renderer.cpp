@@ -32,6 +32,7 @@ extern "C" {
 #include <condition_variable>
 #include <cstdint>
 #include <cstring>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
@@ -699,7 +700,7 @@ public:
     {
       std::lock_guard<std::mutex> lock(queueMutex_);
       queueStopped_ = true;
-      hasPendingAccessUnit_ = false;
+      pendingAccessUnits_.clear();
     }
     queueCV_.notify_all();
     if (decodeWorker_.joinable()) {
@@ -713,8 +714,7 @@ public:
   void reset() override {
     {
       std::lock_guard<std::mutex> queueLock(queueMutex_);
-      pendingAccessUnit_.clear();
-      hasPendingAccessUnit_ = false;
+      pendingAccessUnits_.clear();
       requireQueuedKeyframe_ = true;
     }
     std::lock_guard<std::mutex> lock(decoderMutex_);
@@ -745,12 +745,14 @@ public:
     if (requireQueuedKeyframe_ && !keyframe) {
       return;
     }
-    if (hasPendingAccessUnit_ && !keyframe) {
-      pendingAccessUnit_.assign(bytes, bytes + length);
-      return;
+    if (pendingAccessUnits_.size() > 90) {
+      pendingAccessUnits_.clear();
+      requireQueuedKeyframe_ = true;
+      if (!keyframe) {
+        return;
+      }
     }
-    pendingAccessUnit_.assign(bytes, bytes + length);
-    hasPendingAccessUnit_ = true;
+    pendingAccessUnits_.emplace_back(bytes, bytes + length);
     if (keyframe) {
       requireQueuedKeyframe_ = false;
     }
@@ -763,13 +765,12 @@ private:
       std::vector<uint8_t> accessUnit;
       {
         std::unique_lock<std::mutex> lock(queueMutex_);
-        queueCV_.wait(lock, [this]() { return queueStopped_ || hasPendingAccessUnit_; });
+        queueCV_.wait(lock, [this]() { return queueStopped_ || !pendingAccessUnits_.empty(); });
         if (queueStopped_) {
           return;
         }
-        accessUnit = std::move(pendingAccessUnit_);
-        pendingAccessUnit_.clear();
-        hasPendingAccessUnit_ = false;
+        accessUnit = std::move(pendingAccessUnits_.front());
+        pendingAccessUnits_.pop_front();
       }
       decodeAccessUnit(accessUnit.data(), accessUnit.size());
     }
@@ -905,8 +906,7 @@ private:
   std::mutex queueMutex_;
   std::condition_variable queueCV_;
   std::thread decodeWorker_;
-  std::vector<uint8_t> pendingAccessUnit_;
-  bool hasPendingAccessUnit_ = false;
+  std::deque<std::vector<uint8_t>> pendingAccessUnits_;
   bool requireQueuedKeyframe_ = true;
   bool queueStopped_ = false;
   FFmpegApi *api_ = nullptr;

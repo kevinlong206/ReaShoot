@@ -141,7 +141,8 @@ struct ActionRename {
 
 constexpr ActionRename kActionRenames[] = {
     {"KLONG_VIDEO_RECORDER_ENABLE", "KLONG_REASHOOT_ENABLE"},
-    {"KLONG_VIDEO_RECORDER_SHOW_PREVIEW", "KLONG_REASHOOT_SHOW_PREVIEW"},
+    {"KLONG_VIDEO_RECORDER_SHOW_PREVIEW", "KLONG_REASHOOT_ENABLE"},
+    {"KLONG_REASHOOT_SHOW_PREVIEW", "KLONG_REASHOOT_ENABLE"},
     {"KLONG_VIDEO_RECORDER_FLOAT_PREVIEW", "KLONG_REASHOOT_FLOAT_PREVIEW"},
     {"KLONG_VIDEO_RECORDER_ALIGN_SELECTED", "KLONG_REASHOOT_ALIGN_SELECTED"},
     {"KLONG_VIDEO_RECORDER_RESTORE_IPHONE", "KLONG_REASHOOT_RESTORE_IPHONE"},
@@ -259,7 +260,6 @@ reashoot::core::ModalPrompts &modalPrompts() {
 
 reaper_plugin_info_t *g_reaper = nullptr;
 int g_videoEnabledCommand = 0;
-int g_showPreviewCommand = 0;
 int g_floatPreviewCommand = 0;
 int g_alignSelectedCommand = 0;
 int g_restoreIPhoneCommand = 0;
@@ -2459,6 +2459,12 @@ void setVideoEnabled(bool enabled);
 }
 
 - (void)showFloatingPreview {
+  if (self.floatingPreviewWindow) {
+    self.floatingPreviewWindow.level = NSFloatingWindowLevel;
+    self.floatingPreviewWindow.hidesOnDeactivate = NO;
+    [self.floatingPreviewWindow orderFrontRegardless];
+    return;
+  }
   [self showDockedPreview];
   [self setStatus:@"ReaShoot preview uses the REAPER dock"];
 }
@@ -2841,11 +2847,6 @@ bool hookCommand2(KbdSectionInfo *section, int command, int val, int val2, int r
     return true;
   }
 
-  if (command == g_showPreviewCommand) {
-    [recorder() togglePreview];
-    return true;
-  }
-
   if (command == g_floatPreviewCommand) {
     [recorder() togglePreviewDockMode];
     return true;
@@ -2911,13 +2912,7 @@ bool registerActions(reaper_plugin_info_t *rec) {
   custom_action_register_t videoEnabledAction = {
       0,
       "KLONG_REASHOOT_ENABLE",
-      "ReaShoot: Enable/Disable ReaShoot",
-      nullptr,
-  };
-  custom_action_register_t showPreviewAction = {
-      0,
-      "KLONG_REASHOOT_SHOW_PREVIEW",
-      "ReaShoot: Show/Hide Preview",
+      "ReaShoot: Enable ReaShoot",
       nullptr,
   };
   custom_action_register_t floatPreviewAction = {
@@ -2958,7 +2953,6 @@ bool registerActions(reaper_plugin_info_t *rec) {
   };
 
   g_videoEnabledCommand = rec->Register("custom_action", &videoEnabledAction);
-  g_showPreviewCommand = rec->Register("custom_action", &showPreviewAction);
   g_floatPreviewCommand = rec->Register("custom_action", &floatPreviewAction);
   g_alignSelectedCommand = rec->Register("custom_action", &alignSelectedAction);
   g_restoreIPhoneCommand = rec->Register("custom_action", &restoreIPhoneAction);
@@ -2969,7 +2963,7 @@ bool registerActions(reaper_plugin_info_t *rec) {
     debugLog(@"Failed to register SWELL panel prototype action");
   }
 
-  return g_videoEnabledCommand != 0 && g_showPreviewCommand != 0 && g_floatPreviewCommand != 0 &&
+  return g_videoEnabledCommand != 0 && g_floatPreviewCommand != 0 &&
          g_alignSelectedCommand != 0 && g_restoreIPhoneCommand != 0 && g_deleteAllIPhoneCommand != 0 &&
          g_toggleFollowCommand != 0 &&
          rec->Register("hookcommand2", reinterpret_cast<void *>(hookCommand2)) &&

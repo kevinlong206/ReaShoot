@@ -65,8 +65,7 @@ rm -rf iphone/Package.resolved iphone/.build helper/.build
 ## Current behavior
 
 - Registers actions:
-  - `ReaShoot: Enable/Disable ReaShoot`
-  - `ReaShoot: Show/Hide Preview`
+  - `ReaShoot: Enable ReaShoot`
   - `ReaShoot: Float/Dock Preview`
   - `ReaShoot: Align Selected Video Item`
   - `ReaShoot: Restore Pending iPhone Recording`

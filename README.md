@@ -5,8 +5,7 @@ ReaShoot is a native REAPER extension for controlling a companion iPhone camera 
 ## MVP behavior
 
 - Adds REAPER actions:
-  - `ReaShoot: Enable/Disable ReaShoot`
-  - `ReaShoot: Show/Hide Preview`
+  - `ReaShoot: Enable ReaShoot`
   - `ReaShoot: Float/Dock Preview`
   - `ReaShoot: Align Selected Video Item`
   - `ReaShoot: Restore Pending iPhone Recording`
