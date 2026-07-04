@@ -42,7 +42,7 @@ ReaShoot is a macOS-only REAPER extension for controlling a companion iPhone cam
 - If a download fails or is canceled before transfer acknowledgement, the iPhone keeps the pending recording. Use the preview window's `Pending...` button or `ReaShoot: Restore Pending iPhone Recording` to list pending clips on the phone, then either download one into the project or delete it from the phone. Use `Delete All` in the preview window or `ReaShoot: Delete All Pending iPhone Recordings` to remove every pending clip from the phone after confirmation.
 - After the Mac verifies the downloaded movie and acknowledges transfer, the iPhone app deletes its local copy immediately.
 - The iPhone app disables the idle timer while it is ready/listening so the phone does not sleep and interrupt preview on a tripod.
-- The iPhone app status screen shows `Keep awake: Yes` when the idle timer is disabled.
+- The iPhone app keeps the screen awake while ready/listening, but does not show that implementation detail in the status screen.
 
 ## Build
 

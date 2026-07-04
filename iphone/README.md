@@ -62,6 +62,6 @@ Capture configuration supports hardware-dependent lens selection (`wide`, `ultra
 
 ## iOS background note
 
-The app is designed for reliable foreground recording and disables the idle timer while ready/listening so the screen stays awake during tripod preview. The status UI shows `Keep awake: Yes` when this is active. iOS normally suspends ordinary apps while backgrounded or locked, so true locked-screen video recording must be validated on device and may require a guided-access or managed-device workflow.
+The app is designed for reliable foreground recording and disables the idle timer while ready/listening so the screen stays awake during tripod preview. The status UI does not expose that implementation detail. iOS normally suspends ordinary apps while backgrounded or locked, so true locked-screen video recording must be validated on device and may require a guided-access or managed-device workflow.
 
 See `AGENTS.md` for detailed handoff notes, device/signing details, known issues, and future work.

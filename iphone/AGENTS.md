@@ -153,7 +153,7 @@ For the REAPER prompted stop flow, use `stop-only` to get raw pending recording 
 - The iPhone returns a `PreviewDescriptor` for an authenticated preview WebSocket on port `8789`.
 - The preview server sends an initial JSON descriptor text frame, then binary H.264 Annex B access units.
 - SPS/PPS must be sent before keyframes so REAPER can rebuild its decoder format description after reconnects.
-- The iPhone app status UI exposes a `Preview` row so agents/users can see whether preview streaming is active.
+- The iPhone app status UI exposes a `Preview` row. It should report `Streaming` only when a preview WebSocket client is actually connected; after `startPreview` but before REAPER connects, it reports waiting.
 - HTTP is used for recording downloads, not live preview.
 - The app starts control/HTTP listeners before camera preparation so REAPER can reconnect quickly after app launch.
 - The helper validates complete WebSocket handshake headers, including `Sec-WebSocket-Accept`; keep `LocalWebSocketServer.handshakeResponse` terminated with `\r\n\r\n`.
