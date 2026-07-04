@@ -85,6 +85,7 @@ bool loadWindowsFFmpegApi(reashoot::platform::ffmpeg::FFmpegPlaybackApi &api) {
       loadFunction(avcodec, "avcodec_open2", api.avcodec_open2) &&
       loadFunction(avcodec, "avcodec_send_packet", api.avcodec_send_packet) &&
       loadFunction(avcodec, "avcodec_receive_frame", api.avcodec_receive_frame) &&
+      loadFunction(avcodec, "avcodec_get_hw_config", api.avcodec_get_hw_config) &&
       loadFunction(avcodec, "avcodec_flush_buffers", api.avcodec_flush_buffers) &&
       loadFunction(avcodec, "avcodec_free_context", api.avcodec_free_context) &&
       loadFunction(avcodec, "av_packet_alloc", api.av_packet_alloc) &&
@@ -94,7 +95,11 @@ bool loadWindowsFFmpegApi(reashoot::platform::ffmpeg::FFmpegPlaybackApi &api) {
       loadFunction(avutil, "av_frame_free", api.av_frame_free) &&
       loadFunction(avutil, "av_frame_unref", api.av_frame_unref) &&
       loadFunction(avutil, "av_dict_get", api.av_dict_get) &&
-      loadFunction(avutil, "av_display_rotation_get", api.av_display_rotation_get);
+      loadFunction(avutil, "av_display_rotation_get", api.av_display_rotation_get) &&
+      loadFunction(avutil, "av_hwdevice_ctx_create", api.av_hwdevice_ctx_create) &&
+      loadFunction(avutil, "av_hwframe_transfer_data", api.av_hwframe_transfer_data) &&
+      loadFunction(avutil, "av_buffer_ref", api.av_buffer_ref) &&
+      loadFunction(avutil, "av_buffer_unref", api.av_buffer_unref);
   if (!loaded || !api.valid()) {
     playbackDebugLog("ffmpeg playback unavailable: required symbols not loaded");
     return false;
@@ -111,8 +116,10 @@ reashoot::platform::ffmpeg::FFmpegPlaybackApi *ffmpegPlaybackApi() {
 } // namespace
 
 std::unique_ptr<core::PlaybackPreview> createPlaybackPreview(core::VideoFrameCallback frameHandler) {
-  return reashoot::platform::ffmpeg::createPlaybackPreview(std::move(frameHandler), ffmpegPlaybackApi(), playbackDebugLog);
+  return reashoot::platform::ffmpeg::createPlaybackPreview(std::move(frameHandler),
+                                                           ffmpegPlaybackApi(),
+                                                           reashoot::platform::ffmpeg::PlaybackOptions{},
+                                                           playbackDebugLog);
 }
 
 } // namespace reashoot::platform::win32
-

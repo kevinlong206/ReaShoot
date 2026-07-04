@@ -26,7 +26,7 @@ ARCH_FLAGS ?= -arch $(shell uname -m)
 FFMPEG_ROOT_AUTO := $(shell for d in /opt/homebrew /usr/local; do if [ -f "$$d/include/libavcodec/avcodec.h" ] && [ -f "$$d/include/libavformat/avformat.h" ]; then echo $$d; break; fi; done)
 override FFMPEG_ROOT := $(or $(FFMPEG_ROOT),$(REASHOOT_FFMPEG_ROOT),$(FFMPEG_ROOT_AUTO))
 FFMPEG_CXXFLAGS := $(if $(FFMPEG_ROOT),-I$(FFMPEG_ROOT)/include,)
-FFMPEG_LDFLAGS := $(if $(FFMPEG_ROOT),-L$(FFMPEG_ROOT)/lib -lavformat -lavcodec -lavutil -Wl,-rpath,$(FFMPEG_ROOT)/lib,)
+FFMPEG_LDFLAGS := $(if $(FFMPEG_ROOT),-L$(FFMPEG_ROOT)/lib -lavformat -lavcodec -lavutil -Xlinker -rpath -Xlinker $(FFMPEG_ROOT)/lib,)
 CXXFLAGS := -std=c++17 -fobjc-arc -Wall -Wextra -Wno-unused-parameter -Isrc -isystem $(SDK_DIR) $(FFMPEG_CXXFLAGS) -F$(BUILD_DIR) $(ARCH_FLAGS)
 CORE_TEST_CXXFLAGS := -std=c++17 -Wall -Wextra -Wno-unused-parameter -Isrc $(ARCH_FLAGS)
 LDFLAGS := -dynamiclib -undefined dynamic_lookup $(ARCH_FLAGS) \

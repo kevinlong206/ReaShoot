@@ -5,9 +5,11 @@
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
+#include <libavutil/buffer.h>
 #include <libavutil/dict.h>
 #include <libavutil/display.h>
 #include <libavutil/frame.h>
+#include <libavutil/hwcontext.h>
 #include <libavutil/pixfmt.h>
 }
 
@@ -29,6 +31,7 @@ struct FFmpegPlaybackApi {
   using AvCodecOpen2Fn = int (*)(AVCodecContext *, const AVCodec *, AVDictionary **);
   using AvCodecSendPacketFn = int (*)(AVCodecContext *, const AVPacket *);
   using AvCodecReceiveFrameFn = int (*)(AVCodecContext *, AVFrame *);
+  using AvCodecGetHwConfigFn = const AVCodecHWConfig *(*)(const AVCodec *, int);
   using AvCodecFlushBuffersFn = void (*)(AVCodecContext *);
   using AvCodecFreeContextFn = void (*)(AVCodecContext **);
   using AvFrameAllocFn = AVFrame *(*)();
@@ -39,6 +42,10 @@ struct FFmpegPlaybackApi {
   using AvPacketUnrefFn = void (*)(AVPacket *);
   using AvDictGetFn = AVDictionaryEntry *(*)(const AVDictionary *, const char *, const AVDictionaryEntry *, int);
   using AvDisplayRotationGetFn = double (*)(const int32_t *);
+  using AvHwDeviceCtxCreateFn = int (*)(AVBufferRef **, AVHWDeviceType, const char *, AVDictionary *, int);
+  using AvHwFrameTransferDataFn = int (*)(AVFrame *, const AVFrame *, int);
+  using AvBufferRefFn = AVBufferRef *(*)(const AVBufferRef *);
+  using AvBufferUnrefFn = void (*)(AVBufferRef **);
 
   AvFormatOpenInputFn avformat_open_input = nullptr;
   AvFormatFindStreamInfoFn avformat_find_stream_info = nullptr;
@@ -51,6 +58,7 @@ struct FFmpegPlaybackApi {
   AvCodecOpen2Fn avcodec_open2 = nullptr;
   AvCodecSendPacketFn avcodec_send_packet = nullptr;
   AvCodecReceiveFrameFn avcodec_receive_frame = nullptr;
+  AvCodecGetHwConfigFn avcodec_get_hw_config = nullptr;
   AvCodecFlushBuffersFn avcodec_flush_buffers = nullptr;
   AvCodecFreeContextFn avcodec_free_context = nullptr;
   AvFrameAllocFn av_frame_alloc = nullptr;
@@ -61,15 +69,24 @@ struct FFmpegPlaybackApi {
   AvPacketUnrefFn av_packet_unref = nullptr;
   AvDictGetFn av_dict_get = nullptr;
   AvDisplayRotationGetFn av_display_rotation_get = nullptr;
+  AvHwDeviceCtxCreateFn av_hwdevice_ctx_create = nullptr;
+  AvHwFrameTransferDataFn av_hwframe_transfer_data = nullptr;
+  AvBufferRefFn av_buffer_ref = nullptr;
+  AvBufferUnrefFn av_buffer_unref = nullptr;
 
   bool valid() const;
 };
 
 using PlaybackLogCallback = std::function<void(const std::string &)>;
 
+struct PlaybackOptions {
+  AVHWDeviceType hardwareDeviceType = AV_HWDEVICE_TYPE_NONE;
+  std::string hardwareDeviceName;
+};
+
 std::unique_ptr<core::PlaybackPreview> createPlaybackPreview(core::VideoFrameCallback frameHandler,
                                                              FFmpegPlaybackApi *api,
+                                                             PlaybackOptions options,
                                                              PlaybackLogCallback log);
 
 } // namespace reashoot::platform::ffmpeg
-

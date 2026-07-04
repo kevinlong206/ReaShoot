@@ -24,6 +24,7 @@ ffmpeg::FFmpegPlaybackApi *macFFmpegPlaybackApi() {
       avcodec_open2,
       avcodec_send_packet,
       avcodec_receive_frame,
+      avcodec_get_hw_config,
       avcodec_flush_buffers,
       avcodec_free_context,
       av_frame_alloc,
@@ -34,6 +35,10 @@ ffmpeg::FFmpegPlaybackApi *macFFmpegPlaybackApi() {
       av_packet_unref,
       av_dict_get,
       av_display_rotation_get,
+      av_hwdevice_ctx_create,
+      av_hwframe_transfer_data,
+      av_buffer_ref,
+      av_buffer_unref,
   };
   return api.valid() ? &api : nullptr;
 }
@@ -45,8 +50,9 @@ void playbackDebugLog(const std::string &message) {
 } // namespace
 
 std::unique_ptr<core::PlaybackPreview> createPlaybackPreview(core::VideoFrameCallback frameHandler) {
-  return ffmpeg::createPlaybackPreview(std::move(frameHandler), macFFmpegPlaybackApi(), playbackDebugLog);
+  ffmpeg::PlaybackOptions options;
+  options.hardwareDeviceType = AV_HWDEVICE_TYPE_VIDEOTOOLBOX;
+  return ffmpeg::createPlaybackPreview(std::move(frameHandler), macFFmpegPlaybackApi(), std::move(options), playbackDebugLog);
 }
 
 } // namespace reashoot::platform::mac
-

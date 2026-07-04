@@ -48,6 +48,47 @@ void convertYUV420PToBGRA(const AVFrame *sourceFrame, core::VideoFrame &output) 
   }
 }
 
+void convertNV12ToBGRA(const AVFrame *sourceFrame, core::VideoFrame &output) {
+  const int sourceWidth = sourceFrame->width;
+  const int sourceHeight = sourceFrame->height;
+  for (int y = 0; y < output.height; ++y) {
+    const int sourceY = output.height == sourceHeight ? y : (y * sourceHeight) / output.height;
+    const uint8_t *yRow = sourceFrame->data[0] + static_cast<size_t>(sourceY) * static_cast<size_t>(sourceFrame->linesize[0]);
+    const uint8_t *uvRow = sourceFrame->data[1] + static_cast<size_t>(sourceY / 2) * static_cast<size_t>(sourceFrame->linesize[1]);
+    uint8_t *dst = output.pixels.data() + static_cast<size_t>(y) * static_cast<size_t>(output.strideBytes);
+    for (int x = 0; x < output.width; ++x) {
+      const int sourceX = output.width == sourceWidth ? x : (x * sourceWidth) / output.width;
+      const uint8_t *uv = uvRow + static_cast<size_t>(sourceX / 2) * 2u;
+      const int yy = static_cast<int>(yRow[sourceX]) - 16;
+      const int u = static_cast<int>(uv[0]) - 128;
+      const int v = static_cast<int>(uv[1]) - 128;
+      const int c = (std::max)(0, yy);
+      const int r = (298 * c + 409 * v + 128) >> 8;
+      const int g = (298 * c - 100 * u - 208 * v + 128) >> 8;
+      const int b = (298 * c + 516 * u + 128) >> 8;
+      dst[static_cast<size_t>(x) * 4 + 0] = clampByte(b);
+      dst[static_cast<size_t>(x) * 4 + 1] = clampByte(g);
+      dst[static_cast<size_t>(x) * 4 + 2] = clampByte(r);
+      dst[static_cast<size_t>(x) * 4 + 3] = 255;
+    }
+  }
+}
+
+bool convertFrameToBGRA(const AVFrame *sourceFrame, core::VideoFrame &output) {
+  if (!sourceFrame) {
+    return false;
+  }
+  if (sourceFrame->format == AV_PIX_FMT_YUV420P && sourceFrame->data[0] && sourceFrame->data[1] && sourceFrame->data[2]) {
+    convertYUV420PToBGRA(sourceFrame, output);
+    return true;
+  }
+  if (sourceFrame->format == AV_PIX_FMT_NV12 && sourceFrame->data[0] && sourceFrame->data[1]) {
+    convertNV12ToBGRA(sourceFrame, output);
+    return true;
+  }
+  return false;
+}
+
 int normalizeRotationDegrees(double degrees) {
   if (!std::isfinite(degrees)) {
     return 0;
@@ -104,8 +145,8 @@ core::VideoFrame rotateBGRAFrame(const core::VideoFrame &source, int rotationDeg
 
 class FFmpegPlaybackPreview final : public core::PlaybackPreview {
 public:
-  FFmpegPlaybackPreview(core::VideoFrameCallback frameHandler, FFmpegPlaybackApi *api, PlaybackLogCallback log)
-      : frameHandler_(std::move(frameHandler)), api_(api), log_(std::move(log)) {
+  FFmpegPlaybackPreview(core::VideoFrameCallback frameHandler, FFmpegPlaybackApi *api, PlaybackOptions options, PlaybackLogCallback log)
+      : frameHandler_(std::move(frameHandler)), api_(api), options_(std::move(options)), log_(std::move(log)) {
     if (api_ && api_->valid()) {
       worker_ = std::thread([this]() { workerLoop(); });
       ready_ = true;
@@ -186,8 +227,14 @@ private:
     if (frame_) {
       api_->av_frame_free(&frame_);
     }
+    if (softwareFrame_) {
+      api_->av_frame_free(&softwareFrame_);
+    }
     if (codecContext_) {
       api_->avcodec_free_context(&codecContext_);
+    }
+    if (hardwareDeviceContext_) {
+      api_->av_buffer_unref(&hardwareDeviceContext_);
     }
     if (formatContext_) {
       api_->avformat_close_input(&formatContext_);
@@ -197,7 +244,60 @@ private:
     lastDecoderSourceTime_ = -1.0;
     rotationDegrees_ = 0;
     soughtSinceOpen_ = false;
+    hardwarePixelFormat_ = AV_PIX_FMT_NONE;
+    hardwareFramesTransferred_ = 0;
     activePath_.clear();
+  }
+
+  static AVPixelFormat selectPixelFormat(AVCodecContext *context, const AVPixelFormat *pixelFormats) {
+    auto *preview = context ? static_cast<FFmpegPlaybackPreview *>(context->opaque) : nullptr;
+    if (preview && preview->hardwarePixelFormat_ != AV_PIX_FMT_NONE) {
+      for (const AVPixelFormat *format = pixelFormats; format && *format != AV_PIX_FMT_NONE; ++format) {
+        if (*format == preview->hardwarePixelFormat_) {
+          preview->log("ffmpeg playback hardware pixel format selected");
+          return *format;
+        }
+      }
+      preview->log("ffmpeg playback hardware pixel format unavailable; using software pixel format");
+    }
+    return pixelFormats ? pixelFormats[0] : AV_PIX_FMT_NONE;
+  }
+
+  bool configureHardwareDecoder(const AVCodec *codec) {
+    hardwarePixelFormat_ = AV_PIX_FMT_NONE;
+    if (!api_ || options_.hardwareDeviceType == AV_HWDEVICE_TYPE_NONE) {
+      return false;
+    }
+    if (!api_->av_hwdevice_ctx_create || !api_->avcodec_get_hw_config || !api_->av_buffer_ref) {
+      log("ffmpeg playback hardware unavailable: required API missing");
+      return false;
+    }
+    const AVCodecHWConfig *selectedConfig = nullptr;
+    for (int i = 0;; ++i) {
+      const AVCodecHWConfig *config = api_->avcodec_get_hw_config(codec, i);
+      if (!config) {
+        break;
+      }
+      if ((config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX) &&
+          config->device_type == options_.hardwareDeviceType) {
+        selectedConfig = config;
+        break;
+      }
+    }
+    if (!selectedConfig) {
+      log("ffmpeg playback hardware unavailable: decoder does not support requested device");
+      return false;
+    }
+    AVBufferRef *deviceContext = nullptr;
+    const char *deviceName = options_.hardwareDeviceName.empty() ? nullptr : options_.hardwareDeviceName.c_str();
+    if (api_->av_hwdevice_ctx_create(&deviceContext, options_.hardwareDeviceType, deviceName, nullptr, 0) < 0 || !deviceContext) {
+      log("ffmpeg playback hardware unavailable: device creation failed");
+      return false;
+    }
+    hardwareDeviceContext_ = deviceContext;
+    hardwarePixelFormat_ = selectedConfig->pix_fmt;
+    log("ffmpeg playback hardware decoder enabled");
+    return true;
   }
 
   int rotationForStream(const AVStream *stream) const {
@@ -245,12 +345,24 @@ private:
     AVStream *stream = formatContext_->streams[videoStreamIndex_];
     codecContext_ = api_->avcodec_alloc_context3(codec);
     frame_ = api_->av_frame_alloc();
+    softwareFrame_ = api_->av_frame_alloc();
     packet_ = api_->av_packet_alloc();
-    if (!codecContext_ || !frame_ || !packet_ ||
+    if (!codecContext_ || !frame_ || !softwareFrame_ || !packet_ ||
         api_->avcodec_parameters_to_context(codecContext_, stream->codecpar) < 0) {
       log("ffmpeg playback codec setup failed path=" + path);
       close();
       return false;
+    }
+    configureHardwareDecoder(codec);
+    if (hardwareDeviceContext_) {
+      codecContext_->opaque = this;
+      codecContext_->get_format = &FFmpegPlaybackPreview::selectPixelFormat;
+      codecContext_->hw_device_ctx = api_->av_buffer_ref(hardwareDeviceContext_);
+      if (!codecContext_->hw_device_ctx) {
+        log("ffmpeg playback hardware unavailable: device context ref failed");
+        api_->av_buffer_unref(&hardwareDeviceContext_);
+        hardwarePixelFormat_ = AV_PIX_FMT_NONE;
+      }
     }
     codecContext_->thread_count = 0;
     codecContext_->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
@@ -368,19 +480,32 @@ private:
   }
 
   bool emitFrame(double requestedSourceTime, double frameTime, std::chrono::steady_clock::time_point renderStarted) {
-    if (!frameHandler_ || !frame_ || frame_->format != AV_PIX_FMT_YUV420P || !frame_->data[0] || !frame_->data[1] || !frame_->data[2]) {
+    if (!frameHandler_ || !frame_) {
       ++emitFailures_;
       return false;
     }
-    const int sourceWidth = frame_->width;
-    const int sourceHeight = frame_->height;
+    const AVFrame *sourceFrame = frame_;
+    if (frame_->format == hardwarePixelFormat_ && hardwarePixelFormat_ != AV_PIX_FMT_NONE) {
+      api_->av_frame_unref(softwareFrame_);
+      if (!api_->av_hwframe_transfer_data || api_->av_hwframe_transfer_data(softwareFrame_, frame_, 0) < 0) {
+        ++emitFailures_;
+        return false;
+      }
+      sourceFrame = softwareFrame_;
+      ++hardwareFramesTransferred_;
+    }
+    const int sourceWidth = sourceFrame->width;
+    const int sourceHeight = sourceFrame->height;
     const double scale = (std::min)(1.0, kPlaybackPreviewMaxDimension / static_cast<double>((std::max)(sourceWidth, sourceHeight)));
     core::VideoFrame unrotated;
     unrotated.width = (std::max)(1, static_cast<int>(std::round(sourceWidth * scale)));
     unrotated.height = (std::max)(1, static_cast<int>(std::round(sourceHeight * scale)));
     unrotated.strideBytes = unrotated.width * 4;
     unrotated.pixels.resize(static_cast<size_t>(unrotated.strideBytes) * static_cast<size_t>(unrotated.height));
-    convertYUV420PToBGRA(frame_, unrotated);
+    if (!convertFrameToBGRA(sourceFrame, unrotated)) {
+      ++emitFailures_;
+      return false;
+    }
     core::VideoFrame output = rotateBGRAFrame(unrotated, rotationDegrees_);
     {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -399,6 +524,7 @@ private:
                 << " rotation=" << rotationDegrees_
                 << " output=" << output.width << "x" << output.height
                 << " render_ms=" << std::chrono::duration<double, std::milli>(now - renderStarted).count()
+                << " hw_frames=" << hardwareFramesTransferred_
                 << " decoded=" << decodedFrames_
                 << " emitted=" << emittedFrames_
                 << " stale_drop=" << droppedStaleFrames_
@@ -422,11 +548,15 @@ private:
   bool ready_ = false;
   core::VideoFrameCallback frameHandler_;
   FFmpegPlaybackApi *api_ = nullptr;
+  PlaybackOptions options_;
   PlaybackLogCallback log_;
   AVFormatContext *formatContext_ = nullptr;
   AVCodecContext *codecContext_ = nullptr;
   AVFrame *frame_ = nullptr;
+  AVFrame *softwareFrame_ = nullptr;
   AVPacket *packet_ = nullptr;
+  AVBufferRef *hardwareDeviceContext_ = nullptr;
+  AVPixelFormat hardwarePixelFormat_ = AV_PIX_FMT_NONE;
   int videoStreamIndex_ = -1;
   int64_t streamStartTime_ = 0;
   std::string activePath_;
@@ -437,6 +567,7 @@ private:
   std::chrono::steady_clock::time_point lastLog_;
   uint64_t decodedFrames_ = 0;
   uint64_t emittedFrames_ = 0;
+  uint64_t hardwareFramesTransferred_ = 0;
   uint64_t droppedStaleFrames_ = 0;
   uint64_t seeks_ = 0;
   uint64_t failedSeeks_ = 0;
@@ -451,15 +582,17 @@ private:
 bool FFmpegPlaybackApi::valid() const {
   return avformat_open_input && avformat_find_stream_info && av_find_best_stream && avformat_close_input &&
          av_seek_frame && av_read_frame && avcodec_alloc_context3 && avcodec_parameters_to_context &&
-         avcodec_open2 && avcodec_send_packet && avcodec_receive_frame && avcodec_flush_buffers &&
+         avcodec_open2 && avcodec_send_packet && avcodec_receive_frame && avcodec_get_hw_config && avcodec_flush_buffers &&
          avcodec_free_context && av_frame_alloc && av_frame_free && av_frame_unref && av_packet_alloc &&
-         av_packet_free && av_packet_unref && av_dict_get && av_display_rotation_get;
+         av_packet_free && av_packet_unref && av_dict_get && av_display_rotation_get && av_hwdevice_ctx_create &&
+         av_hwframe_transfer_data && av_buffer_ref && av_buffer_unref;
 }
 
 std::unique_ptr<core::PlaybackPreview> createPlaybackPreview(core::VideoFrameCallback frameHandler,
                                                              FFmpegPlaybackApi *api,
+                                                             PlaybackOptions options,
                                                              PlaybackLogCallback log) {
-  return std::make_unique<FFmpegPlaybackPreview>(std::move(frameHandler), api, std::move(log));
+  return std::make_unique<FFmpegPlaybackPreview>(std::move(frameHandler), api, std::move(options), std::move(log));
 }
 
 } // namespace reashoot::platform::ffmpeg
