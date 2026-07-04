@@ -56,6 +56,7 @@ public final class ReaShootService: ObservableObject {
     private var httpServer: HTTPRecordingServer?
     private var previewStreamServer: PreviewStreamServer?
     private var previewEncoder: PreviewH264Encoder?
+    private var previewClientCount = 0
     private var netService: NetService?
     private var cancellables: Set<AnyCancellable> = []
 
@@ -114,9 +115,18 @@ public final class ReaShootService: ObservableObject {
             self.httpServer = httpServer
 
             let previewDescriptor = PreviewDescriptor(port: Int(previewPort))
-            let previewServer = PreviewStreamServer(port: previewPort, descriptor: previewDescriptor) { [weak self] token in
-                self?.pairingStore.validate(token: token) ?? false
-            }
+            let previewServer = PreviewStreamServer(
+                port: previewPort,
+                descriptor: previewDescriptor,
+                tokenValidator: { [weak self] token in
+                    self?.pairingStore.validate(token: token) ?? false
+                },
+                clientCountChanged: { [weak self] count in
+                    Task { @MainActor in
+                        self?.previewClientCountDidChange(count)
+                    }
+                }
+            )
             try previewServer.start()
             self.previewStreamServer = previewServer
 
@@ -146,6 +156,7 @@ public final class ReaShootService: ObservableObject {
         stopPreviewStream()
         previewStreamServer?.stop()
         previewStreamServer = nil
+        previewClientCount = 0
         httpServer?.stop()
         httpServer = nil
         netService?.stop()
@@ -285,13 +296,12 @@ public final class ReaShootService: ObservableObject {
             }
             do {
                 let preview = try startPreviewStream()
-                status = "Preview streaming"
-                previewStatus = "Streaming"
+                updatePreviewStatus()
                 return try ProtocolCodec.encodeEvent(ControlEvent(
                     requestID: command.requestID,
                     type: .previewStarted,
                     preview: preview,
-                    message: "Preview streaming"
+                    message: previewClientCount > 0 ? "Preview streaming" : "Preview ready"
                 ))
             } catch {
                 stopPreviewStream()
@@ -303,8 +313,7 @@ public final class ReaShootService: ObservableObject {
                 return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .error, message: "Unauthorized"))
             }
             stopPreviewStream()
-            status = "Preview stopped"
-            previewStatus = "Idle"
+            updatePreviewStatus()
             return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .previewStopped, message: "Preview stopped"))
         }
     }
@@ -331,6 +340,28 @@ public final class ReaShootService: ObservableObject {
         capture.setPreviewSampleBufferConsumer(nil)
         previewEncoder?.stop()
         previewEncoder = nil
+    }
+
+    private func previewClientCountDidChange(_ count: Int) {
+        previewClientCount = count
+        updatePreviewStatus()
+    }
+
+    private func updatePreviewStatus() {
+        if previewEncoder != nil {
+            if previewClientCount > 0 {
+                status = "Preview streaming"
+                previewStatus = "Streaming"
+            } else {
+                status = webSocketServer == nil ? "Ready" : "Listening on Wi-Fi"
+                previewStatus = "Waiting for REAPER"
+            }
+            return
+        }
+        previewStatus = "Idle"
+        if status == "Preview streaming" {
+            status = webSocketServer == nil ? "Ready" : "Listening on Wi-Fi"
+        }
     }
 
     private func advertiseBonjour() throws {

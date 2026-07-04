@@ -19,6 +19,7 @@ final class PreviewStreamServer {
     private let port: UInt16
     private let descriptor: PreviewDescriptor
     private let tokenValidator: (String) -> Bool
+    private let clientCountChanged: (Int) -> Void
     private let queue = DispatchQueue(label: "com.kevinlong.reashoot.preview-stream")
     private let lock = NSLock()
     private var listener: NWListener?
@@ -29,10 +30,16 @@ final class PreviewStreamServer {
         return clients.count
     }
 
-    init(port: UInt16, descriptor: PreviewDescriptor, tokenValidator: @escaping (String) -> Bool) {
+    init(
+        port: UInt16,
+        descriptor: PreviewDescriptor,
+        tokenValidator: @escaping (String) -> Bool,
+        clientCountChanged: @escaping (Int) -> Void = { _ in }
+    ) {
         self.port = port
         self.descriptor = descriptor
         self.tokenValidator = tokenValidator
+        self.clientCountChanged = clientCountChanged
     }
 
     func start() throws {
@@ -53,6 +60,7 @@ final class PreviewStreamServer {
         let activeClients = Array(clients.values)
         clients.removeAll()
         lock.unlock()
+        clientCountChanged(0)
         for client in activeClients {
             client.connection.cancel()
         }
@@ -131,6 +139,7 @@ final class PreviewStreamServer {
         let count = clients.count
         lock.unlock()
         DebugLog.write("preview client connected count=\(count)")
+        clientCountChanged(count)
     }
 
     private func remove(_ client: Client) {
@@ -140,6 +149,7 @@ final class PreviewStreamServer {
         lock.unlock()
         if removed {
             DebugLog.write("preview client disconnected count=\(count)")
+            clientCountChanged(count)
         }
         client.connection.cancel()
     }
