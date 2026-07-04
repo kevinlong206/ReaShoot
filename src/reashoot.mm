@@ -115,6 +115,7 @@ constexpr double kAlignmentSampleRefineSearchSeconds = 0.030;
 constexpr double kAlignmentSearchSeconds = 5.0;
 constexpr double kAlignmentMinimumScore = 0.15;
 constexpr int kAlignmentRetryLimit = 15;
+constexpr NSTimeInterval kPreviewFrameTimeoutSeconds = 5.0;
 NSString *kDebugLogPath = @"/tmp/reashoot_debug.log";
 
 constexpr const char *kExtStateKeys[] = {
@@ -1240,6 +1241,8 @@ void setVideoEnabled(bool enabled);
 @property(nonatomic, assign) BOOL previewStreamFailed;
 @property(nonatomic, assign) BOOL swellPreviewReceivedAccessUnit;
 @property(nonatomic, assign) BOOL swellPreviewReceivedFrame;
+@property(nonatomic, strong) NSDate *lastPreviewFrameDate;
+@property(nonatomic, assign) BOOL previewFrameStale;
 @property(nonatomic, copy) NSString *previewStreamFailureReason;
 @property(nonatomic, copy) void (^stopCompletion)(NSString *path, NSError *error);
 @property(nonatomic, copy) NSString *activeRemoteDownloadDirectory;
@@ -1270,6 +1273,7 @@ void setVideoEnabled(bool enabled);
 - (void)stopAllPreviewActivity;
 - (void)startPreviewStreamWithFields:(NSDictionary<NSString *, NSString *> *)fields;
 - (void)stopPreviewStream;
+- (void)checkPreviewFrameTimeout;
 - (NSString *)runReaShootCommand:(NSString *)command
                    extraArguments:(NSArray<NSString *> *)extraArguments
                             error:(NSError **)error;
@@ -1297,7 +1301,13 @@ void setVideoEnabled(bool enabled);
   if (!_swellPreviewRenderer) {
     _swellPreviewRenderer = reashoot::platform::mac::createH264PreviewRenderer([weakSelf](const reashoot::core::VideoFrame &frame) {
       ReaShootRecorder *strongSelf = weakSelf;
-      if (strongSelf && !strongSelf.swellPreviewReceivedFrame) {
+      if (!strongSelf) {
+        return;
+      }
+      strongSelf.lastPreviewFrameDate = [NSDate date];
+      const BOOL wasStale = strongSelf.previewFrameStale;
+      strongSelf.previewFrameStale = NO;
+      if (!strongSelf.swellPreviewReceivedFrame || wasStale) {
         strongSelf.swellPreviewReceivedFrame = YES;
         [strongSelf setStatus:@"ReaShoot live video"];
       }
@@ -2315,6 +2325,8 @@ void setVideoEnabled(bool enabled);
     }
     strongSelf.previewStreamStarting = NO;
     strongSelf.previewStreamActive = YES;
+    strongSelf.lastPreviewFrameDate = [NSDate date];
+    strongSelf.previewFrameStale = NO;
     [strongSelf setStatus:@"Preview: H.264 stream"];
     [strongSelf updateCaptureFormatLabel];
   },
@@ -2343,6 +2355,8 @@ void setVideoEnabled(bool enabled);
   self.previewStreamFailureReason = nil;
   self.swellPreviewReceivedAccessUnit = NO;
   self.swellPreviewReceivedFrame = NO;
+  self.lastPreviewFrameDate = nil;
+  self.previewFrameStale = NO;
   if (_swellPreviewRenderer) {
     _swellPreviewRenderer->reset();
   }
@@ -2354,11 +2368,29 @@ void setVideoEnabled(bool enabled);
   self.previewStreamActive = NO;
   self.swellPreviewReceivedAccessUnit = NO;
   self.swellPreviewReceivedFrame = NO;
+  self.lastPreviewFrameDate = nil;
+  self.previewFrameStale = NO;
   if (_previewStreamClient) {
     _previewStreamClient->stop();
   }
   if (_swellPreviewRenderer) {
     _swellPreviewRenderer->reset();
+  }
+}
+
+- (void)checkPreviewFrameTimeout {
+  if (self.showingPlayback || !self.previewStreamActive || self.previewFrameStale) {
+    return;
+  }
+  NSDate *lastFrameDate = self.lastPreviewFrameDate;
+  if (!lastFrameDate || [[NSDate date] timeIntervalSinceDate:lastFrameDate] < kPreviewFrameTimeoutSeconds) {
+    return;
+  }
+  self.previewFrameStale = YES;
+  self.swellPreviewReceivedFrame = NO;
+  [self setStatus:@"Preview: no video received from iPhone"];
+  if (g_swellPanelPrototype) {
+    reashoot::platform::swell::setSwellPanelPreviewPending(g_swellPanelPrototype, "Preview: no video received from iPhone");
   }
 }
 
@@ -2748,6 +2780,7 @@ void timerPoll() {
   @autoreleasepool {
     processPendingInsert();
     processPendingAlignment();
+    [recorder() checkPreviewFrameTimeout];
 
     if (!g_videoEnabled) {
       g_previousPlayState = 0;
