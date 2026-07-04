@@ -13,6 +13,7 @@
 @property(nonatomic, assign) CMVideoFormatDescriptionRef formatDescription;
 @property(nonatomic, assign) VTDecompressionSessionRef decompressionSession;
 @property(nonatomic, copy) ReaShootMacH264FrameHandler frameHandler;
+@property(nonatomic, copy) ReaShootMacDecoderStatusHandler decoderStatusHandler;
 - (void)handlePixelBuffer:(CVPixelBufferRef)pixelBuffer;
 @end
 
@@ -40,10 +41,12 @@ void ReaShootMacH264FrameDecoderOutputCallback(void *refCon,
 
 @implementation ReaShootMacH264FrameDecoder
 
-- (instancetype)initWithFrameHandler:(ReaShootMacH264FrameHandler)frameHandler {
+- (instancetype)initWithFrameHandler:(ReaShootMacH264FrameHandler)frameHandler
+                decoderStatusHandler:(ReaShootMacDecoderStatusHandler)decoderStatusHandler {
   self = [super init];
   if (self) {
     _frameHandler = [frameHandler copy];
+    _decoderStatusHandler = [decoderStatusHandler copy];
   }
   return self;
 }
@@ -85,7 +88,25 @@ void ReaShootMacH264FrameDecoderOutputCallback(void *refCon,
                                                  (__bridge CFDictionaryRef)attributes,
                                                  &callback,
                                                  &_decompressionSession);
-  return status == noErr && self.decompressionSession;
+  if (status != noErr || !self.decompressionSession) {
+    return NO;
+  }
+  if (self.decoderStatusHandler) {
+    BOOL hardwareAccelerated = NO;
+    CFTypeRef usingHardware = nullptr;
+    if (VTSessionCopyProperty(self.decompressionSession,
+                              kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder,
+                              kCFAllocatorDefault,
+                              &usingHardware) == noErr &&
+        usingHardware) {
+      if (CFGetTypeID(usingHardware) == CFBooleanGetTypeID()) {
+        hardwareAccelerated = CFBooleanGetValue(static_cast<CFBooleanRef>(usingHardware));
+      }
+      CFRelease(usingHardware);
+    }
+    self.decoderStatusHandler(hardwareAccelerated, "VideoToolbox");
+  }
+  return YES;
 }
 
 - (void)decodeAccessUnit:(NSData *)accessUnit {
@@ -231,7 +252,7 @@ namespace {
 
 class MacH264PreviewRenderer final : public core::PreviewRenderer {
 public:
-  explicit MacH264PreviewRenderer(core::VideoFrameCallback frameHandler) {
+  MacH264PreviewRenderer(core::VideoFrameCallback frameHandler, core::DecoderStatusCallback decoderStatusHandler) {
     decoder_ = [[ReaShootMacH264FrameDecoder alloc] initWithFrameHandler:^(const void *pixels, int width, int height, int strideBytes) {
       if (!frameHandler || !pixels || width <= 0 || height <= 0 || strideBytes <= 0) {
         return;
@@ -244,6 +265,14 @@ public:
       const auto *bytes = static_cast<const uint8_t *>(pixels);
       frame.pixels.assign(bytes, bytes + byteCount);
       frameHandler(frame);
+    } decoderStatusHandler:^(BOOL hardwareAccelerated, const char *system) {
+      if (!decoderStatusHandler) {
+        return;
+      }
+      core::DecoderStatus status;
+      status.hardwareAccelerated = hardwareAccelerated;
+      status.system = system && system[0] ? system : "VideoToolbox";
+      decoderStatusHandler(status);
     }];
   }
 
@@ -263,8 +292,9 @@ private:
 
 } // namespace
 
-std::unique_ptr<core::PreviewRenderer> createH264PreviewRenderer(core::VideoFrameCallback frameHandler) {
-  return std::make_unique<MacH264PreviewRenderer>(std::move(frameHandler));
+std::unique_ptr<core::PreviewRenderer> createH264PreviewRenderer(core::VideoFrameCallback frameHandler,
+                                                                 core::DecoderStatusCallback decoderStatusHandler) {
+  return std::make_unique<MacH264PreviewRenderer>(std::move(frameHandler), std::move(decoderStatusHandler));
 }
 
 } // namespace reashoot::platform::mac

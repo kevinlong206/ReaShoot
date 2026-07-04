@@ -739,8 +739,8 @@ FFmpegApi *ffmpegApi() {
 
 class FFmpegH264PreviewRenderer final : public core::PreviewRenderer {
 public:
-  explicit FFmpegH264PreviewRenderer(core::VideoFrameCallback frameHandler)
-      : frameHandler_(std::move(frameHandler)) {
+  FFmpegH264PreviewRenderer(core::VideoFrameCallback frameHandler, core::DecoderStatusCallback decoderStatusHandler)
+      : frameHandler_(std::move(frameHandler)), decoderStatusHandler_(std::move(decoderStatusHandler)) {
     previewDebugLog("ffmpeg renderer ctor begin");
     api_ = ffmpegApi();
     if (!api_) {
@@ -924,7 +924,18 @@ private:
       return false;
     }
     lastFrameEmit_ = {};
+    notifyDecoderStatus(false, "FFmpeg software");
     return true;
+  }
+
+  void notifyDecoderStatus(bool hardwareAccelerated, const std::string &system) {
+    if (!decoderStatusHandler_) {
+      return;
+    }
+    core::DecoderStatus status;
+    status.hardwareAccelerated = hardwareAccelerated;
+    status.system = system;
+    decoderStatusHandler_(status);
   }
 
   bool ensureCodecContextForAccessUnit(const uint8_t *bytes, size_t length) {
@@ -1062,6 +1073,7 @@ private:
   FFmpegApi *api_ = nullptr;
   const AVCodec *codec_ = nullptr;
   core::VideoFrameCallback frameHandler_;
+  core::DecoderStatusCallback decoderStatusHandler_;
   AVCodecContext *codecContext_ = nullptr;
   AVFrame *frame_ = nullptr;
   AVPacket *packet_ = nullptr;
@@ -1080,8 +1092,14 @@ private:
 
 class Win32H264PreviewRenderer final : public core::PreviewRenderer {
 public:
-  Win32H264PreviewRenderer(core::VideoFrameCallback frameHandler, int expectedWidth, int expectedHeight)
-      : frameHandler_(std::move(frameHandler)), expectedWidth_(expectedWidth), expectedHeight_(expectedHeight) {
+  Win32H264PreviewRenderer(core::VideoFrameCallback frameHandler,
+                           core::DecoderStatusCallback decoderStatusHandler,
+                           int expectedWidth,
+                           int expectedHeight)
+      : frameHandler_(std::move(frameHandler)),
+        decoderStatusHandler_(std::move(decoderStatusHandler)),
+        expectedWidth_(expectedWidth),
+        expectedHeight_(expectedHeight) {
     decodeWorker_ = std::thread([this]() { decodeLoop(); });
   }
 
@@ -1292,7 +1310,18 @@ private:
     decoder_->ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0);
     decoder_->ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0);
     initialized_ = true;
+    notifyDecoderStatus(false, "Media Foundation");
     return true;
+  }
+
+  void notifyDecoderStatus(bool hardwareAccelerated, const std::string &system) {
+    if (!decoderStatusHandler_) {
+      return;
+    }
+    core::DecoderStatus status;
+    status.hardwareAccelerated = hardwareAccelerated;
+    status.system = system;
+    decoderStatusHandler_(status);
   }
 
   bool setOutputType() {
@@ -1623,6 +1652,7 @@ private:
   bool requireQueuedKeyframe_ = true;
   bool queueStopped_ = false;
   core::VideoFrameCallback frameHandler_;
+  core::DecoderStatusCallback decoderStatusHandler_;
   int expectedWidth_ = 0;
   int expectedHeight_ = 0;
   ComPtr<IMFTransform> decoder_;
@@ -1650,15 +1680,16 @@ private:
 } // namespace
 
 std::unique_ptr<core::PreviewRenderer> createH264PreviewRenderer(core::VideoFrameCallback frameHandler,
+                                                                 core::DecoderStatusCallback decoderStatusHandler,
                                                                  int expectedWidth,
                                                                  int expectedHeight) {
 #if REASHOOT_WITH_FFMPEG_DECODER
-  auto ffmpegRenderer = std::make_unique<FFmpegH264PreviewRenderer>(frameHandler);
+  auto ffmpegRenderer = std::make_unique<FFmpegH264PreviewRenderer>(frameHandler, decoderStatusHandler);
   if (ffmpegRenderer->ready()) {
     return ffmpegRenderer;
   }
 #endif
-  return std::make_unique<Win32H264PreviewRenderer>(std::move(frameHandler), expectedWidth, expectedHeight);
+  return std::make_unique<Win32H264PreviewRenderer>(std::move(frameHandler), std::move(decoderStatusHandler), expectedWidth, expectedHeight);
 }
 
 } // namespace reashoot::platform::win32

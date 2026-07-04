@@ -37,6 +37,13 @@ struct VideoFrame {
 using VideoFrameCallback = std::function<void(const VideoFrame &)>;
 using BinaryDataCallback = std::function<void(std::vector<uint8_t>)>;
 
+struct DecoderStatus {
+  bool hardwareAccelerated = false;
+  std::string system;
+};
+
+using DecoderStatusCallback = std::function<void(const DecoderStatus &status)>;
+
 class AsyncCommandHandle {
 public:
   virtual ~AsyncCommandHandle() = default;

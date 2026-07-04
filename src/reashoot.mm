@@ -1226,6 +1226,8 @@ void setVideoEnabled(bool enabled);
 @property(nonatomic, assign) BOOL recordingVisualState;
 @property(nonatomic, assign) BOOL showingPlayback;
 @property(nonatomic, copy) NSString *playbackDecoderStatus;
+@property(nonatomic, copy) NSString *previewDecoderStatus;
+@property(nonatomic, assign) BOOL transferProgressActive;
 @property(nonatomic, assign) BOOL remoteRecording;
 - (void)ensureDockView;
 - (void)ensurePreviewAdapters;
@@ -1285,7 +1287,9 @@ void setVideoEnabled(bool enabled);
       strongSelf.previewFrameStale = NO;
       if (!strongSelf.swellPreviewReceivedFrame || wasStale) {
         strongSelf.swellPreviewReceivedFrame = YES;
-        [strongSelf setStatus:@"ReaShoot live video"];
+        if (!strongSelf.transferProgressActive) {
+          [strongSelf setStatus:@"ReaShoot live video"];
+        }
       }
       if (g_swellPanelPrototypeDocked && g_swellPanelPrototype && !frame.pixels.empty()) {
         reashoot::platform::swell::setSwellPanelPreviewFrame(g_swellPanelPrototype,
@@ -1294,6 +1298,21 @@ void setVideoEnabled(bool enabled);
                                                              frame.height,
                                                              frame.strideBytes);
       }
+    }, [weakSelf](const reashoot::core::DecoderStatus &status) {
+      ReaShootRecorder *strongSelf = weakSelf;
+      if (!strongSelf) {
+        return;
+      }
+      const std::string system = status.system.empty() ? (status.hardwareAccelerated ? "hardware" : "VideoToolbox") : status.system;
+      NSString *statusText = [NSString stringWithFormat:@"%@ decode: %s",
+                                                        status.hardwareAccelerated ? @"HW" : @"Software",
+                                                        system.c_str()];
+      dispatch_async(dispatch_get_main_queue(), ^{
+        strongSelf.previewDecoderStatus = statusText;
+        if (!strongSelf.showingPlayback) {
+          [strongSelf updateCaptureFormatLabel];
+        }
+      });
     });
   }
   if (!_playbackPreviewRenderer) {
@@ -1317,7 +1336,7 @@ void setVideoEnabled(bool enabled);
       dispatch_async(dispatch_get_main_queue(), ^{
         strongSelf.playbackDecoderStatus = statusText;
         if (strongSelf.showingPlayback) {
-          [strongSelf setStatus:[NSString stringWithFormat:@"Playback: %@", statusText]];
+          [strongSelf updateCaptureFormatLabel];
         }
       });
     });
@@ -1519,6 +1538,7 @@ void setVideoEnabled(bool enabled);
 - (void)handleReaShootProgressLine:(NSString *)line {
   const std::string status = reashoot::core::progressStatusText(line.UTF8String ?: "");
   if (!status.empty()) {
+    self.transferProgressActive = YES;
     [self setStatus:stringFromStd(status)];
   }
 }
@@ -1541,6 +1561,7 @@ void setVideoEnabled(bool enabled);
   descriptor.checksum = stdStringFromNSString(recording[@"checksum"] ?: @"");
   NSArray<NSString *> *arguments = stringArrayFromStdVector(
       reashoot::core::downloadArguments([self remoteCameraSettings], descriptor, stdStringFromNSString(directory ?: NSHomeDirectory())));
+  self.transferProgressActive = YES;
   [self setStatus:@"Downloading iPhone video"];
   __block NSDate *lastProgressDate = [NSDate date];
   __block std::shared_ptr<reashoot::core::AsyncCommandHandle> downloadTask;
@@ -1561,6 +1582,7 @@ void setVideoEnabled(bool enabled);
     [self handleReaShootProgressLine:line];
   } completion:^(NSString *output, NSError *error) {
     cancelWatchdog();
+    self.transferProgressActive = NO;
     if (error) {
       debugLog(@"download failed error=%@ output=%@", error.localizedDescription ?: @"", output ?: @"");
       [self setStatus:@"iPhone download failed"];
@@ -1597,6 +1619,7 @@ void setVideoEnabled(bool enabled);
     });
     dispatch_resume(watchdogTimer);
   } else {
+    self.transferProgressActive = NO;
     debugLog(@"download helper failed to launch");
   }
 }
@@ -1839,7 +1862,14 @@ void setVideoEnabled(bool enabled);
   profile.zoom = g_iPhoneZoom;
   profile.look = g_iPhoneLook;
   const std::string formatText = reashoot::core::captureFormatText(profile, self.previewStreamActive, self.previewStreamStarting);
-  NSString *format = [NSString stringWithUTF8String:formatText.c_str()];
+  NSMutableString *format = [NSMutableString stringWithUTF8String:formatText.c_str()];
+  if (self.showingPlayback) {
+    NSString *decoderStatus = self.playbackDecoderStatus.length > 0 ? self.playbackDecoderStatus : @"decode: starting";
+    [format appendFormat:@" | Playback %@", decoderStatus];
+  } else if (self.previewStreamActive || self.previewStreamStarting) {
+    NSString *decoderStatus = self.previewDecoderStatus.length > 0 ? self.previewDecoderStatus : @"decode: starting";
+    [format appendFormat:@" | Preview %@", decoderStatus];
+  }
   if (g_swellPanelPrototype) {
     NSString *status = self.statusText ?: [NSString stringWithUTF8String:followStatusText().c_str()];
     reashoot::platform::swell::updateSwellPanelProbe(g_swellPanelPrototype,
@@ -2160,6 +2190,7 @@ void setVideoEnabled(bool enabled);
   if (!_previewStreamClient->isRunning() && !self.previewStreamStarting) {
     self.previewStreamFailed = NO;
     self.previewStreamFailureReason = nil;
+    self.previewDecoderStatus = nil;
   }
   if (self.iPhonePreviewProfileConfiguring) {
     return;
@@ -2251,7 +2282,9 @@ void setVideoEnabled(bool enabled);
     }
     if (!strongSelf.swellPreviewReceivedAccessUnit) {
       strongSelf.swellPreviewReceivedAccessUnit = YES;
-      [strongSelf setStatus:@"Preview: H.264 received; decoding for SWELL"];
+      if (!strongSelf.transferProgressActive) {
+        [strongSelf setStatus:@"Preview: H.264 received; decoding for SWELL"];
+      }
     }
     if (strongSelf->_swellPreviewRenderer && !accessUnit.empty()) {
       strongSelf->_swellPreviewRenderer->renderAnnexBAccessUnit(accessUnit.data(), accessUnit.size());
@@ -2266,7 +2299,9 @@ void setVideoEnabled(bool enabled);
     strongSelf.previewStreamActive = YES;
     strongSelf.lastPreviewFrameDate = [NSDate date];
     strongSelf.previewFrameStale = NO;
-    [strongSelf setStatus:@"Preview: H.264 stream"];
+    if (!strongSelf.transferProgressActive) {
+      [strongSelf setStatus:@"Preview: H.264 stream"];
+    }
     [strongSelf updateCaptureFormatLabel];
   },
                                             [weakSelf](const std::string &error) {
@@ -2278,20 +2313,25 @@ void setVideoEnabled(bool enabled);
     strongSelf.previewStreamActive = NO;
     strongSelf.previewStreamFailed = YES;
     strongSelf.previewStreamFailureReason = stringFromStd(error.empty() ? "Preview stream failed" : error);
+    strongSelf.previewDecoderStatus = nil;
     if (!strongSelf.showingPlayback && !strongSelf.recordingVisualState) {
       [strongSelf setStatus:@"Preview: stream disconnected"];
+      [strongSelf updateCaptureFormatLabel];
     }
   });
   if (!started) {
     self.previewStreamFailed = YES;
     self.previewStreamFailureReason = @"Invalid preview URL";
+    self.previewDecoderStatus = nil;
     [self setStatus:@"Preview: invalid stream URL"];
+    [self updateCaptureFormatLabel];
     return;
   }
 
   self.previewStreamStarting = YES;
   self.previewStreamActive = NO;
   self.previewStreamFailureReason = nil;
+  self.previewDecoderStatus = nil;
   self.swellPreviewReceivedAccessUnit = NO;
   self.swellPreviewReceivedFrame = NO;
   self.lastPreviewFrameDate = nil;
@@ -2300,6 +2340,7 @@ void setVideoEnabled(bool enabled);
     _swellPreviewRenderer->reset();
   }
   [self setStatus:@"Preview: connecting H.264 stream"];
+  [self updateCaptureFormatLabel];
 }
 
 - (void)stopPreviewStream {
@@ -2309,12 +2350,14 @@ void setVideoEnabled(bool enabled);
   self.swellPreviewReceivedFrame = NO;
   self.lastPreviewFrameDate = nil;
   self.previewFrameStale = NO;
+  self.previewDecoderStatus = nil;
   if (_previewStreamClient) {
     _previewStreamClient->stop();
   }
   if (_swellPreviewRenderer) {
     _swellPreviewRenderer->reset();
   }
+  [self updateCaptureFormatLabel];
 }
 
 - (void)checkPreviewFrameTimeout {
@@ -2336,6 +2379,7 @@ void setVideoEnabled(bool enabled);
 - (void)showLivePreview {
   self.showingPlayback = NO;
   self.playbackDecoderStatus = nil;
+  [self updateCaptureFormatLabel];
   if (_playbackPreviewRenderer) {
     _playbackPreviewRenderer->hide();
   }
@@ -2355,8 +2399,8 @@ void setVideoEnabled(bool enabled);
       [self stopRemotePreview];
     }
     _playbackPreviewRenderer->showMedia(path, itemStart, sourceOffset, projectPosition);
-    NSString *decoderStatus = self.playbackDecoderStatus.length > 0 ? self.playbackDecoderStatus : @"decoder starting";
-    [self setStatus:[NSString stringWithFormat:@"Playback: %@", decoderStatus]];
+    [self setStatus:@"Playback"];
+    [self updateCaptureFormatLabel];
   } else {
     (void)path;
     (void)itemStart;

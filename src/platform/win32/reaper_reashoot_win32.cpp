@@ -159,6 +159,10 @@ bool g_stoppingRemotePreview = false;
 bool g_restartPreviewAfterStop = false;
 std::chrono::steady_clock::time_point g_lastPlaybackVideoHit;
 std::string g_playbackDecoderStatus;
+std::string g_previewDecoderStatus;
+std::string g_panelStatusText;
+std::string g_panelFormatText;
+bool g_transferProgressActive = false;
 
 struct PlaybackVideo {
   bool found = false;
@@ -294,6 +298,31 @@ reashoot::core::RemoteCameraSettings cameraSettings() {
   return settings;
 }
 
+std::string panelFormatText() {
+  std::string format = "Wi-Fi " + g_iPhoneResolution + " " + g_iPhoneFPS + "fps " +
+                       g_iPhoneOrientation + " " + g_iPhoneAspect + " " + g_iPhoneLens +
+                       " zoom " + g_iPhoneZoom + " look " + g_iPhoneLook;
+  if (showingPlayback()) {
+    format += " | Playback " + (g_playbackDecoderStatus.empty() ? "decode: starting" : g_playbackDecoderStatus);
+  } else if (g_previewStreamActive || g_previewStreamStarting) {
+    format += " | Preview " + (g_previewDecoderStatus.empty() ? "decode: starting" : g_previewDecoderStatus);
+  }
+  return format;
+}
+
+void updatePanelFormat() {
+  if (!g_panel) {
+    return;
+  }
+  const std::string format = panelFormatText();
+  if (format == g_panelFormatText) {
+    return;
+  }
+  g_panelFormatText = format;
+  const std::string status = g_panelStatusText.empty() ? "Video disabled" : g_panelStatusText;
+  reashoot::platform::swell::updateSwellPanelProbe(g_panel, status.c_str(), format.c_str(), g_iPhoneHost.c_str(), g_iPhoneToken.c_str());
+}
+
 void updatePanel() {
   if (!g_panel) {
     return;
@@ -308,9 +337,9 @@ void updatePanel() {
   } else {
     status = "Ready";
   }
-  const std::string format = "Wi-Fi " + g_iPhoneResolution + " " + g_iPhoneFPS + "fps " +
-                             g_iPhoneOrientation + " " + g_iPhoneAspect + " " + g_iPhoneLens +
-                             " zoom " + g_iPhoneZoom + " look " + g_iPhoneLook;
+  const std::string format = panelFormatText();
+  g_panelStatusText = status;
+  g_panelFormatText = format;
   reashoot::platform::swell::updateSwellPanelProbe(g_panel, status.c_str(), format.c_str(), g_iPhoneHost.c_str(), g_iPhoneToken.c_str());
   reashoot::platform::swell::updateSwellPanelProfile(g_panel,
                                                      g_iPhoneResolution.c_str(),
@@ -336,6 +365,7 @@ void setPanelStatus(const std::string &status) {
   static std::string lastStatus;
   static std::string lastHost;
   static std::string lastToken;
+  g_panelStatusText = friendlyStatus;
   if (friendlyStatus == lastStatus && g_iPhoneHost == lastHost && g_iPhoneToken == lastToken) {
     return;
   }
@@ -601,6 +631,7 @@ void stopPreviewStream() {
   g_previewStreamActive = false;
   g_previewReceivedAccessUnit = false;
   g_previewReceivedFrame = false;
+  g_previewDecoderStatus.clear();
   if (g_previewStreamClient) {
     g_previewStreamClient->stop();
   }
@@ -610,6 +641,7 @@ void stopPreviewStream() {
   }
   if (!showingPlayback()) {
     setPreviewMode(PreviewMode::Idle);
+    updatePanelFormat();
     reashoot::platform::swell::setSwellPanelPreviewPending(g_panel, "Preview stopped");
   }
 }
@@ -647,24 +679,37 @@ void startPreviewStreamWithFields(const reashoot::core::FieldMap &fields) {
   const reashoot::core::PreviewStreamDescriptor descriptor =
       reashoot::core::previewStreamDescriptorFromFields(fields);
   if (!g_previewRenderer) {
-    g_previewRenderer = reashoot::platform::win32::createH264PreviewRenderer([](const reashoot::core::VideoFrame &frame) {
-      const auto queuedAt = std::chrono::steady_clock::now();
-      postToMain([frame, queuedAt]() {
-        if (frame.pixels.empty() || g_previewMode != PreviewMode::Live) {
-          return;
-        }
-        (void)queuedAt;
-        reashoot::platform::swell::setSwellPanelPreviewFrame(g_panel,
-                                                             frame.pixels.data(),
-                                                             frame.width,
-                                                             frame.height,
-                                                             frame.strideBytes);
-        if (!g_previewReceivedFrame) {
-          g_previewReceivedFrame = true;
-          setPanelStatus("ReaShoot live video");
-        }
-      });
-    });
+    g_previewRenderer = reashoot::platform::win32::createH264PreviewRenderer(
+        [](const reashoot::core::VideoFrame &frame) {
+          const auto queuedAt = std::chrono::steady_clock::now();
+          postToMain([frame, queuedAt]() {
+            if (frame.pixels.empty() || g_previewMode != PreviewMode::Live) {
+              return;
+            }
+            (void)queuedAt;
+            reashoot::platform::swell::setSwellPanelPreviewFrame(g_panel,
+                                                                 frame.pixels.data(),
+                                                                 frame.width,
+                                                                 frame.height,
+                                                                 frame.strideBytes);
+            if (!g_previewReceivedFrame) {
+              g_previewReceivedFrame = true;
+              if (!g_transferProgressActive) {
+                setPanelStatus("ReaShoot live video");
+              }
+            }
+          });
+        },
+        [](const reashoot::core::DecoderStatus &status) {
+          const std::string system = status.system.empty() ? (status.hardwareAccelerated ? "hardware" : "software") : status.system;
+          const std::string statusText = std::string(status.hardwareAccelerated ? "HW decode: " : "Software decode: ") + system;
+          postToMain([statusText]() {
+            g_previewDecoderStatus = statusText;
+            if (!showingPlayback()) {
+              updatePanelFormat();
+            }
+          });
+        });
   }
   reashoot::core::PreviewStreamRequest request;
   request.host = g_iPhoneHost;
@@ -675,8 +720,10 @@ void startPreviewStreamWithFields(const reashoot::core::FieldMap &fields) {
   g_previewStreamActive = false;
   g_previewReceivedAccessUnit = false;
   g_previewReceivedFrame = false;
+  g_previewDecoderStatus.clear();
   reashoot::platform::swell::setSwellPanelPreviewPending(g_panel, "Preview: connecting H.264 stream");
   setPanelStatus("Preview: connecting H.264 stream");
+  updatePanelFormat();
   const bool started = g_previewStreamClient->start(
       request,
       [](std::vector<uint8_t> accessUnit) {
@@ -690,7 +737,9 @@ void startPreviewStreamWithFields(const reashoot::core::FieldMap &fields) {
           if (!g_previewReceivedAccessUnit && g_previewMode == PreviewMode::Live) {
             g_previewReceivedAccessUnit = true;
             reashoot::platform::swell::setSwellPanelPreviewPending(g_panel, "Preview: H.264 received; decoding");
-            setPanelStatus("Preview: H.264 received; decoding");
+            if (!g_transferProgressActive) {
+              setPanelStatus("Preview: H.264 received; decoding");
+            }
           }
         });
       },
@@ -698,8 +747,11 @@ void startPreviewStreamWithFields(const reashoot::core::FieldMap &fields) {
         postToMain([]() {
           g_previewStreamStarting = false;
           g_previewStreamActive = true;
+          updatePanelFormat();
           if (g_previewMode == PreviewMode::Live) {
-            setPanelStatus("Preview: H.264 stream");
+            if (!g_transferProgressActive) {
+              setPanelStatus("Preview: H.264 stream");
+            }
           }
         });
       },
@@ -709,6 +761,12 @@ void startPreviewStreamWithFields(const reashoot::core::FieldMap &fields) {
           // restarted when playback ends; just don't repaint over playback.
           g_previewStreamStarting = false;
           g_previewStreamActive = false;
+          g_previewDecoderStatus.clear();
+          if (g_previewRenderer) {
+            g_previewRenderer->reset();
+            g_previewRenderer.reset();
+          }
+          updatePanelFormat();
           if (playbackOwnsPreview()) {
             return;
           }
@@ -718,6 +776,12 @@ void startPreviewStreamWithFields(const reashoot::core::FieldMap &fields) {
       });
   if (!started) {
     g_previewStreamStarting = false;
+    g_previewDecoderStatus.clear();
+    if (g_previewRenderer) {
+      g_previewRenderer->reset();
+      g_previewRenderer.reset();
+    }
+    updatePanelFormat();
     reashoot::platform::swell::setSwellPanelPreviewPending(g_panel, "Preview: invalid stream URL");
     setPanelStatus("Preview: invalid stream URL");
   }
@@ -839,6 +903,8 @@ void downloadRecordingAt(const reashoot::core::RemoteRecordingDescriptor &record
   const std::string directory = captureOutputDirectory(project);
   const std::string expectedPath =
       (std::filesystem::path(directory) / (recording.filename.empty() ? "recording.mov" : recording.filename)).string();
+  g_transferProgressActive = true;
+  setPanelStatus("Downloading iPhone video");
   g_downloadHandle = remoteCameraController().downloadRecording(
       settings,
       recording,
@@ -846,11 +912,15 @@ void downloadRecordingAt(const reashoot::core::RemoteRecordingDescriptor &record
       [](const std::string &line) {
         const std::string status = reashoot::core::progressStatusText(line);
         if (!status.empty()) {
-          postToMain([status]() { setPanelStatus(status); });
+          postToMain([status]() {
+            g_transferProgressActive = true;
+            setPanelStatus(status);
+          });
         }
       },
       [recording, expectedPath, project, insertPosition](reashoot::core::CommandResult result) {
         postToMain([recording, expectedPath, result = std::move(result), project, insertPosition]() mutable {
+          g_transferProgressActive = false;
           bool recoveredCompletedDownload = false;
           if (result.exitCode != 0) {
             const int64_t expectedBytes = recording.byteCount.empty() ? 0 : std::strtoll(recording.byteCount.c_str(), nullptr, 10);
@@ -1265,7 +1335,7 @@ void ensurePlaybackPreviewRenderer() {
         postToMain([statusText]() {
           g_playbackDecoderStatus = statusText;
           if (showingPlayback()) {
-            setPanelStatus("Playback: " + g_playbackDecoderStatus);
+            updatePanelFormat();
           }
         });
       });
@@ -1284,12 +1354,14 @@ void updatePlaybackWithVideo(const PlaybackVideo &video, double projectPosition)
     // playbackOwnsPreview() is now true.
     g_previewCommandInFlight = false;
     g_restartPreviewAfterStop = false;
+    g_playbackDecoderStatus.clear();
     setPreviewMode(PreviewMode::Playback);
   }
   if (g_playbackPreviewRenderer) {
     const double sourceOffset = video.sourceOffset + ((projectPosition - video.itemStart) * (video.playRate - 1.0));
     g_playbackPreviewRenderer->showMedia(video.path, video.itemStart, sourceOffset, projectPosition);
-    setPanelStatus(g_playbackDecoderStatus.empty() ? "Playback: decoder starting" : "Playback: " + g_playbackDecoderStatus);
+    setPanelStatus("Playback");
+    updatePanelFormat();
   }
 }
 
@@ -1310,6 +1382,7 @@ void stopPlaybackAndShowLive() {
     setPreviewMode(PreviewMode::Live);
     if (g_previewStreamActive || g_previewStreamStarting) {
       setPanelStatus(g_previewReceivedFrame ? "ReaShoot live video" : "Preview: H.264 stream");
+      updatePanelFormat();
     } else {
       startRemotePreview();
     }
