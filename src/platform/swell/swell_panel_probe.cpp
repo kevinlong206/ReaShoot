@@ -97,6 +97,11 @@ const ComboOption kLensOptions[] = {
 std::vector<uint32_t> g_previewFrame;
 int g_previewWidth = 320;
 int g_previewHeight = 180;
+// Shared preview layout metrics. The controls occupy the top band of the panel
+// and the decoded video is drawn below them. Keep paintPreview and the
+// per-frame invalidate in setSwellPanelPreviewFrame in sync via these.
+constexpr int kPreviewMargin = 12;
+constexpr int kPreviewControlsHeight = 150;
 bool g_usingLivePreview = false;
 bool g_previewPending = false;
 std::string g_previewMessage = "Preview unavailable: discover the iPhone, enter its pairing code, then Pair or Reconnect.";
@@ -316,8 +321,8 @@ void paintPreview(HWND hwnd) {
     const int clientHeight = static_cast<int>(client.bottom - client.top);
 #endif
     fillDialogBackground(paintDC, &client, 0);
-    const int margin = 12;
-    const int controlsHeight = 150;
+    const int margin = kPreviewMargin;
+    const int controlsHeight = kPreviewControlsHeight;
     const int width = (std::max)(1, clientWidth - margin * 2);
     const int height = (std::max)(1, clientHeight - controlsHeight - margin);
     if (!g_previewFrame.empty()) {
@@ -779,7 +784,17 @@ void setSwellPanelPreviewFrame(HWND panel, const void *pixels, int width, int he
   g_usingLivePreview = true;
   g_previewPending = false;
   g_previewMessage.clear();
-  invalidateRect(panel, nullptr, false);
+  // Invalidate only the video region (below the controls), not the whole panel.
+  // Repainting the full client every frame made the docked panel's child
+  // controls flicker at playback frame rate ("blinking window"); the controls
+  // are static and self-painting, so leave their band untouched.
+  RECT client = {};
+  if (getClientRect(panel, &client) && (client.bottom - client.top) > kPreviewControlsHeight) {
+    RECT videoRegion = {client.left, client.top + kPreviewControlsHeight, client.right, client.bottom};
+    invalidateRect(panel, &videoRegion, false);
+  } else {
+    invalidateRect(panel, nullptr, false);
+  }
 }
 
 void setSwellPanelPreviewPending(HWND panel, const char *reason) {

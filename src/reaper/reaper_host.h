@@ -8,6 +8,7 @@ namespace reashoot::reaper {
 
 ReaProject *currentProject(std::string *projectFile = nullptr);
 std::string projectPath(ReaProject *project);
+std::string defaultRecordingPath();
 std::string resourcePath();
 std::string extState(const char *section, const char *key);
 bool setExtState(const char *section, const char *key, const char *value, bool persist);

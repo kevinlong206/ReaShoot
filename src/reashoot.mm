@@ -46,6 +46,7 @@
 #define REAPERAPI_WANT_GetAudioAccessorSamples
 #define REAPERAPI_WANT_GetCursorPositionEx
 #define REAPERAPI_WANT_GetExtState
+#define REAPERAPI_WANT_get_ini_file
 #define REAPERAPI_WANT_GetSet_LoopTimeRange2
 #define REAPERAPI_WANT_GetMediaItemInfo_Value
 #define REAPERAPI_WANT_GetMediaItem
@@ -337,14 +338,17 @@ std::string captureOutputPath(ReaProject *project) {
   std::string outputRoot;
   std::string projectName = "unsaved_project";
 
-  outputRoot = reashoot::reaper::projectPath(project);
+  outputRoot = reashoot::reaper::defaultRecordingPath();
 
   std::string projectFile;
   reashoot::reaper::currentProject(&projectFile);
   if (!projectFile.empty()) {
     projectName = reashoot::core::baseNameWithoutExtension(projectFile);
     if (outputRoot.empty()) {
-      outputRoot = reashoot::core::directoryName(projectFile);
+      outputRoot = reashoot::reaper::projectPath(project);
+      if (outputRoot.empty()) {
+        outputRoot = reashoot::core::directoryName(projectFile);
+      }
     }
   }
 

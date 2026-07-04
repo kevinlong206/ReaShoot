@@ -36,7 +36,13 @@ extern "C" {
 namespace reashoot::platform::win32 {
 namespace {
 
-constexpr double kPlaybackPreviewMaxDimension = 1920.0;
+// The docked/floating preview is small, and playback frames are converted from
+// YUV to BGRA and rotated on the CPU on every timer tick. Rendering a full
+// 1080p (or larger) frame took 30-40 ms each, which dropped effective playback
+// to ~7 fps and made it look choppy compared with REAPER's own video window.
+// Capping the longest edge keeps per-frame render time well under the ~33 ms
+// frame budget so playback stays smooth.
+constexpr double kPlaybackPreviewMaxDimension = 960.0;
 
 void playbackDebugLog(const std::string &message) {
   const std::string line = "ReaShoot: " + message + "\n";
@@ -256,6 +262,9 @@ public:
     if (api_) {
       worker_ = std::thread([this]() { workerLoop(); });
       ready_ = true;
+      playbackDebugLog("ffmpeg playback renderer ready");
+    } else {
+      playbackDebugLog("ffmpeg playback renderer unavailable: api not loaded");
     }
   }
 
@@ -336,6 +345,7 @@ private:
     lastRenderedSourceTime_ = -1.0;
     lastDecoderSourceTime_ = -1.0;
     rotationDegrees_ = 0;
+    soughtSinceOpen_ = false;
     activePath_.clear();
   }
 
@@ -364,16 +374,20 @@ private:
 
   bool open(const std::string &path) {
     close();
+    playbackDebugLog("ffmpeg playback open path=" + path);
     if (!api_ || api_->avformat_open_input(&formatContext_, path.c_str(), nullptr, nullptr) < 0 || !formatContext_) {
+      playbackDebugLog("ffmpeg playback open failed path=" + path);
       return false;
     }
     if (api_->avformat_find_stream_info(formatContext_, nullptr) < 0) {
+      playbackDebugLog("ffmpeg playback stream info failed path=" + path);
       close();
       return false;
     }
     const AVCodec *codec = nullptr;
     videoStreamIndex_ = api_->av_find_best_stream(formatContext_, AVMEDIA_TYPE_VIDEO, -1, -1, &codec, 0);
     if (videoStreamIndex_ < 0 || !codec) {
+      playbackDebugLog("ffmpeg playback video stream not found path=" + path);
       close();
       return false;
     }
@@ -383,13 +397,22 @@ private:
     packet_ = api_->av_packet_alloc();
     if (!codecContext_ || !frame_ || !packet_ ||
         api_->avcodec_parameters_to_context(codecContext_, stream->codecpar) < 0) {
+      playbackDebugLog("ffmpeg playback codec setup failed path=" + path);
       close();
       return false;
     }
+    // Use frame + slice threading for throughput. Frame threading delays first
+    // output by ~thread_count frames; that previously starved the decoder when
+    // combined with an 80-packet budget on this audio-heavy file (only ~19 video
+    // packets/call). The 200-packet budget in renderAt now delivers ~47 video
+    // packets per call, well above libavcodec's H.264 frame-thread cap (16), so
+    // the decoder primes on the first call and then streams at full throughput
+    // (~10 ms/frame vs ~28 ms/frame slice-only). The higher throughput lets 4K
+    // decode keep up with real time instead of falling permanently behind.
     codecContext_->thread_count = 0;
     codecContext_->thread_type = FF_THREAD_FRAME | FF_THREAD_SLICE;
-    codecContext_->skip_loop_filter = AVDISCARD_NONREF;
     if (api_->avcodec_open2(codecContext_, codec, nullptr) < 0) {
+      playbackDebugLog("ffmpeg playback codec open failed path=" + path);
       close();
       return false;
     }
@@ -439,18 +462,29 @@ private:
     ++seeks_;
     api_->avcodec_flush_buffers(codecContext_);
     lastDecoderSourceTime_ = -1.0;
+    soughtSinceOpen_ = true;
     return true;
   }
 
   bool renderAt(double sourceTime) {
     const auto started = std::chrono::steady_clock::now();
-    const bool needsSeek = lastDecoderSourceTime_ < 0.0 ||
-                           sourceTime < lastDecoderSourceTime_ - 0.10 ||
-                           sourceTime > lastDecoderSourceTime_ + 0.75;
+    // With frame threading the decoder needs several packets after a flush
+    // before it emits its first frame. Only seek when we truly must (never
+    // positioned since open, sought backward, or fell far behind). Critically,
+    // once we have sought we must NOT re-seek merely because we have not decoded
+    // a frame yet, or we would flush the priming pipeline every tick and never
+    // produce output (the original "nothing plays" bug).
+    const bool haveDecoded = lastDecoderSourceTime_ >= 0.0;
+    const bool needsSeek = (!haveDecoded && !soughtSinceOpen_) ||
+                           (haveDecoded && (sourceTime < lastDecoderSourceTime_ - 0.10 ||
+                                            sourceTime > lastDecoderSourceTime_ + 0.75));
     if (needsSeek && !seekTo(sourceTime)) {
       return false;
     }
-    for (int packets = 0; packets < 80; ++packets) {
+    // Budget is generous because the recorded .mov is heavily audio-interleaved
+    // (roughly 3 audio packets per video packet); a smaller budget can starve
+    // the decoder of the video packets it needs to prime after a flush.
+    for (int packets = 0; packets < 200; ++packets) {
       const int readResult = api_->av_read_frame(formatContext_, packet_);
       if (readResult < 0) {
         ++readFailures_;
@@ -516,7 +550,13 @@ private:
     core::VideoFrame output = rotateBGRAFrame(unrotated, rotationDegrees_);
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      if (hidden_ || activeRequestSerial_ != latestRequestSerial_) {
+      // Only drop the frame if playback has been hidden. During continuous
+      // playback the worker always renders the newest pending request, so a
+      // request that arrived mid-render is only ~1 tick ahead; dropping it here
+      // (as the old serial check did) threw away ~75% of decoded frames and
+      // made playback choppy. Showing this frame and correcting on the next
+      // tick keeps the effective frame rate high.
+      if (hidden_) {
         ++droppedStaleFrames_;
         return false;
       }
@@ -563,6 +603,7 @@ private:
   std::string activePath_;
   double lastRenderedSourceTime_ = -1.0;
   double lastDecoderSourceTime_ = -1.0;
+  bool soughtSinceOpen_ = false;
   int rotationDegrees_ = 0;
   std::chrono::steady_clock::time_point lastLog_;
   uint64_t decodedFrames_ = 0;
