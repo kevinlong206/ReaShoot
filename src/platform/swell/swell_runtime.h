@@ -36,6 +36,7 @@ bool endPaint(HWND hwnd, PAINTSTRUCT *paint);
 void fillDialogBackground(HDC hdc, const RECT *rect, int level);
 bool drawFrame(HDC output, int x, int y, int width, int height, const void *bits, int sourceWidth, int sourceHeight);
 bool drawText(HDC output, const char *text, RECT *rect, int align);
+int measureTextWidth(const char *text);
 HFONT createFont(int height, int weight, const char *faceName);
 LRESULT sendMessage(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
 void deleteObject(HGDIOBJ object);

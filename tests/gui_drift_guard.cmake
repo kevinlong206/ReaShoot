@@ -1,0 +1,23 @@
+if(NOT DEFINED REASHOOT_ROOT)
+  message(FATAL_ERROR "REASHOOT_ROOT is required")
+endif()
+
+function(assert_no_match file_path pattern description)
+  file(READ "${file_path}" contents)
+  if(contents MATCHES "${pattern}")
+    message(FATAL_ERROR "${description}: ${file_path}")
+  endif()
+endfunction()
+
+set(mac_entry "${REASHOOT_ROOT}/src/reashoot.mm")
+assert_no_match("${mac_entry}" "NSButton" "macOS preview/setup controls must stay in the shared SWELL panel")
+assert_no_match("${mac_entry}" "NSTextField" "macOS preview/setup controls must stay in the shared SWELL panel")
+assert_no_match("${mac_entry}" "NSPopUpButton" "macOS preview/setup controls must stay in the shared SWELL panel")
+assert_no_match("${mac_entry}" "NSView[ \t]*\\*" "macOS preview/setup controls must stay in the shared SWELL panel")
+assert_no_match("${mac_entry}" "NSWindow[ \t]*\\*" "macOS preview/setup controls must stay in the shared SWELL panel")
+
+set(win_entry "${REASHOOT_ROOT}/src/platform/win32/reaper_reashoot_win32.cpp")
+assert_no_match("${win_entry}" "CreateWindow(Ex)?[AW]?\\(" "Windows preview/setup controls must stay in the shared SWELL runtime")
+assert_no_match("${win_entry}" "\"BUTTON\"" "Windows preview/setup controls must stay in the shared SWELL runtime")
+assert_no_match("${win_entry}" "\"STATIC\"" "Windows preview/setup controls must stay in the shared SWELL runtime")
+assert_no_match("${win_entry}" "\"COMBOBOX\"" "Windows preview/setup controls must stay in the shared SWELL runtime")

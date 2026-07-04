@@ -65,8 +65,7 @@ rm -rf iphone/Package.resolved iphone/.build helper/.build
 ## Current behavior
 
 - Registers actions:
-  - `ReaShoot: Enable/Disable ReaShoot`
-  - `ReaShoot: Show/Hide Preview`
+  - `ReaShoot: Enable ReaShoot`
   - `ReaShoot: Float/Dock Preview`
   - `ReaShoot: Align Selected Video Item`
   - `ReaShoot: Restore Pending iPhone Recording`
@@ -95,6 +94,7 @@ rm -rf iphone/Package.resolved iphone/.build helper/.build
 - Keep the preview transport dependency-light and same-LAN oriented; prefer simple H.264 streaming over heavyweight realtime SDKs unless requirements change.
 - Preserve the single-item model: one recorded `.mov` item with embedded camera audio. Do not add a separate reference-audio item unless the user explicitly asks.
 - Keep routine status in the preview UI, not REAPER popups. Use REAPER message boxes only for real errors.
+- Keep the REAPER extension GUI defined in the shared SWELL panel (`src/platform/swell/swell_panel_probe.cpp`). Do not add parallel Cocoa or Win32 control trees for preview/setup/status UI; platform files should only adapt SWELL, preview decoding, helper execution, prompts, and REAPER host glue.
 - Avoid enabling REAPER audio recording on the `ReaShoot` track.
 - Be careful editing `~/Library/Application Support/REAPER/reaper-menu.ini`; preserve user toolbar config and avoid duplicate toolbar entries.
 - Keep the iPhone app and REAPER helper protocol definitions aligned. Prefer copying shared protocol/CLI changes both ways or extracting a single shared package before adding divergent behavior.

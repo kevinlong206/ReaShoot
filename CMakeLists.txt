@@ -35,6 +35,8 @@ target_compile_options(reashoot_core_tests PRIVATE ${REASHOOT_WARNING_FLAGS})
 
 enable_testing()
 add_test(NAME reashoot_core_tests COMMAND reashoot_core_tests)
+add_test(NAME reashoot_gui_drift_guard
+         COMMAND "${CMAKE_COMMAND}" "-DREASHOOT_ROOT=${REASHOOT_ROOT}" -P "${REASHOOT_ROOT}/tests/gui_drift_guard.cmake")
 
 file(GLOB REASHOOT_HELPER_SOURCES CONFIGURE_DEPENDS "${REASHOOT_ROOT}/src/helper/*.cpp")
 add_executable(reashoot_helper ${REASHOOT_HELPER_SOURCES})
@@ -97,8 +99,19 @@ if(APPLE)
 endif()
 
 if(WIN32)
+  option(REASHOOT_WITH_FFMPEG_DECODER "Use shared FFmpeg for Windows live and playback preview decoding" ON)
   file(GLOB REASHOOT_WIN32_SOURCES CONFIGURE_DEPENDS "${REASHOOT_ROOT}/src/platform/win32/*.cpp")
   file(GLOB REASHOOT_SWELL_CPP_SOURCES CONFIGURE_DEPENDS "${REASHOOT_ROOT}/src/platform/swell/*.cpp")
+  if(REASHOOT_WITH_FFMPEG_DECODER AND (NOT DEFINED REASHOOT_FFMPEG_ROOT OR "${REASHOOT_FFMPEG_ROOT}" STREQUAL ""))
+    file(GLOB REASHOOT_WINGET_FFMPEG_DIRS
+      "$ENV{LOCALAPPDATA}/Microsoft/WinGet/Packages/Gyan.FFmpeg.Shared_Microsoft.Winget.Source_8wekyb3d8bbwe/ffmpeg-*")
+    list(SORT REASHOOT_WINGET_FFMPEG_DIRS)
+    list(REVERSE REASHOOT_WINGET_FFMPEG_DIRS)
+    if(REASHOOT_WINGET_FFMPEG_DIRS)
+      list(GET REASHOOT_WINGET_FFMPEG_DIRS 0 REASHOOT_FFMPEG_ROOT)
+    endif()
+  endif()
+  set(REASHOOT_FFMPEG_ROOT "${REASHOOT_FFMPEG_ROOT}" CACHE PATH "Optional shared FFmpeg root containing include, lib, and bin directories")
 
   add_library(reaper_reashoot SHARED
     "${REASHOOT_ROOT}/src/reaper/reaper_host.cpp"
@@ -122,6 +135,13 @@ if(WIN32)
   target_include_directories(reaper_reashoot PRIVATE "${REASHOOT_ROOT}/src" "${REASHOOT_SDK_DIR}")
   target_compile_options(reaper_reashoot PRIVATE ${REASHOOT_WARNING_FLAGS})
   target_compile_definitions(reaper_reashoot PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+  if(REASHOOT_WITH_FFMPEG_DECODER AND EXISTS "${REASHOOT_FFMPEG_ROOT}/include/libavcodec/avcodec.h" AND EXISTS "${REASHOOT_FFMPEG_ROOT}/lib/avcodec.lib")
+    file(TO_CMAKE_PATH "${REASHOOT_FFMPEG_ROOT}/bin" REASHOOT_FFMPEG_BIN_DIR_DEFINE)
+    target_compile_definitions(reaper_reashoot PRIVATE REASHOOT_WITH_FFMPEG_DECODER=1 REASHOOT_FFMPEG_BIN_DIR="${REASHOOT_FFMPEG_BIN_DIR_DEFINE}")
+    target_include_directories(reaper_reashoot PRIVATE "${REASHOOT_FFMPEG_ROOT}/include")
+  else()
+    message(FATAL_ERROR "REASHOOT_WITH_FFMPEG_DECODER requires shared FFmpeg headers/libs. Install Gyan.FFmpeg.Shared or set REASHOOT_FFMPEG_ROOT.")
+  endif()
   set_target_properties(reaper_reashoot PROPERTIES PREFIX "" SUFFIX ".dll" OUTPUT_NAME "reaper_reashoot")
 
   set(REAPER_WINDOWS_USERPLUGINS_DIR "$ENV{APPDATA}/REAPER/UserPlugins"

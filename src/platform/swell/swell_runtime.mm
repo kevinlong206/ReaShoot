@@ -6,6 +6,7 @@
 #endif
 
 #include <cstdint>
+#include <cmath>
 #include <cstring>
 
 namespace reashoot::platform::swell {
@@ -330,6 +331,20 @@ bool drawText(HDC output, const char *text, RECT *rect, int align) {
     return false;
   }
   return g_drawText(output, text, -1, rect, align) != 0;
+}
+
+int measureTextWidth(const char *text) {
+  if (!text || !text[0]) {
+    return 0;
+  }
+  @autoreleasepool {
+    NSString *string = [NSString stringWithUTF8String:text];
+    if (!string) {
+      return 0;
+    }
+    NSDictionary *attributes = @{NSFontAttributeName: [NSFont systemFontOfSize:NSFont.systemFontSize]};
+    return static_cast<int>(std::ceil([string sizeWithAttributes:attributes].width));
+  }
 }
 
 HFONT createFont(int height, int weight, const char *faceName) {

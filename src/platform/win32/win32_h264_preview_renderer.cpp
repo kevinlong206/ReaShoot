@@ -18,12 +18,25 @@
 #include <wmcodecdsp.h>
 #include <wrl/client.h>
 
+#if REASHOOT_WITH_FFMPEG_DECODER
+extern "C" {
+#include <libavcodec/avcodec.h>
+#include <libavutil/error.h>
+#include <libavutil/frame.h>
+#include <libavutil/pixfmt.h>
+}
+#endif
+
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <cstring>
+#include <deque>
+#include <filesystem>
+#include <fstream>
 #include <mutex>
+#include <sstream>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -33,6 +46,18 @@ namespace {
 
 using Microsoft::WRL::ComPtr;
 constexpr auto kMinimumPreviewFrameInterval = std::chrono::milliseconds(125);
+
+void previewDebugLog(const std::string &message) {
+  const std::string line = "ReaShoot: " + message + "\n";
+  OutputDebugStringA(line.c_str());
+  char appData[MAX_PATH] = {};
+  if (GetEnvironmentVariableA("APPDATA", appData, sizeof(appData)) > 0) {
+    std::ofstream log(std::filesystem::path(appData) / "REAPER" / "reashoot-win.log", std::ios::app);
+    if (log) {
+      log << line;
+    }
+  }
+}
 
 class MediaFoundationRuntime {
 public:
@@ -248,7 +273,26 @@ PreviewDiagnosticMetadata parseDiagnosticSEI(const uint8_t *bytes, size_t length
     if (payloadType != 5 || payloadSize < 23 || offset + static_cast<size_t>(payloadSize) > unit.size) {
       continue;
     }
-    const uint8_t *payload = nalu + offset;
+    std::vector<uint8_t> unescapedPayload;
+    unescapedPayload.reserve(static_cast<size_t>(payloadSize));
+    int zeroCount = 0;
+    for (int i = 0; i < payloadSize; ++i) {
+      const uint8_t value = nalu[offset + static_cast<size_t>(i)];
+      if (zeroCount == 2 && value == 0x03) {
+        zeroCount = 0;
+        continue;
+      }
+      unescapedPayload.push_back(value);
+      if (value == 0) {
+        ++zeroCount;
+      } else {
+        zeroCount = 0;
+      }
+    }
+    if (unescapedPayload.size() < 23) {
+      continue;
+    }
+    const uint8_t *payload = unescapedPayload.data();
     if (std::memcmp(payload, "RSDIAG1", 7) != 0) {
       continue;
     }
@@ -495,6 +539,391 @@ std::vector<uint8_t> avcDecoderConfigurationRecord(const std::vector<uint8_t> &s
   config.insert(config.end(), pps.begin(), pps.end());
   return config;
 }
+
+#if REASHOOT_WITH_FFMPEG_DECODER
+std::wstring widenAscii(const char *value) {
+  if (!value) {
+    return {};
+  }
+  const int length = MultiByteToWideChar(CP_UTF8, 0, value, -1, nullptr, 0);
+  if (length <= 0) {
+    return {};
+  }
+  std::wstring output(static_cast<size_t>(length - 1), L'\0');
+  MultiByteToWideChar(CP_UTF8, 0, value, -1, output.data(), length);
+  return output;
+}
+
+bool preloadFFmpegDlls() {
+  static const bool loaded = []() {
+    const std::wstring binDir = widenAscii(REASHOOT_FFMPEG_BIN_DIR);
+    if (binDir.empty()) {
+      previewDebugLog("ffmpeg preload failed: empty bin dir");
+      return false;
+    }
+    for (const wchar_t *name : {L"avutil-60.dll", L"swresample-6.dll", L"avcodec-62.dll"}) {
+      const std::wstring path = binDir + L"\\" + name;
+      if (!LoadLibraryW(path.c_str())) {
+        std::ostringstream stream;
+        stream << "ffmpeg preload failed error=" << GetLastError();
+        previewDebugLog(stream.str());
+        return false;
+      }
+    }
+    previewDebugLog("ffmpeg preload ok");
+    return true;
+  }();
+  return loaded;
+}
+
+struct FFmpegApi {
+  using AvCodecFindDecoderFn = const AVCodec *(*)(enum AVCodecID);
+  using AvCodecFindDecoderByNameFn = const AVCodec *(*)(const char *);
+  using AvCodecAllocContext3Fn = AVCodecContext *(*)(const AVCodec *);
+  using AvCodecOpen2Fn = int (*)(AVCodecContext *, const AVCodec *, AVDictionary **);
+  using AvCodecSendPacketFn = int (*)(AVCodecContext *, const AVPacket *);
+  using AvCodecReceiveFrameFn = int (*)(AVCodecContext *, AVFrame *);
+  using AvCodecFreeContextFn = void (*)(AVCodecContext **);
+  using AvFrameAllocFn = AVFrame *(*)();
+  using AvFrameFreeFn = void (*)(AVFrame **);
+  using AvFrameUnrefFn = void (*)(AVFrame *);
+  using AvPacketAllocFn = AVPacket *(*)();
+  using AvPacketFreeFn = void (*)(AVPacket **);
+  using AvNewPacketFn = int (*)(AVPacket *, int);
+  using AvPacketUnrefFn = void (*)(AVPacket *);
+
+  AvCodecFindDecoderFn avcodec_find_decoder = nullptr;
+  AvCodecFindDecoderByNameFn avcodec_find_decoder_by_name = nullptr;
+  AvCodecAllocContext3Fn avcodec_alloc_context3 = nullptr;
+  AvCodecOpen2Fn avcodec_open2 = nullptr;
+  AvCodecSendPacketFn avcodec_send_packet = nullptr;
+  AvCodecReceiveFrameFn avcodec_receive_frame = nullptr;
+  AvCodecFreeContextFn avcodec_free_context = nullptr;
+  AvFrameAllocFn av_frame_alloc = nullptr;
+  AvFrameFreeFn av_frame_free = nullptr;
+  AvFrameUnrefFn av_frame_unref = nullptr;
+  AvPacketAllocFn av_packet_alloc = nullptr;
+  AvPacketFreeFn av_packet_free = nullptr;
+  AvNewPacketFn av_new_packet = nullptr;
+  AvPacketUnrefFn av_packet_unref = nullptr;
+
+  HMODULE avcodec = nullptr;
+  HMODULE avutil = nullptr;
+
+  template <typename T>
+  static bool loadFunction(HMODULE module, const char *name, T &target) {
+    target = reinterpret_cast<T>(GetProcAddress(module, name));
+    return target != nullptr;
+  }
+
+  bool load() {
+    previewDebugLog("ffmpeg api load begin");
+    if (!preloadFFmpegDlls()) {
+      return false;
+    }
+    const std::wstring binDir = widenAscii(REASHOOT_FFMPEG_BIN_DIR);
+    avutil = GetModuleHandleW((binDir + L"\\avutil-60.dll").c_str());
+    avcodec = GetModuleHandleW((binDir + L"\\avcodec-62.dll").c_str());
+    if (!avutil || !avcodec) {
+      previewDebugLog("ffmpeg api load failed: module handle missing");
+      return false;
+    }
+    const bool ok = loadFunction(avcodec, "avcodec_find_decoder", avcodec_find_decoder) &&
+           loadFunction(avcodec, "avcodec_find_decoder_by_name", avcodec_find_decoder_by_name) &&
+           loadFunction(avcodec, "avcodec_alloc_context3", avcodec_alloc_context3) &&
+           loadFunction(avcodec, "avcodec_open2", avcodec_open2) &&
+           loadFunction(avcodec, "avcodec_send_packet", avcodec_send_packet) &&
+           loadFunction(avcodec, "avcodec_receive_frame", avcodec_receive_frame) &&
+           loadFunction(avcodec, "avcodec_free_context", avcodec_free_context) &&
+           loadFunction(avcodec, "av_packet_alloc", av_packet_alloc) &&
+           loadFunction(avcodec, "av_packet_free", av_packet_free) &&
+           loadFunction(avcodec, "av_new_packet", av_new_packet) &&
+           loadFunction(avcodec, "av_packet_unref", av_packet_unref) &&
+           loadFunction(avutil, "av_frame_alloc", av_frame_alloc) &&
+           loadFunction(avutil, "av_frame_free", av_frame_free) &&
+           loadFunction(avutil, "av_frame_unref", av_frame_unref);
+    previewDebugLog(ok ? "ffmpeg api load ok" : "ffmpeg api load failed: symbol missing");
+    return ok;
+  }
+};
+
+FFmpegApi *ffmpegApi() {
+  static FFmpegApi api;
+  static const bool loaded = api.load();
+  return loaded ? &api : nullptr;
+}
+
+class FFmpegH264PreviewRenderer final : public core::PreviewRenderer {
+public:
+  explicit FFmpegH264PreviewRenderer(core::VideoFrameCallback frameHandler)
+      : frameHandler_(std::move(frameHandler)) {
+    previewDebugLog("ffmpeg renderer ctor begin");
+    api_ = ffmpegApi();
+    if (!api_) {
+      previewDebugLog("ffmpeg renderer unavailable: api not loaded");
+      return;
+    }
+    const AVCodec *codec = api_->avcodec_find_decoder(AV_CODEC_ID_H264);
+    if (!codec) {
+      codec = api_->avcodec_find_decoder_by_name("h264");
+    }
+    if (!codec) {
+      previewDebugLog("ffmpeg renderer unavailable: h264 decoder missing");
+      return;
+    }
+    previewDebugLog("ffmpeg renderer h264 decoder found");
+    codecContext_ = api_->avcodec_alloc_context3(codec);
+    frame_ = api_->av_frame_alloc();
+    packet_ = api_->av_packet_alloc();
+    if (!codecContext_ || !frame_ || !packet_) {
+      previewDebugLog("ffmpeg renderer allocation failed");
+      reset();
+      return;
+    }
+    codecContext_->flags |= AV_CODEC_FLAG_LOW_DELAY;
+    codecContext_->thread_count = 1;
+    codecContext_->thread_type = 0;
+    const int openResult = api_->avcodec_open2(codecContext_, codec, nullptr);
+    if (openResult < 0) {
+      std::ostringstream stream;
+      stream << "ffmpeg renderer open failed result=" << openResult;
+      previewDebugLog(stream.str());
+      reset();
+      return;
+    }
+    previewDebugLog("ffmpeg renderer ready");
+    decodeWorker_ = std::thread([this]() { decodeLoop(); });
+    ready_ = true;
+  }
+
+  ~FFmpegH264PreviewRenderer() override {
+    {
+      std::lock_guard<std::mutex> lock(queueMutex_);
+      queueStopped_ = true;
+      pendingAccessUnits_.clear();
+    }
+    queueCV_.notify_all();
+    if (decodeWorker_.joinable()) {
+      decodeWorker_.join();
+    }
+    reset();
+  }
+
+  bool ready() const { return ready_; }
+
+  void reset() override {
+    {
+      std::lock_guard<std::mutex> queueLock(queueMutex_);
+      pendingAccessUnits_.clear();
+      requireQueuedKeyframe_ = true;
+    }
+    std::lock_guard<std::mutex> lock(decoderMutex_);
+    previewDebugLog("ffmpeg renderer reset");
+    if (packet_) {
+      api_->av_packet_free(&packet_);
+    }
+    if (frame_) {
+      api_->av_frame_free(&frame_);
+    }
+    if (codecContext_) {
+      api_->avcodec_free_context(&codecContext_);
+    }
+    ready_ = false;
+    waitingForKeyframe_ = true;
+    lastFrameEmit_ = {};
+  }
+
+  void renderAnnexBAccessUnit(const uint8_t *bytes, size_t length) override {
+    if (!ready_ || !bytes || length == 0) {
+      return;
+    }
+    const bool keyframe = isDecoderStartingAccessUnit(bytes, length);
+    std::lock_guard<std::mutex> lock(queueMutex_);
+    if (queueStopped_) {
+      return;
+    }
+    if (requireQueuedKeyframe_ && !keyframe) {
+      return;
+    }
+    if (pendingAccessUnits_.size() > 90) {
+      pendingAccessUnits_.clear();
+      requireQueuedKeyframe_ = true;
+      if (!keyframe) {
+        return;
+      }
+    }
+    pendingAccessUnits_.emplace_back(bytes, bytes + length);
+    if (keyframe) {
+      requireQueuedKeyframe_ = false;
+    }
+    queueCV_.notify_one();
+  }
+
+private:
+  void decodeLoop() {
+    while (true) {
+      std::vector<uint8_t> accessUnit;
+      {
+        std::unique_lock<std::mutex> lock(queueMutex_);
+        queueCV_.wait(lock, [this]() { return queueStopped_ || !pendingAccessUnits_.empty(); });
+        if (queueStopped_) {
+          return;
+        }
+        accessUnit = std::move(pendingAccessUnits_.front());
+        pendingAccessUnits_.pop_front();
+      }
+      decodeAccessUnit(accessUnit.data(), accessUnit.size());
+    }
+  }
+
+  void decodeAccessUnit(const uint8_t *bytes, size_t length) {
+    std::lock_guard<std::mutex> lock(decoderMutex_);
+    if (!ready_ || !bytes || length == 0) {
+      return;
+    }
+    const PreviewDiagnosticMetadata diagnostic = parseDiagnosticSEI(bytes, length);
+    if (api_->av_new_packet(packet_, static_cast<int>(length)) < 0) {
+      previewDebugLog("ffmpeg av_new_packet failed");
+      return;
+    }
+    std::memcpy(packet_->data, bytes, length);
+    if (diagnostic.valid && diagnostic.sourceUnixMicros > 0) {
+      packet_->pts = static_cast<int64_t>(diagnostic.sourceUnixMicros);
+      packet_->dts = packet_->pts;
+    }
+    const int sendResult = api_->avcodec_send_packet(codecContext_, packet_);
+    api_->av_packet_unref(packet_);
+    if (sendResult < 0 && sendResult != AVERROR(EAGAIN)) {
+      std::ostringstream stream;
+      stream << "ffmpeg send_packet failed result=" << sendResult;
+      previewDebugLog(stream.str());
+      return;
+    }
+    ++sentPackets_;
+    while (true) {
+      const int receiveResult = api_->avcodec_receive_frame(codecContext_, frame_);
+      if (receiveResult == AVERROR(EAGAIN) || receiveResult == AVERROR_EOF) {
+        return;
+      }
+      if (receiveResult < 0) {
+        std::ostringstream stream;
+        stream << "ffmpeg receive_frame failed result=" << receiveResult;
+        previewDebugLog(stream.str());
+        return;
+      }
+      ++receivedFrames_;
+      if (shouldEmitFrame()) {
+        emitFrame(diagnostic);
+      }
+      api_->av_frame_unref(frame_);
+    }
+  }
+
+  bool shouldEmitFrame() {
+    const auto now = std::chrono::steady_clock::now();
+    if (lastFrameEmit_.time_since_epoch().count() != 0 &&
+        now - lastFrameEmit_ < kMinimumPreviewFrameInterval) {
+      return false;
+    }
+    lastFrameEmit_ = now;
+    return true;
+  }
+
+  void emitFrame(const PreviewDiagnosticMetadata &diagnostic) {
+    if (!frameHandler_ || !frame_ || frame_->width <= 0 || frame_->height <= 0) {
+      return;
+    }
+    const int width = frame_->width;
+    const int height = frame_->height;
+    core::VideoFrame output;
+    output.width = width;
+    output.height = height;
+    output.strideBytes = width * 4;
+    output.pixels.resize(static_cast<size_t>(output.strideBytes) * static_cast<size_t>(height));
+
+    if (frame_->format != AV_PIX_FMT_YUV420P ||
+        !frame_->data[0] || !frame_->data[1] || !frame_->data[2]) {
+      std::ostringstream stream;
+      stream << "ffmpeg unsupported pixfmt=" << frame_->format;
+      return;
+    }
+    convertYUV420PToBGRA(frame_, output);
+    ++emittedFrames_;
+    const auto now = std::chrono::steady_clock::now();
+    if (lastLog_.time_since_epoch().count() == 0 || now - lastLog_ >= std::chrono::seconds(1)) {
+      lastLog_ = now;
+      std::ostringstream stream;
+      stream << "ffmpeg preview stats sent=" << sentPackets_
+             << " decoded=" << receivedFrames_
+             << " emitted=" << emittedFrames_
+             << " pixfmt=" << frame_->format
+             << " size=" << width << "x" << height;
+      previewDebugLog(stream.str());
+    }
+
+    output.previewSequence = diagnostic.valid ? diagnostic.sequence : ++emittedFrameSequence_;
+    output.previewAccessUnitNalTypes = diagnostic.nalTypes;
+    if (diagnostic.valid && diagnostic.sourceUnixMicros > 0) {
+      const auto now = std::chrono::system_clock::now();
+      const auto nowMicros = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
+      output.previewSourceToEmitMs = static_cast<double>(nowMicros - static_cast<int64_t>(diagnostic.sourceUnixMicros)) / 1000.0;
+    }
+    if (frame_->pts != AV_NOPTS_VALUE) {
+      const auto now = std::chrono::system_clock::now();
+      const auto nowMicros = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
+      output.previewSourceToReceiveMs = static_cast<double>(nowMicros - frame_->pts) / 1000.0;
+    }
+    frameHandler_(output);
+  }
+
+  static uint8_t clampByte(int value) {
+    return static_cast<uint8_t>((std::max)(0, (std::min)(255, value)));
+  }
+
+  static void convertYUV420PToBGRA(const AVFrame *frame, core::VideoFrame &output) {
+    for (int y = 0; y < output.height; ++y) {
+      const uint8_t *yRow = frame->data[0] + static_cast<size_t>(y) * static_cast<size_t>(frame->linesize[0]);
+      const uint8_t *uRow = frame->data[1] + static_cast<size_t>(y / 2) * static_cast<size_t>(frame->linesize[1]);
+      const uint8_t *vRow = frame->data[2] + static_cast<size_t>(y / 2) * static_cast<size_t>(frame->linesize[2]);
+      uint8_t *dst = output.pixels.data() + static_cast<size_t>(y) * static_cast<size_t>(output.strideBytes);
+      for (int x = 0; x < output.width; ++x) {
+        const int yy = static_cast<int>(yRow[x]) - 16;
+        const int u = static_cast<int>(uRow[x / 2]) - 128;
+        const int v = static_cast<int>(vRow[x / 2]) - 128;
+        const int c = (std::max)(0, yy);
+        const int r = (298 * c + 409 * v + 128) >> 8;
+        const int g = (298 * c - 100 * u - 208 * v + 128) >> 8;
+        const int b = (298 * c + 516 * u + 128) >> 8;
+        dst[static_cast<size_t>(x) * 4 + 0] = clampByte(b);
+        dst[static_cast<size_t>(x) * 4 + 1] = clampByte(g);
+        dst[static_cast<size_t>(x) * 4 + 2] = clampByte(r);
+        dst[static_cast<size_t>(x) * 4 + 3] = 255;
+      }
+    }
+  }
+
+  std::mutex decoderMutex_;
+  std::mutex queueMutex_;
+  std::condition_variable queueCV_;
+  std::thread decodeWorker_;
+  std::deque<std::vector<uint8_t>> pendingAccessUnits_;
+  bool requireQueuedKeyframe_ = true;
+  bool queueStopped_ = false;
+  FFmpegApi *api_ = nullptr;
+  core::VideoFrameCallback frameHandler_;
+  AVCodecContext *codecContext_ = nullptr;
+  AVFrame *frame_ = nullptr;
+  AVPacket *packet_ = nullptr;
+  std::chrono::steady_clock::time_point lastFrameEmit_;
+  std::chrono::steady_clock::time_point lastLog_;
+  uint64_t emittedFrameSequence_ = 0;
+  uint64_t sentPackets_ = 0;
+  uint64_t receivedFrames_ = 0;
+  uint64_t emittedFrames_ = 0;
+  bool waitingForKeyframe_ = true;
+  bool ready_ = false;
+};
+#endif
 
 class Win32H264PreviewRenderer final : public core::PreviewRenderer {
 public:
@@ -808,6 +1237,10 @@ private:
         FAILED(sample->AddBuffer(buffer.Get()))) {
       return false;
     }
+    if (activeDiagnostic_.valid && activeDiagnostic_.sourceUnixMicros > 0) {
+      sample->SetSampleTime(static_cast<LONGLONG>(activeDiagnostic_.sourceUnixMicros * 10u));
+      sample->SetSampleDuration(static_cast<LONGLONG>(10000000 / 12));
+    }
 
     HRESULT hr = decoder_->ProcessInput(0, sample.Get(), 0);
     if (hr == MF_E_TRANSFORM_TYPE_NOT_SET && setOutputType()) {
@@ -890,7 +1323,7 @@ private:
     }
 
     if (outputSubtype_ == MFVideoFormat_NV12) {
-      emitNV12Frame(data, pitch);
+      emitNV12Frame(sample, data, pitch);
       unlockSample2D(buffer, buffer2D);
       return;
     }
@@ -912,6 +1345,7 @@ private:
     frame.pixels.resize(static_cast<size_t>(frame.strideBytes) * static_cast<size_t>(frame.height));
     frame.previewReceiveToEmitMs = receiveToEmitMillis();
     frame.previewSourceToReceiveMs = sourceToReceiveMillis();
+    frame.previewSourceToEmitMs = outputSourceToEmitMillis(sample);
     frame.previewAccessUnitNalTypes = activeDiagnostic_.nalTypes;
     frame.previewSequence = activeDiagnostic_.valid ? activeDiagnostic_.sequence : ++emittedFrameSequence_;
     for (int y = 0; y < outputHeight; ++y) {
@@ -931,7 +1365,7 @@ private:
     return static_cast<uint8_t>((std::max)(0, (std::min)(255, value)));
   }
 
-  void emitNV12Frame(const uint8_t *data, LONG pitch) {
+  void emitNV12Frame(IMFSample *sample, const uint8_t *data, LONG pitch) {
     if (!data) {
       return;
     }
@@ -953,6 +1387,7 @@ private:
     frame.pixels.resize(static_cast<size_t>(frame.strideBytes) * static_cast<size_t>(frame.height));
     frame.previewReceiveToEmitMs = receiveToEmitMillis();
     frame.previewSourceToReceiveMs = sourceToReceiveMillis();
+    frame.previewSourceToEmitMs = outputSourceToEmitMillis(sample);
     frame.previewAccessUnitNalTypes = activeDiagnostic_.nalTypes;
     frame.previewSequence = activeDiagnostic_.valid ? activeDiagnostic_.sequence : ++emittedFrameSequence_;
     const uint8_t *uvPlane = data + yPlaneBytes;
@@ -995,6 +1430,16 @@ private:
     const auto now = std::chrono::system_clock::now();
     const auto receivedUnixMicros = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
     return static_cast<double>(receivedUnixMicros - static_cast<int64_t>(activeDiagnostic_.sourceUnixMicros)) / 1000.0;
+  }
+
+  double outputSourceToEmitMillis(IMFSample *sample) const {
+    LONGLONG sampleTime = 0;
+    if (!sample || FAILED(sample->GetSampleTime(&sampleTime)) || sampleTime <= 0) {
+      return 0.0;
+    }
+    const auto now = std::chrono::system_clock::now();
+    const auto nowHns = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count() * 10;
+    return static_cast<double>(nowHns - sampleTime) / 10000.0;
   }
 
   int normalizedVisibleWidth() const {
@@ -1054,6 +1499,12 @@ private:
 std::unique_ptr<core::PreviewRenderer> createH264PreviewRenderer(core::VideoFrameCallback frameHandler,
                                                                  int expectedWidth,
                                                                  int expectedHeight) {
+#if REASHOOT_WITH_FFMPEG_DECODER
+  auto ffmpegRenderer = std::make_unique<FFmpegH264PreviewRenderer>(frameHandler);
+  if (ffmpegRenderer->ready()) {
+    return ffmpegRenderer;
+  }
+#endif
   return std::make_unique<Win32H264PreviewRenderer>(std::move(frameHandler), expectedWidth, expectedHeight);
 }
 

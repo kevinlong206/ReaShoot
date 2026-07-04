@@ -42,7 +42,10 @@
 #define REAPERAPI_WANT_AddTakeToMediaItem
 #define REAPERAPI_WANT_CountTrackMediaItems
 #define REAPERAPI_WANT_CountTracks
+#define REAPERAPI_WANT_DockWindowActivate
+#define REAPERAPI_WANT_DockWindowAddEx
 #define REAPERAPI_WANT_DockWindowRefreshForHWND
+#define REAPERAPI_WANT_DockWindowRemove
 #define REAPERAPI_WANT_EnumProjects
 #define REAPERAPI_WANT_GetActiveTake
 #define REAPERAPI_WANT_GetCursorPositionEx
@@ -92,11 +95,12 @@ constexpr const char *kIPhoneZoomKey = "iphone_zoom";
 constexpr const char *kIPhoneLookKey = "iphone_look";
 constexpr const char *kVideoTrackName = "ReaShoot";
 constexpr int kRecordBit = 4;
+constexpr const char *kDockIdent = "reashoot_preview";
+constexpr auto kPlaybackMissGrace = std::chrono::milliseconds(500);
 
 HINSTANCE g_instance = nullptr;
 reaper_plugin_info_t *g_reaper = nullptr;
 int g_videoEnabledCommand = 0;
-int g_showPreviewCommand = 0;
 int g_floatPreviewCommand = 0;
 int g_alignSelectedCommand = 0;
 int g_restoreIPhoneCommand = 0;
@@ -106,6 +110,7 @@ int g_previousPlayState = 0;
 HWND g_panel = nullptr;
 bool g_panelVisible = false;
 bool g_previewFloating = true;
+bool g_panelDocked = false;
 bool g_activeTransportRecording = false;
 bool g_pendingInsert = false;
 std::string g_pendingInsertPath;
@@ -140,6 +145,7 @@ bool g_previewStreamActive = false;
 bool g_previewReceivedAccessUnit = false;
 bool g_previewReceivedFrame = false;
 bool g_showingPlayback = false;
+std::chrono::steady_clock::time_point g_lastPlaybackVideoHit;
 
 struct PlaybackVideo {
   bool found = false;
@@ -147,6 +153,7 @@ struct PlaybackVideo {
   double itemStart = 0.0;
   double itemEnd = 0.0;
   double sourceOffset = 0.0;
+  double playRate = 1.0;
 };
 
 std::string withoutAsciiWhitespace(std::string value) {
@@ -347,7 +354,22 @@ std::string resultError(const reashoot::core::CommandResult &result, const std::
     return result.errorMessage;
   }
   if (!result.output.empty()) {
-    return result.output;
+    std::istringstream stream(result.output);
+    std::ostringstream filtered;
+    std::string line;
+    while (std::getline(stream, line)) {
+      if (!line.empty() && line.back() == '\r') {
+        line.pop_back();
+      }
+      if (line.rfind("progress ", 0) == 0 || line.rfind("encode ", 0) == 0) {
+        continue;
+      }
+      if (!line.empty()) {
+        filtered << line << '\n';
+      }
+    }
+    const std::string text = filtered.str();
+    return text.empty() ? fallback : text;
   }
   return fallback;
 }
@@ -536,6 +558,7 @@ void startPreviewStreamWithFields(const reashoot::core::FieldMap &fields) {
             std::ostringstream timing;
             timing << "preview timing frame=" << frame.previewSequence
                    << " source_to_recv_ms=" << frame.previewSourceToReceiveMs
+                   << " source_to_emit_ms=" << frame.previewSourceToEmitMs
                    << " recv_to_emit_ms=" << frame.previewReceiveToEmitMs
                    << " emit_to_ui_ms=" << emitToUiMs
                    << " total_known_ms=" << (frame.previewSourceToReceiveMs + frame.previewReceiveToEmitMs + emitToUiMs)
@@ -673,6 +696,8 @@ void downloadRecordingAt(const reashoot::core::RemoteRecordingDescriptor &record
                          double insertPosition) {
   reashoot::core::RemoteCameraSettings settings = cameraSettings();
   const std::string directory = captureOutputDirectory(project);
+  const std::string expectedPath =
+      (std::filesystem::path(directory) / (recording.filename.empty() ? "recording.mov" : recording.filename)).string();
   g_downloadHandle = remoteCameraController().downloadRecording(
       settings,
       recording,
@@ -683,18 +708,30 @@ void downloadRecordingAt(const reashoot::core::RemoteRecordingDescriptor &record
           postToMain([status]() { setPanelStatus(status); });
         }
       },
-      [project, insertPosition](reashoot::core::CommandResult result) {
-        postToMain([result = std::move(result), project, insertPosition]() mutable {
+      [recording, expectedPath, project, insertPosition](reashoot::core::CommandResult result) {
+        postToMain([recording, expectedPath, result = std::move(result), project, insertPosition]() mutable {
+          bool recoveredCompletedDownload = false;
           if (result.exitCode != 0) {
-            setPanelStatus("iPhone download failed");
-            showError(resultError(result, "iPhone download failed."));
-            return;
+            const int64_t expectedBytes = recording.byteCount.empty() ? 0 : std::strtoll(recording.byteCount.c_str(), nullptr, 10);
+            std::error_code ec;
+            const bool fileLooksComplete = std::filesystem::exists(expectedPath, ec) &&
+                                           (expectedBytes <= 0 || static_cast<int64_t>(std::filesystem::file_size(expectedPath, ec)) == expectedBytes);
+            if (!fileLooksComplete) {
+              setPanelStatus("iPhone download failed");
+              showError(resultError(result, "iPhone download failed."));
+              return;
+            }
+            recoveredCompletedDownload = true;
+            setPanelStatus("Downloaded iPhone video; transfer acknowledgement failed");
           }
           std::string path = reashoot::core::parseDownloadedPath(result.output);
           if (path.empty()) {
-            setPanelStatus("iPhone download failed");
-            showError("The iPhone video downloaded, but the helper did not report the downloaded path.");
-            return;
+            if (!recoveredCompletedDownload) {
+              setPanelStatus("iPhone download failed");
+              showError("The iPhone video downloaded, but the helper did not report the downloaded path.");
+              return;
+            }
+            path = expectedPath;
           }
           g_pendingInsertPath = path;
           g_pendingInsertPosition = insertPosition;
@@ -822,7 +859,6 @@ void ensurePanel() {
   callbacks.deleteAllPending = [](void *) { deleteAllPendingRecordings(); };
   callbacks.closed = [](void *) {
     g_panelVisible = false;
-    reashoot::reaper::refreshToolbar(g_showPreviewCommand);
   };
   g_panel = reashoot::platform::swell::createSwellPanelProbe(nullptr, callbacks);
   if (g_panel) {
@@ -832,6 +868,46 @@ void ensurePanel() {
   }
 }
 
+void removePanelFromDock() {
+  if (g_panel && g_panelDocked && DockWindowRemove) {
+    DockWindowRemove(g_panel);
+  }
+  g_panelDocked = false;
+}
+
+void destroyPanel() {
+  if (!g_panel) {
+    return;
+  }
+  removePanelFromDock();
+  DestroyWindow(g_panel);
+  g_panel = nullptr;
+}
+
+void applyPanelDockMode() {
+  if (!g_panel) {
+    return;
+  }
+  if (!g_previewFloating) {
+    if (DockWindowAddEx && !g_panelDocked) {
+      DockWindowAddEx(g_panel, "ReaShoot", kDockIdent, true);
+      g_panelDocked = true;
+    }
+    if (DockWindowActivate) {
+      DockWindowActivate(g_panel);
+    }
+    if (DockWindowRefreshForHWND) {
+      DockWindowRefreshForHWND(g_panel);
+    }
+    return;
+  }
+  removePanelFromDock();
+  SetWindowLongPtr(g_panel, GWL_STYLE, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_CLIPSIBLINGS);
+  SetWindowLongPtr(g_panel, GWL_EXSTYLE, GetWindowLongPtr(g_panel, GWL_EXSTYLE) | WS_EX_TOPMOST);
+  SetParent(g_panel, nullptr);
+  SetWindowPos(g_panel, HWND_TOPMOST, 120, 120, 700, 500, SWP_FRAMECHANGED);
+}
+
 void showPanel(bool visible) {
   ensurePanel();
   if (!g_panel) {
@@ -839,6 +915,9 @@ void showPanel(bool visible) {
     return;
   }
   g_panelVisible = visible;
+  if (visible) {
+    applyPanelDockMode();
+  }
   reashoot::platform::swell::showWindow(g_panel, visible ? SW_SHOW : SW_HIDE);
   if (visible && g_extensionController.videoEnabled()) {
     startRemotePreview();
@@ -899,6 +978,10 @@ PlaybackVideo findPlaybackVideoAtPosition(ReaProject *project, double position) 
     result.itemStart = itemStart;
     result.itemEnd = itemEnd;
     result.sourceOffset = GetMediaItemTakeInfo_Value ? GetMediaItemTakeInfo_Value(take, "D_STARTOFFS") : 0.0;
+    result.playRate = GetMediaItemTakeInfo_Value ? GetMediaItemTakeInfo_Value(take, "D_PLAYRATE") : 1.0;
+    if (result.playRate <= 0.0) {
+      result.playRate = 1.0;
+    }
     return result;
   }
   return result;
@@ -1025,10 +1108,11 @@ void updatePlaybackWithVideo(const PlaybackVideo &video, double projectPosition)
   const bool enteringPlayback = !g_showingPlayback;
   g_showingPlayback = true;
   if (enteringPlayback) {
-    stopRemotePreview();
+    stopPreviewStream();
   }
   if (g_playbackPreviewRenderer) {
-    g_playbackPreviewRenderer->showMedia(video.path, video.itemStart, video.sourceOffset, projectPosition);
+    const double sourceOffset = video.sourceOffset + ((projectPosition - video.itemStart) * (video.playRate - 1.0));
+    g_playbackPreviewRenderer->showMedia(video.path, video.itemStart, sourceOffset, projectPosition);
     setPanelStatus("Playback");
   }
 }
@@ -1043,6 +1127,7 @@ void stopPlaybackAndShowLive() {
   }
   updatePanel();
   if (g_extensionController.videoEnabled()) {
+    stopPreviewStream();
     startRemotePreview();
   }
 }
@@ -1116,8 +1201,11 @@ void pollTransport() {
     const double position = GetPlayPositionEx(project);
     PlaybackVideo video = findPlaybackVideoAtPosition(project, position);
     if (video.found) {
+      g_lastPlaybackVideoHit = std::chrono::steady_clock::now();
       updatePlaybackWithVideo(video, position);
-    } else {
+    } else if (!g_showingPlayback ||
+               g_lastPlaybackVideoHit.time_since_epoch().count() == 0 ||
+               std::chrono::steady_clock::now() - g_lastPlaybackVideoHit > kPlaybackMissGrace) {
       stopPlaybackAndShowLive();
     }
   } else if (!isRecording) {
@@ -1147,13 +1235,13 @@ bool hookCommand2(KbdSectionInfo *, int command, int, int, int, HWND) {
     setVideoEnabled(!g_extensionController.videoEnabled());
     return true;
   }
-  if (command == g_showPreviewCommand) {
-    showPanel(!g_panelVisible);
-    return true;
-  }
   if (command == g_floatPreviewCommand) {
     g_previewFloating = !g_previewFloating;
     persistSettings();
+    if (g_panel) {
+      stopPreviewStream();
+      destroyPanel();
+    }
     showPanel(true);
     return true;
   }
@@ -1182,9 +1270,6 @@ bool hookCommand2(KbdSectionInfo *, int command, int, int, int, HWND) {
 int toggleActionHook(int command) {
   if (command == g_videoEnabledCommand) {
     return g_extensionController.videoEnabled() ? 1 : 0;
-  }
-  if (command == g_showPreviewCommand) {
-    return g_panelVisible ? 1 : 0;
   }
   if (command == g_toggleFollowCommand) {
     return g_extensionController.followEnabled() ? 1 : 0;
@@ -1217,10 +1302,7 @@ void cleanup() {
   }
   stopPreviewStream();
   g_previewRenderer.reset();
-  if (g_panel) {
-    DestroyWindow(g_panel);
-    g_panel = nullptr;
-  }
+  destroyPanel();
   g_playbackPreviewRenderer.reset();
 }
 
@@ -1232,21 +1314,19 @@ custom_action_register_t action(const char *id, const char *name) {
 }
 
 bool registerActions(reaper_plugin_info_t *rec) {
-  custom_action_register_t videoEnabledAction = action("KLONG_REASHOOT_ENABLE", "ReaShoot: Enable/Disable ReaShoot");
-  custom_action_register_t showPreviewAction = action("KLONG_REASHOOT_SHOW_PREVIEW", "ReaShoot: Show/Hide Preview");
+  custom_action_register_t videoEnabledAction = action("KLONG_REASHOOT_ENABLE", "ReaShoot: Enable ReaShoot");
   custom_action_register_t floatPreviewAction = action("KLONG_REASHOOT_FLOAT_PREVIEW", "ReaShoot: Float/Dock Preview");
   custom_action_register_t alignSelectedAction = action("KLONG_REASHOOT_ALIGN_SELECTED", "ReaShoot: Align Selected Video Item");
   custom_action_register_t restoreIPhoneAction = action("KLONG_REASHOOT_RESTORE_IPHONE", "ReaShoot: Restore Pending iPhone Recording");
   custom_action_register_t deleteAllIPhoneAction = action("KLONG_REASHOOT_DELETE_ALL_IPHONE", "ReaShoot: Delete All Pending iPhone Recordings");
   custom_action_register_t toggleFollowAction = action("KLONG_REASHOOT_TOGGLE_FOLLOW", "ReaShoot: Enable/Disable Transport Follow");
   g_videoEnabledCommand = rec->Register("custom_action", &videoEnabledAction);
-  g_showPreviewCommand = rec->Register("custom_action", &showPreviewAction);
   g_floatPreviewCommand = rec->Register("custom_action", &floatPreviewAction);
   g_alignSelectedCommand = rec->Register("custom_action", &alignSelectedAction);
   g_restoreIPhoneCommand = rec->Register("custom_action", &restoreIPhoneAction);
   g_deleteAllIPhoneCommand = rec->Register("custom_action", &deleteAllIPhoneAction);
   g_toggleFollowCommand = rec->Register("custom_action", &toggleFollowAction);
-  return g_videoEnabledCommand != 0 && g_showPreviewCommand != 0 && g_floatPreviewCommand != 0 &&
+  return g_videoEnabledCommand != 0 && g_floatPreviewCommand != 0 &&
          g_alignSelectedCommand != 0 && g_restoreIPhoneCommand != 0 && g_deleteAllIPhoneCommand != 0 &&
          g_toggleFollowCommand != 0 &&
          rec->Register("hookcommand2", reinterpret_cast<void *>(hookCommand2)) &&

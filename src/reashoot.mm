@@ -141,7 +141,8 @@ struct ActionRename {
 
 constexpr ActionRename kActionRenames[] = {
     {"KLONG_VIDEO_RECORDER_ENABLE", "KLONG_REASHOOT_ENABLE"},
-    {"KLONG_VIDEO_RECORDER_SHOW_PREVIEW", "KLONG_REASHOOT_SHOW_PREVIEW"},
+    {"KLONG_VIDEO_RECORDER_SHOW_PREVIEW", "KLONG_REASHOOT_ENABLE"},
+    {"KLONG_REASHOOT_SHOW_PREVIEW", "KLONG_REASHOOT_ENABLE"},
     {"KLONG_VIDEO_RECORDER_FLOAT_PREVIEW", "KLONG_REASHOOT_FLOAT_PREVIEW"},
     {"KLONG_VIDEO_RECORDER_ALIGN_SELECTED", "KLONG_REASHOOT_ALIGN_SELECTED"},
     {"KLONG_VIDEO_RECORDER_RESTORE_IPHONE", "KLONG_REASHOOT_RESTORE_IPHONE"},
@@ -259,7 +260,6 @@ reashoot::core::ModalPrompts &modalPrompts() {
 
 reaper_plugin_info_t *g_reaper = nullptr;
 int g_videoEnabledCommand = 0;
-int g_showPreviewCommand = 0;
 int g_floatPreviewCommand = 0;
 int g_alignSelectedCommand = 0;
 int g_restoreIPhoneCommand = 0;
@@ -1205,36 +1205,7 @@ void setVideoEnabled(bool enabled);
   std::unique_ptr<reashoot::core::PlaybackPreview> _playbackPreviewRenderer;
   std::unique_ptr<reashoot::core::PreviewStreamClient> _previewStreamClient;
 }
-@property(nonatomic, strong) NSView *dockView;
-@property(nonatomic, strong) NSView *previewView;
-@property(nonatomic, strong) NSWindow *floatingPreviewWindow;
-@property(nonatomic, strong) NSButton *iPhoneSetupButton;
-@property(nonatomic, strong) NSButton *iPhonePendingButton;
-@property(nonatomic, strong) NSButton *iPhoneDeleteAllButton;
-@property(nonatomic, strong) NSWindow *iPhoneSetupWindow;
-@property(nonatomic, strong) NSTextField *iPhoneHostField;
-@property(nonatomic, strong) NSTextField *iPhoneTokenField;
-@property(nonatomic, strong) NSTextField *iPhonePairingCodeField;
-@property(nonatomic, strong) NSButton *iPhoneDiscoverButton;
-@property(nonatomic, strong) NSButton *iPhonePairButton;
-@property(nonatomic, strong) NSButton *iPhoneTestButton;
-@property(nonatomic, strong) NSTextField *iPhoneSetupHostField;
-@property(nonatomic, strong) NSTextField *iPhoneSetupTokenField;
-@property(nonatomic, strong) NSTextField *iPhoneSetupPairingCodeField;
-@property(nonatomic, strong) NSButton *iPhoneSetupDiscoverButton;
-@property(nonatomic, strong) NSButton *iPhoneSetupPairButton;
-@property(nonatomic, strong) NSButton *iPhoneSetupTestButton;
-@property(nonatomic, strong) NSPopUpButton *iPhoneResolutionPopup;
-@property(nonatomic, strong) NSPopUpButton *iPhoneFPSPopup;
-@property(nonatomic, strong) NSPopUpButton *iPhoneOrientationPopup;
-@property(nonatomic, strong) NSPopUpButton *iPhoneAspectPopup;
-@property(nonatomic, strong) NSPopUpButton *iPhoneLensPopup;
-@property(nonatomic, strong) NSPopUpButton *iPhoneZoomPopup;
-@property(nonatomic, strong) NSPopUpButton *iPhoneLookPopup;
-@property(nonatomic, strong) NSButton *iPhonePreviousLookButton;
-@property(nonatomic, strong) NSButton *iPhoneNextLookButton;
-@property(nonatomic, strong) NSTextField *formatLabel;
-@property(nonatomic, strong) NSTextField *statusLabel;
+@property(nonatomic, copy) NSString *statusText;
 @property(nonatomic, assign) BOOL iPhonePreviewProfileConfiguring;
 @property(nonatomic, assign) BOOL previewStreamStarting;
 @property(nonatomic, assign) BOOL previewStreamActive;
@@ -1375,9 +1346,7 @@ void setVideoEnabled(bool enabled);
 }
 
 - (void)togglePreview {
-  if (self.floatingPreview && self.floatingPreviewWindow.visible) {
-    [self hideFloatingPreview];
-  } else if (self.docked) {
+  if (self.docked) {
     [self hideDockedPreview];
   } else {
     [self showPreview];
@@ -1850,12 +1819,10 @@ void setVideoEnabled(bool enabled);
   profile.look = g_iPhoneLook;
   const std::string formatText = reashoot::core::captureFormatText(profile, self.previewStreamActive, self.previewStreamStarting);
   NSString *format = [NSString stringWithUTF8String:formatText.c_str()];
-  if (self.formatLabel) {
-    self.formatLabel.stringValue = format;
-  }
   if (g_swellPanelPrototype) {
+    NSString *status = self.statusText ?: [NSString stringWithUTF8String:followStatusText().c_str()];
     reashoot::platform::swell::updateSwellPanelProbe(g_swellPanelPrototype,
-                                                     self.statusLabel ? self.statusLabel.stringValue.UTF8String : followStatusText().c_str(),
+                                                     status.UTF8String,
                                                      format.UTF8String,
                                                      g_iPhoneHost.c_str(),
                                                      g_iPhoneToken.c_str());
@@ -1888,37 +1855,6 @@ void setVideoEnabled(bool enabled);
   }
   if (swellSettings.lens[0] != '\0') {
     g_iPhoneLens = swellSettings.lens;
-  }
-  NSTextField *hostField = self.iPhoneSetupWindow.visible && self.iPhoneSetupHostField ? self.iPhoneSetupHostField : self.iPhoneHostField;
-  if (hostField) {
-    g_iPhoneHost = hostField.stringValue.UTF8String ?: "";
-  }
-  if (self.iPhoneHostField) self.iPhoneHostField.stringValue = [NSString stringWithUTF8String:g_iPhoneHost.c_str()];
-  if (self.iPhoneSetupHostField) self.iPhoneSetupHostField.stringValue = [NSString stringWithUTF8String:g_iPhoneHost.c_str()];
-  if (self.iPhoneResolutionPopup.selectedItem.title.length > 0) {
-    g_iPhoneResolution = self.iPhoneResolutionPopup.selectedItem.title.UTF8String ?: "4K";
-  }
-  if (self.iPhoneFPSPopup.selectedItem.title.length > 0) {
-    g_iPhoneFPS = self.iPhoneFPSPopup.selectedItem.title.UTF8String ?: "30";
-  }
-  if (self.iPhoneOrientationPopup.selectedItem.representedObject) {
-    NSString *orientation = self.iPhoneOrientationPopup.selectedItem.representedObject;
-    g_iPhoneOrientation = orientation.UTF8String ?: "auto";
-  }
-  if (self.iPhoneAspectPopup.selectedItem.title.length > 0) {
-    g_iPhoneAspect = self.iPhoneAspectPopup.selectedItem.title.UTF8String ?: "9:16";
-  }
-  if (self.iPhoneLensPopup.selectedItem.representedObject) {
-    NSString *lens = self.iPhoneLensPopup.selectedItem.representedObject;
-    g_iPhoneLens = lens.UTF8String ?: "wide";
-  }
-  if (self.iPhoneZoomPopup.selectedItem.representedObject) {
-    NSString *zoom = self.iPhoneZoomPopup.selectedItem.representedObject;
-    g_iPhoneZoom = zoom.UTF8String ?: "1.0";
-  }
-  if (self.iPhoneLookPopup.selectedItem.representedObject) {
-    NSString *look = self.iPhoneLookPopup.selectedItem.representedObject;
-    g_iPhoneLook = look.UTF8String ?: "natural";
   }
   reashoot::reaper::setExtState(kExtStateSection, kIPhoneHostKey, g_iPhoneHost.c_str(), true);
   reashoot::reaper::setExtState(kExtStateSection, kIPhoneTokenKey, g_iPhoneToken.c_str(), true);
@@ -1998,8 +1934,6 @@ void setVideoEnabled(bool enabled);
   if (httpPort.length > 0) {
     g_iPhoneHttpPort = httpPort.UTF8String;
   }
-  if (self.iPhoneHostField) self.iPhoneHostField.stringValue = host;
-  if (self.iPhoneSetupHostField) self.iPhoneSetupHostField.stringValue = host;
   [self persistIPhoneSettings];
   [self setStatus:[NSString stringWithFormat:@"Found iPhone: %@", fields[@"name"] ?: host]];
   return YES;
@@ -2017,8 +1951,6 @@ void setVideoEnabled(bool enabled);
     if (![self applyFirstDiscoveredIPhoneFromOutput:output ?: @""]) {
       if (g_iPhoneHost.empty()) {
         g_iPhoneHost = kDefaultIPhoneHost;
-        if (self.iPhoneHostField) self.iPhoneHostField.stringValue = [NSString stringWithUTF8String:kDefaultIPhoneHost];
-        if (self.iPhoneSetupHostField) self.iPhoneSetupHostField.stringValue = [NSString stringWithUTF8String:kDefaultIPhoneHost];
         [self persistIPhoneSettings];
         [self setStatus:@"Bonjour not found; using known iPhone host"];
       } else {
@@ -2031,8 +1963,7 @@ void setVideoEnabled(bool enabled);
 - (void)pairIPhone:(id)sender {
   (void)sender;
   [self persistIPhoneSettings];
-  NSTextField *codeField = self.iPhoneSetupWindow.visible && self.iPhoneSetupPairingCodeField ? self.iPhoneSetupPairingCodeField : self.iPhonePairingCodeField;
-  NSString *code = codeField ? codeField.stringValue : [NSString stringWithUTF8String:reashoot::platform::swell::swellPanelSettings(g_swellPanelPrototype).pairingCode];
+  NSString *code = [NSString stringWithUTF8String:reashoot::platform::swell::swellPanelSettings(g_swellPanelPrototype).pairingCode];
   code = [code stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
   if (g_iPhoneHost.empty() || code.length == 0) {
     [self setStatus:@"Enter iPhone host and pairing code"];
@@ -2110,38 +2041,21 @@ void setVideoEnabled(bool enabled);
 }
 
 - (void)selectRelativeIPhoneLook:(NSInteger)offset {
-  if (!self.iPhoneLookPopup) {
-    static const char *looks[] = {"natural", "warmVintage", "coolBlue", "highContrastBW", "fadedFilm", "dreamGlow", "noir",
-                                  "saturatedPop", "bleachBypass", "sepia", "instantPhoto", "chrome", "tonal", "silvertone",
-                                  "dramaticWarm", "dramaticCool", "softMatte", "comicBook", "vhs", "musicVideoPop"};
-    int selectedIndex = 0;
-    const int count = static_cast<int>(sizeof(looks) / sizeof(looks[0]));
-    for (int i = 0; i < count; ++i) {
-      if (g_iPhoneLook == looks[i]) {
-        selectedIndex = i;
-        break;
-      }
+  static const char *looks[] = {"natural", "warmVintage", "coolBlue", "highContrastBW", "fadedFilm", "dreamGlow", "noir",
+                                "saturatedPop", "bleachBypass", "sepia", "instantPhoto", "chrome", "tonal", "silvertone",
+                                "dramaticWarm", "dramaticCool", "softMatte", "comicBook", "vhs", "musicVideoPop"};
+  int selectedIndex = 0;
+  const int count = static_cast<int>(sizeof(looks) / sizeof(looks[0]));
+  for (int i = 0; i < count; ++i) {
+    if (g_iPhoneLook == looks[i]) {
+      selectedIndex = i;
+      break;
     }
-    int nextIndex = (selectedIndex + static_cast<int>(offset)) % count;
-    if (nextIndex < 0) nextIndex += count;
-    g_iPhoneLook = looks[nextIndex];
-    [self profileSelectionChanged:nil];
-    return;
   }
-  const NSInteger itemCount = self.iPhoneLookPopup.numberOfItems;
-  if (itemCount <= 0) {
-    return;
-  }
-  NSInteger selectedIndex = self.iPhoneLookPopup.indexOfSelectedItem;
-  if (selectedIndex < 0) {
-    selectedIndex = 0;
-  }
-  NSInteger nextIndex = (selectedIndex + offset) % itemCount;
-  if (nextIndex < 0) {
-    nextIndex += itemCount;
-  }
-  [self.iPhoneLookPopup selectItemAtIndex:nextIndex];
-  [self profileSelectionChanged:self.iPhoneLookPopup];
+  int nextIndex = (selectedIndex + static_cast<int>(offset)) % count;
+  if (nextIndex < 0) nextIndex += count;
+  g_iPhoneLook = looks[nextIndex];
+  [self profileSelectionChanged:nil];
 }
 
 - (void)previousIPhoneLook:(id)sender {
@@ -2464,7 +2378,6 @@ void setVideoEnabled(bool enabled);
 }
 
 - (void)hideFloatingPreview {
-  self.floatingPreviewWindow = nil;
 }
 
 - (void)hideDockedPreview {
@@ -2478,10 +2391,7 @@ void setVideoEnabled(bool enabled);
 - (void)setStatus:(NSString *)status {
   std::string friendlyStatus = reashoot::core::friendlyStatusText(status ? status.UTF8String : "Idle");
   NSString *statusText = [NSString stringWithUTF8String:friendlyStatus.c_str()];
-  if (self.statusLabel) {
-    self.statusLabel.font = [NSFont boldSystemFontOfSize:14.0];
-    self.statusLabel.stringValue = statusText;
-  }
+  self.statusText = statusText;
   if (g_swellPanelPrototype) {
     if ([statusText hasPrefix:@"Preview:"] && ![statusText isEqualToString:@"ReaShoot live video"]) {
       reashoot::platform::swell::setSwellPanelPreviewPending(g_swellPanelPrototype, statusText.UTF8String);
@@ -2501,12 +2411,6 @@ void setVideoEnabled(bool enabled);
 }
 
 - (void)updateRecordingTextColor {
-  if (!self.statusLabel || !self.formatLabel) {
-    return;
-  }
-  NSColor *color = _recordingVisualState ? NSColor.systemRedColor : NSColor.labelColor;
-  self.statusLabel.textColor = color;
-  self.formatLabel.textColor = color;
 }
 
 @end
@@ -2841,11 +2745,6 @@ bool hookCommand2(KbdSectionInfo *section, int command, int val, int val2, int r
     return true;
   }
 
-  if (command == g_showPreviewCommand) {
-    [recorder() togglePreview];
-    return true;
-  }
-
   if (command == g_floatPreviewCommand) {
     [recorder() togglePreviewDockMode];
     return true;
@@ -2911,13 +2810,7 @@ bool registerActions(reaper_plugin_info_t *rec) {
   custom_action_register_t videoEnabledAction = {
       0,
       "KLONG_REASHOOT_ENABLE",
-      "ReaShoot: Enable/Disable ReaShoot",
-      nullptr,
-  };
-  custom_action_register_t showPreviewAction = {
-      0,
-      "KLONG_REASHOOT_SHOW_PREVIEW",
-      "ReaShoot: Show/Hide Preview",
+      "ReaShoot: Enable ReaShoot",
       nullptr,
   };
   custom_action_register_t floatPreviewAction = {
@@ -2958,7 +2851,6 @@ bool registerActions(reaper_plugin_info_t *rec) {
   };
 
   g_videoEnabledCommand = rec->Register("custom_action", &videoEnabledAction);
-  g_showPreviewCommand = rec->Register("custom_action", &showPreviewAction);
   g_floatPreviewCommand = rec->Register("custom_action", &floatPreviewAction);
   g_alignSelectedCommand = rec->Register("custom_action", &alignSelectedAction);
   g_restoreIPhoneCommand = rec->Register("custom_action", &restoreIPhoneAction);
@@ -2969,7 +2861,7 @@ bool registerActions(reaper_plugin_info_t *rec) {
     debugLog(@"Failed to register SWELL panel prototype action");
   }
 
-  return g_videoEnabledCommand != 0 && g_showPreviewCommand != 0 && g_floatPreviewCommand != 0 &&
+  return g_videoEnabledCommand != 0 && g_floatPreviewCommand != 0 &&
          g_alignSelectedCommand != 0 && g_restoreIPhoneCommand != 0 && g_deleteAllIPhoneCommand != 0 &&
          g_toggleFollowCommand != 0 &&
          rec->Register("hookcommand2", reinterpret_cast<void *>(hookCommand2)) &&
