@@ -102,6 +102,11 @@ int g_previewHeight = 180;
 // per-frame invalidate in setSwellPanelPreviewFrame in sync via these.
 constexpr int kPreviewMargin = 12;
 constexpr int kPreviewControlsHeight = 150;
+#ifdef _WIN32
+constexpr int kLookComboHeight = 140;
+#else
+constexpr int kLookComboHeight = 26;
+#endif
 bool g_usingLivePreview = false;
 bool g_previewPending = false;
 std::string g_previewMessage = "Preview unavailable: discover the iPhone, enter its pairing code, then Pair or Reconnect.";
@@ -195,7 +200,7 @@ void layoutPreviewPanel(HWND panel) {
   const int comboX = prevX + prevWidth + gap;
   const int comboWidth = (std::max)(180, nextX - gap - comboX);
   moveControl(panel, kPreviousLookButton, prevX, 60, prevWidth, 26);
-  moveControl(panel, kLookCombo, comboX, 60, comboWidth, 140);
+  moveControl(panel, kLookCombo, comboX, 60, comboWidth, kLookComboHeight);
   moveControl(panel, kNextLookButton, nextX, 60, nextWidth, 26);
   moveControl(panel, kFormatLabel, margin, 36, statusWidth, 20);
   moveControl(panel, kStatusLabel, margin, 7, statusWidth, 26);
@@ -701,7 +706,7 @@ HWND createSwellPanelProbe(HWND parent, const SwellPanelCallbacks &callbacks) {
   makeButton(0, "Dock/Undock", kDockToggleButton, 0, 0, 130, 26, 0);
   makeButton(0, "Prev", kPreviousLookButton, 0, 0, 56, 26, 0);
   makeButton(0, "Next", kNextLookButton, 0, 0, 56, 26, 0);
-  makeCombo(kLookCombo, 0, 0, 528, 140, CBS_DROPDOWNLIST);
+  makeCombo(kLookCombo, 0, 0, 528, kLookComboHeight, CBS_DROPDOWNLIST);
   for (const auto &look : kLookOptions) {
     comboAddString(panel, kLookCombo, look.title);
   }

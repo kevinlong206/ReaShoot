@@ -240,7 +240,9 @@ HWND makeLabel(int align, const char *label, int controlID, int x, int y, int wi
 }
 
 HWND makeCombo(int controlID, int x, int y, int width, int height, int flags) {
-  return g_makeCombo ? g_makeCombo(controlID, x, y, width, height, flags) : nullptr;
+  const int closedControlHeight = 26;
+  const int macHeight = height > closedControlHeight ? closedControlHeight : height;
+  return g_makeCombo ? g_makeCombo(controlID, x, y, width, macHeight, flags) : nullptr;
 }
 
 bool setDlgItemText(HWND parent, int controlID, const char *text) {
