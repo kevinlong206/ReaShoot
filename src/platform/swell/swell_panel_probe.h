@@ -12,6 +12,7 @@ struct SwellPanelCallbacks {
   void (*testConnection)(void *context) = nullptr;
   void (*restorePending)(void *context) = nullptr;
   void (*deleteAllPending)(void *context) = nullptr;
+  void (*toggleDock)(void *context) = nullptr;
   void (*previousLook)(void *context) = nullptr;
   void (*nextLook)(void *context) = nullptr;
   void (*selectLook)(void *context, const char *lookID) = nullptr;

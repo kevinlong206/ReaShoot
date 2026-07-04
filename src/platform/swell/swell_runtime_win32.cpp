@@ -425,19 +425,27 @@ bool drawFrame(HDC output, int x, int y, int width, int height, const void *bits
   info.bmiHeader.biPlanes = 1;
   info.bmiHeader.biBitCount = 32;
   info.bmiHeader.biCompression = BI_RGB;
-  return StretchDIBits(output,
-                       x,
-                       y,
-                       width,
-                       height,
-                       0,
-                       0,
-                       sourceWidth,
-                       sourceHeight,
-                       bits,
-                       &info,
-                       DIB_RGB_COLORS,
-                       SRCCOPY) != GDI_ERROR;
+  const int previousMode = SetStretchBltMode(output, HALFTONE);
+  POINT previousOrigin = {};
+  SetBrushOrgEx(output, 0, 0, &previousOrigin);
+  const bool ok = StretchDIBits(output,
+                                x,
+                                y,
+                                width,
+                                height,
+                                0,
+                                0,
+                                sourceWidth,
+                                sourceHeight,
+                                bits,
+                                &info,
+                                DIB_RGB_COLORS,
+                                SRCCOPY) != GDI_ERROR;
+  SetBrushOrgEx(output, previousOrigin.x, previousOrigin.y, nullptr);
+  if (previousMode != 0) {
+    SetStretchBltMode(output, previousMode);
+  }
+  return ok;
 }
 
 bool drawText(HDC output, const char *text, RECT *rect, int align) {

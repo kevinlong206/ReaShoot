@@ -46,6 +46,7 @@
 #define REAPERAPI_WANT_GetAudioAccessorSamples
 #define REAPERAPI_WANT_GetCursorPositionEx
 #define REAPERAPI_WANT_GetExtState
+#define REAPERAPI_WANT_get_ini_file
 #define REAPERAPI_WANT_GetSet_LoopTimeRange2
 #define REAPERAPI_WANT_GetMediaItemInfo_Value
 #define REAPERAPI_WANT_GetMediaItem
@@ -337,14 +338,17 @@ std::string captureOutputPath(ReaProject *project) {
   std::string outputRoot;
   std::string projectName = "unsaved_project";
 
-  outputRoot = reashoot::reaper::projectPath(project);
+  outputRoot = reashoot::reaper::defaultRecordingPath();
 
   std::string projectFile;
   reashoot::reaper::currentProject(&projectFile);
   if (!projectFile.empty()) {
     projectName = reashoot::core::baseNameWithoutExtension(projectFile);
     if (outputRoot.empty()) {
-      outputRoot = reashoot::core::directoryName(projectFile);
+      outputRoot = reashoot::reaper::projectPath(project);
+      if (outputRoot.empty()) {
+        outputRoot = reashoot::core::directoryName(projectFile);
+      }
     }
   }
 
@@ -1381,6 +1385,7 @@ void setVideoEnabled(bool enabled);
   if (message.length == 0) {
     message = @"reashoot-mac failed.";
   }
+  message = stringFromStd(reashoot::core::friendlyStatusText(message.UTF8String ?: ""));
   return [NSError errorWithDomain:@"com.klong.reashoot"
                             code:code
                          userInfo:@{NSLocalizedDescriptionKey: message}];
@@ -2095,6 +2100,10 @@ void setVideoEnabled(bool enabled);
     callbacks.deleteAllPending = [](void *context) {
       ReaShootRecorder *target = (__bridge ReaShootRecorder *)context;
       dispatch_async(dispatch_get_main_queue(), ^{ [target deleteAllPendingIPhoneRecordings]; });
+    };
+    callbacks.toggleDock = [](void *context) {
+      ReaShootRecorder *target = (__bridge ReaShootRecorder *)context;
+      dispatch_async(dispatch_get_main_queue(), ^{ [target togglePreviewDockMode]; });
     };
     callbacks.previousLook = [](void *context) {
       ReaShootRecorder *target = (__bridge ReaShootRecorder *)context;

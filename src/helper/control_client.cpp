@@ -123,13 +123,24 @@ std::string randomBytes(size_t count) {
   return bytes;
 }
 
+std::string controlSocketConnectionError(const std::string &detail) {
+  std::string message =
+      "Could not connect to the iPhone control socket. Make sure the ReaShoot iOS app is open in the foreground, "
+      "the iPhone is unlocked, and the phone and this computer are on the same Wi-Fi network. Then try Reconnect. "
+      "If the iPhone shows a new pairing code or you recently reset pairing, pair again from Setup.";
+  if (!detail.empty()) {
+    message += " Details: " + detail;
+  }
+  return message;
+}
+
 std::string readExact(SocketHandle socket, size_t count) {
   std::string data(count, '\0');
   size_t offset = 0;
   while (offset < count) {
     const int result = receiveSocketBytes(socket, data.data() + offset, count - offset);
     if (result <= 0) {
-      throw HelperError("Could not connect to the control socket: connection closed");
+      throw HelperError(controlSocketConnectionError("connection closed"));
     }
     offset += static_cast<size_t>(result);
   }
@@ -141,7 +152,7 @@ void writeAll(SocketHandle socket, const std::string &data) {
   while (offset < data.size()) {
     const int result = sendSocketBytes(socket, data.data() + offset, data.size() - offset);
     if (result <= 0) {
-      throw HelperError("Could not connect to the control socket: " + socketErrorMessage());
+      throw HelperError(controlSocketConnectionError(socketErrorMessage()));
     }
     offset += static_cast<size_t>(result);
   }
@@ -194,7 +205,19 @@ core::ProtocolEvent ControlClient::send(const core::ProtocolCommand &command) co
 }
 
 SocketHandle ControlClient::openSocket() const {
-  return connectTcpSocket(host_, port_, timeoutSeconds_, "the control socket");
+  try {
+    return connectTcpSocket(host_, port_, timeoutSeconds_, "the control socket");
+  } catch (const HelperError &error) {
+    std::string detail = error.what();
+    const std::string prefix = "Could not connect to the control socket:";
+    if (detail.rfind(prefix, 0) == 0) {
+      detail = detail.substr(prefix.size());
+      while (!detail.empty() && std::isspace(static_cast<unsigned char>(detail.front()))) {
+        detail.erase(detail.begin());
+      }
+    }
+    throw HelperError(controlSocketConnectionError(detail));
+  }
 }
 
 void ControlClient::performHandshake(SocketHandle socket) const {
@@ -213,7 +236,7 @@ void ControlClient::performHandshake(SocketHandle socket) const {
   while (response.find("\r\n\r\n") == std::string::npos) {
     const int count = receiveSocketBytes(socket, buffer, sizeof(buffer));
     if (count <= 0) {
-      throw HelperError("Could not connect to the control socket: connection closed");
+      throw HelperError(controlSocketConnectionError("connection closed"));
     }
     response.append(buffer, static_cast<size_t>(count));
   }

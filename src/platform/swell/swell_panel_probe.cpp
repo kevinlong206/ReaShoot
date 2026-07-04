@@ -14,6 +14,7 @@ namespace reashoot::platform::swell {
 enum ControlID {
   kSetupButton = 1001,
   kManageButton = 1002,
+  kDockToggleButton = 1003,
   kStatusLabel = 1006,
   kFormatLabel = 1011,
   kPreviousLookButton = 1012,
@@ -96,6 +97,11 @@ const ComboOption kLensOptions[] = {
 std::vector<uint32_t> g_previewFrame;
 int g_previewWidth = 320;
 int g_previewHeight = 180;
+// Shared preview layout metrics. The controls occupy the top band of the panel
+// and the decoded video is drawn below them. Keep paintPreview and the
+// per-frame invalidate in setSwellPanelPreviewFrame in sync via these.
+constexpr int kPreviewMargin = 12;
+constexpr int kPreviewControlsHeight = 150;
 bool g_usingLivePreview = false;
 bool g_previewPending = false;
 std::string g_previewMessage = "Preview unavailable: discover the iPhone, enter its pairing code, then Pair or Reconnect.";
@@ -174,8 +180,11 @@ void layoutPreviewPanel(HWND panel) {
 
   const int manageWidth = paddedTextWidth("Manage Recordings", 34, 180);
   const int setupWidth = paddedTextWidth("Setup", 34, 92);
+  const int dockWidth = paddedTextWidth("Dock/Undock", 34, 130);
   const int manageX = (std::max)(margin, clientWidth - margin - manageWidth);
   const int setupX = (std::max)(margin, manageX - gap - setupWidth);
+  const int dockX = (std::max)(margin, setupX - gap - dockWidth);
+  moveControl(panel, kDockToggleButton, dockX, 112, dockWidth, 26);
   moveControl(panel, kSetupButton, setupX, 112, setupWidth, 26);
   moveControl(panel, kManageButton, manageX, 112, manageWidth, 26);
 
@@ -312,8 +321,8 @@ void paintPreview(HWND hwnd) {
     const int clientHeight = static_cast<int>(client.bottom - client.top);
 #endif
     fillDialogBackground(paintDC, &client, 0);
-    const int margin = 12;
-    const int controlsHeight = 150;
+    const int margin = kPreviewMargin;
+    const int controlsHeight = kPreviewControlsHeight;
     const int width = (std::max)(1, clientWidth - margin * 2);
     const int height = (std::max)(1, clientHeight - controlsHeight - margin);
     if (!g_previewFrame.empty()) {
@@ -583,6 +592,12 @@ static LRESULT swellProbeWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
       showManageWindow();
       return 0;
     }
+    if (controlID == kDockToggleButton) {
+      if (g_callbacks.toggleDock) {
+        g_callbacks.toggleDock(g_callbacks.context);
+      }
+      return 0;
+    }
     if (controlID == kPreviousLookButton) {
       if (g_callbacks.previousLook) {
         g_callbacks.previousLook(g_callbacks.context);
@@ -683,6 +698,7 @@ HWND createSwellPanelProbe(HWND parent, const SwellPanelCallbacks &callbacks) {
   makeSetCurParms(1.0f, 1.0f, 0.0f, 0.0f, panel, false, false);
   makeButton(0, "Setup", kSetupButton, 0, 0, 92, 26, 0);
   makeButton(0, "Manage Recordings", kManageButton, 0, 0, 180, 26, 0);
+  makeButton(0, "Dock/Undock", kDockToggleButton, 0, 0, 130, 26, 0);
   makeButton(0, "Prev", kPreviousLookButton, 0, 0, 56, 26, 0);
   makeButton(0, "Next", kNextLookButton, 0, 0, 56, 26, 0);
   makeCombo(kLookCombo, 0, 0, 528, 140, CBS_DROPDOWNLIST);
@@ -768,7 +784,17 @@ void setSwellPanelPreviewFrame(HWND panel, const void *pixels, int width, int he
   g_usingLivePreview = true;
   g_previewPending = false;
   g_previewMessage.clear();
-  invalidateRect(panel, nullptr, false);
+  // Invalidate only the video region (below the controls), not the whole panel.
+  // Repainting the full client every frame made the docked panel's child
+  // controls flicker at playback frame rate ("blinking window"); the controls
+  // are static and self-painting, so leave their band untouched.
+  RECT client = {};
+  if (getClientRect(panel, &client) && (client.bottom - client.top) > kPreviewControlsHeight) {
+    RECT videoRegion = {client.left, client.top + kPreviewControlsHeight, client.right, client.bottom};
+    invalidateRect(panel, &videoRegion, false);
+  } else {
+    invalidateRect(panel, nullptr, false);
+  }
 }
 
 void setSwellPanelPreviewPending(HWND panel, const char *reason) {

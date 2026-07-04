@@ -5,7 +5,7 @@
 This repository contains ReaShoot: a native REAPER extension plus its companion iPhone camera app.
 
 - The macOS REAPER extension is implemented in Objective-C++ with the REAPER Extension SDK, AVFoundation, Cocoa, and a local H.264 preview stream.
-- The Windows REAPER extension builds with CMake as `reaper_reashoot.dll`; it currently includes the helper, shared setup/status panel, pairing/configure/start/stop/download flow, pending recording restore/delete, Media Foundation H.264 live/playback preview, and media insertion.
+- The Windows REAPER extension builds with CMake as `reaper_reashoot.dll`; it currently includes the helper, shared setup/status panel, pairing/configure/start/stop/download flow, pending recording restore/delete, FFmpeg-based H.264 live/playback preview, and media insertion.
 - The companion iPhone app lives in `iphone/` and records full-quality iPhone video while REAPER controls it over the local Wi-Fi/Bonjour network.
 - `iphone/` is the source of truth for the iPhone app; do not recreate old external development copies.
 
@@ -92,6 +92,11 @@ rm -rf iphone/Package.resolved iphone/.build helper/.build
 
 - Keep the implementation native; do not move iPhone control, preview, or media insertion into JSFX, VST3, or Lua.
 - Keep the preview transport dependency-light and same-LAN oriented; prefer simple H.264 streaming over heavyweight realtime SDKs unless requirements change.
+- Windows live preview should prefer the FFmpeg H.264 decoder path; do not suggest switching live preview back to Media Foundation to fix orientation or restart issues, because Media Foundation had other regressions.
+- Windows preview ownership is a single explicit `PreviewMode { Idle, Live, Playback }` state machine in `reaper_reashoot_win32.cpp` (`setPreviewMode`, `showingPlayback`). Every panel paint is gated on it: live H.264 frames paint only in `Live`, downloaded-file playback frames only in `Playback`. When entering playback, DO NOT tear down the live stream and DO NOT re-issue `configure`/`start-preview` on transport stop — leave the live stream connected and just switch which source paints. Restarting live preview per play/stop is what caused the panel to blink and churn (`start-preview` fired hundreds of times).
+- Windows playback preview (`win32_playback_preview_renderer.cpp`) decodes recorded `.mov` files with FFmpeg. Recorded clips are heavily audio-interleaved (~3 audio packets per video packet), so `renderAt` must read a generous packet budget (200) to feed the decoder enough VIDEO packets. Keep the decoder on slice+frame threading (`FF_THREAD_FRAME | FF_THREAD_SLICE`, `thread_count=0`); frame threading is required for throughput so 4K decode keeps up with real time. Never re-seek/flush just because no frame has decoded yet (`soughtSinceOpen_` guard) — that flushed the frame-threading pipeline before it could prime and produced ZERO frames ("nothing plays").
+- Windows preview panel repaints (`setSwellPanelPreviewFrame`) invalidate ONLY the video region below the controls (via `kPreviewControlsHeight`), not the whole client. Invalidating the full panel every frame made the docked panel's child controls flicker at playback frame rate. Keep this region-limited invalidate.
+- Avoid per-timer-tick panel churn on Windows: `setPanelStatus` skips redundant updates, because `updateSwellPanelProbe` re-sets label text, syncs setup fields, and invalidates the panel — calling it every tick (e.g. during playback) flickers the docked panel.
 - Preserve the single-item model: one recorded `.mov` item with embedded camera audio. Do not add a separate reference-audio item unless the user explicitly asks.
 - Keep routine status in the preview UI, not REAPER popups. Use REAPER message boxes only for real errors.
 - Keep the REAPER extension GUI defined in the shared SWELL panel (`src/platform/swell/swell_panel_probe.cpp`). Do not add parallel Cocoa or Win32 control trees for preview/setup/status UI; platform files should only adapt SWELL, preview decoding, helper execution, prompts, and REAPER host glue.
@@ -128,6 +133,8 @@ Expected output is `OK`; preview is started by REAPER through the control channe
 - A recorded file at `~/Desktop/ReaperMedia/Video Recordings/unsaved_project_20260627_162649.mov` inspected with `ffprobe` was healthy: `1920x1080` H.264 Main, ~29.99/30 fps, steady decoded 33.34 ms frame cadence, ~23.7 Mbps video, and AAC mono 48 kHz audio. If playback looks jumpy in the extension but fine in VLC, suspect docked preview playback/resync behavior before changing capture settings.
 - The preview `AVPlayer` should remain muted and should not exact-seek every timer tick. Current behavior seeks on source changes/playback start, disables stalling waits, and corrects only large drift.
 - Real-time waveform drawing during capture is not implemented. REAPER sees the media only after the iPhone app finalizes and downloads the movie.
+- Windows downloads go under REAPER's default recording path (`defrecpath` from REAPER.ini via `reashoot::reaper::defaultRecordingPath()`), not the OneDrive project folder. macOS `captureOutputPath` prefers the same. The helper verifies downloads with a streaming SHA-256 (`src/helper/checksum.cpp`) — do not reintroduce whole-file/stack-buffer hashing (it caused a stack-overflow crash on large 4K files).
+- Windows playback preview is driven by the REAPER extension timer (~20-30 Hz), so effective playback frame rate is timer-bound (~20 fps) even though decode is fast. If silky 30 fps playback is needed later, decouple the playback renderer from the timer with its own decode/present clock rather than tuning seek/threading again.
 
 ## Validation
 
