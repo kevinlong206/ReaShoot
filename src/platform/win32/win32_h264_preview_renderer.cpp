@@ -87,6 +87,12 @@ struct H264Dimensions {
   int cropTop = 0;
 };
 
+struct PreviewDiagnosticMetadata {
+  bool valid = false;
+  uint64_t sequence = 0;
+  uint64_t sourceUnixMicros = 0;
+};
+
 class BitReader {
 public:
   explicit BitReader(const std::vector<uint8_t> &bytes) : bytes_(bytes) {}
@@ -199,6 +205,55 @@ bool accessUnitHasNalType(const uint8_t *bytes, size_t length, uint8_t type) {
     }
   }
   return false;
+}
+
+uint64_t readBigEndianU64(const uint8_t *bytes) {
+  uint64_t value = 0;
+  for (int i = 0; i < 8; ++i) {
+    value = (value << 8) | bytes[i];
+  }
+  return value;
+}
+
+PreviewDiagnosticMetadata parseDiagnosticSEI(const uint8_t *bytes, size_t length) {
+  PreviewDiagnosticMetadata metadata;
+  for (const auto &unit : core::splitAnnexB(bytes, length)) {
+    if (unit.type != 6 || unit.size < 2) {
+      continue;
+    }
+    const uint8_t *nalu = bytes + unit.offset;
+    size_t offset = 1;
+    int payloadType = 0;
+    while (offset < unit.size && nalu[offset] == 0xff) {
+      payloadType += 255;
+      ++offset;
+    }
+    if (offset >= unit.size) {
+      continue;
+    }
+    payloadType += nalu[offset++];
+    int payloadSize = 0;
+    while (offset < unit.size && nalu[offset] == 0xff) {
+      payloadSize += 255;
+      ++offset;
+    }
+    if (offset >= unit.size) {
+      continue;
+    }
+    payloadSize += nalu[offset++];
+    if (payloadType != 5 || payloadSize < 23 || offset + static_cast<size_t>(payloadSize) > unit.size) {
+      continue;
+    }
+    const uint8_t *payload = nalu + offset;
+    if (std::memcmp(payload, "RSDIAG1", 7) != 0) {
+      continue;
+    }
+    metadata.valid = true;
+    metadata.sequence = readBigEndianU64(payload + 7);
+    metadata.sourceUnixMicros = readBigEndianU64(payload + 15);
+    return metadata;
+  }
+  return metadata;
 }
 
 bool isDecoderStartingAccessUnit(const uint8_t *bytes, size_t length) {
@@ -486,6 +541,7 @@ public:
       if (!keyframe) {
         pendingAccessUnit_.assign(bytes, bytes + length);
         pendingReceiveTime_ = std::chrono::steady_clock::now();
+        pendingDiagnostic_ = parseDiagnosticSEI(bytes, length);
         return;
       }
       resetDecoderBeforeDecode = requireQueuedKeyframe_;
@@ -494,6 +550,7 @@ public:
     }
     pendingAccessUnit_.assign(bytes, bytes + length);
     pendingReceiveTime_ = std::chrono::steady_clock::now();
+    pendingDiagnostic_ = parseDiagnosticSEI(bytes, length);
     pendingRequiresDecoderReset_ = resetDecoderBeforeDecode;
     hasPendingAccessUnit_ = true;
     if (keyframe) {
@@ -527,6 +584,7 @@ private:
     while (true) {
       std::vector<uint8_t> accessUnit;
       std::chrono::steady_clock::time_point receiveTime;
+      PreviewDiagnosticMetadata diagnostic;
       bool resetDecoderBeforeDecode = false;
       {
         std::unique_lock<std::mutex> lock(queueMutex_);
@@ -536,18 +594,20 @@ private:
         }
         accessUnit = std::move(pendingAccessUnit_);
         receiveTime = pendingReceiveTime_;
+        diagnostic = pendingDiagnostic_;
         resetDecoderBeforeDecode = pendingRequiresDecoderReset_;
         pendingAccessUnit_.clear();
         pendingRequiresDecoderReset_ = false;
         hasPendingAccessUnit_ = false;
       }
-      decodeAnnexBAccessUnit(accessUnit.data(), accessUnit.size(), receiveTime, resetDecoderBeforeDecode);
+      decodeAnnexBAccessUnit(accessUnit.data(), accessUnit.size(), receiveTime, diagnostic, resetDecoderBeforeDecode);
     }
   }
 
   void decodeAnnexBAccessUnit(const uint8_t *bytes,
                               size_t length,
                               std::chrono::steady_clock::time_point receiveTime,
+                              PreviewDiagnosticMetadata diagnostic,
                               bool resetDecoderBeforeDecode) {
     thread_local ComThreadRuntime comRuntime;
     if (!bytes || length == 0 || !comRuntime.ready() || !mfRuntime().ready()) {
@@ -577,6 +637,7 @@ private:
       return;
     }
     activeReceiveTime_ = receiveTime;
+    activeDiagnostic_ = diagnostic;
     if (!processInput(bytes, length)) {
       return;
     }
@@ -846,7 +907,8 @@ private:
     frame.strideBytes = outputWidth * 4;
     frame.pixels.resize(static_cast<size_t>(frame.strideBytes) * static_cast<size_t>(frame.height));
     frame.previewReceiveToEmitMs = receiveToEmitMillis();
-    frame.previewSequence = ++emittedFrameSequence_;
+    frame.previewSourceToReceiveMs = sourceToReceiveMillis();
+    frame.previewSequence = activeDiagnostic_.valid ? activeDiagnostic_.sequence : ++emittedFrameSequence_;
     for (int y = 0; y < outputHeight; ++y) {
       const uint8_t *sourceRow = pitch < 0
                                      ? data + static_cast<size_t>(frameHeight_ - 1 - (y + offsetY)) * static_cast<size_t>(stride)
@@ -885,7 +947,8 @@ private:
     frame.strideBytes = outputWidth * 4;
     frame.pixels.resize(static_cast<size_t>(frame.strideBytes) * static_cast<size_t>(frame.height));
     frame.previewReceiveToEmitMs = receiveToEmitMillis();
-    frame.previewSequence = ++emittedFrameSequence_;
+    frame.previewSourceToReceiveMs = sourceToReceiveMillis();
+    frame.previewSequence = activeDiagnostic_.valid ? activeDiagnostic_.sequence : ++emittedFrameSequence_;
     const uint8_t *uvPlane = data + yPlaneBytes;
     for (int y = 0; y < outputHeight; ++y) {
       uint8_t *dst = frame.pixels.data() + static_cast<size_t>(y) * static_cast<size_t>(frame.strideBytes);
@@ -919,6 +982,15 @@ private:
     return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - activeReceiveTime_).count();
   }
 
+  double sourceToReceiveMillis() const {
+    if (!activeDiagnostic_.valid || activeDiagnostic_.sourceUnixMicros == 0) {
+      return 0.0;
+    }
+    const auto now = std::chrono::system_clock::now();
+    const auto receivedUnixMicros = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
+    return static_cast<double>(receivedUnixMicros - static_cast<int64_t>(activeDiagnostic_.sourceUnixMicros)) / 1000.0;
+  }
+
   int normalizedVisibleWidth() const {
     return visibleWidth_ > 0 && cropLeft_ + visibleWidth_ <= frameWidth_ ? visibleWidth_ : frameWidth_;
   }
@@ -941,6 +1013,7 @@ private:
   std::thread decodeWorker_;
   std::vector<uint8_t> pendingAccessUnit_;
   std::chrono::steady_clock::time_point pendingReceiveTime_;
+  PreviewDiagnosticMetadata pendingDiagnostic_;
   bool hasPendingAccessUnit_ = false;
   bool pendingRequiresDecoderReset_ = false;
   bool requireQueuedKeyframe_ = true;
@@ -964,6 +1037,7 @@ private:
   bool waitingForKeyframe_ = true;
   std::chrono::steady_clock::time_point lastFrameEmit_;
   std::chrono::steady_clock::time_point activeReceiveTime_;
+  PreviewDiagnosticMetadata activeDiagnostic_;
   uint64_t emittedFrameSequence_ = 0;
   std::vector<uint8_t> sps_;
   std::vector<uint8_t> pps_;

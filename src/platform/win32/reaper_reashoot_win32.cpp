@@ -535,9 +535,10 @@ void startPreviewStreamWithFields(const reashoot::core::FieldMap &fields) {
             lastTimingLog = now;
             std::ostringstream timing;
             timing << "preview timing frame=" << frame.previewSequence
+                   << " source_to_recv_ms=" << frame.previewSourceToReceiveMs
                    << " recv_to_emit_ms=" << frame.previewReceiveToEmitMs
                    << " emit_to_ui_ms=" << emitToUiMs
-                   << " total_win_ms=" << (frame.previewReceiveToEmitMs + emitToUiMs)
+                   << " total_known_ms=" << (frame.previewSourceToReceiveMs + frame.previewReceiveToEmitMs + emitToUiMs)
                    << " size=" << frame.width << "x" << frame.height;
             debugLog(timing.str());
           }

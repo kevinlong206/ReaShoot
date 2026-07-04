@@ -14,6 +14,7 @@ final class PreviewH264Encoder {
     private var activeHeight: Int32 = 0
     private var running = false
     private var forceNextKeyframe = true
+    private var frameSequence: UInt64 = 0
 
     init(width: Int32 = 640, height: Int32 = 360, fps: Int32 = 12, outputHandler: @escaping OutputHandler) {
         self.fps = fps
@@ -134,6 +135,8 @@ final class PreviewH264Encoder {
                 accessUnit.append(parameterSet)
             }
         }
+        frameSequence += 1
+        appendDiagnosticSEI(to: &accessUnit, sequence: frameSequence)
 
         var totalLength = 0
         var dataPointer: UnsafeMutablePointer<Int8>?
@@ -168,6 +171,38 @@ final class PreviewH264Encoder {
 
     private var startCode: Data {
         Data([0, 0, 0, 1])
+    }
+
+    private func appendDiagnosticSEI(to accessUnit: inout Data, sequence: UInt64) {
+        var payload = Data("RSDIAG1".utf8)
+        appendBigEndian(sequence, to: &payload)
+        appendBigEndian(UInt64(Date().timeIntervalSince1970 * 1_000_000.0), to: &payload)
+
+        var nalu = Data([0x06])
+        var remainingType = 5
+        while remainingType >= 255 {
+            nalu.append(255)
+            remainingType -= 255
+        }
+        nalu.append(UInt8(remainingType))
+
+        var remainingSize = payload.count
+        while remainingSize >= 255 {
+            nalu.append(255)
+            remainingSize -= 255
+        }
+        nalu.append(UInt8(remainingSize))
+        nalu.append(payload)
+        nalu.append(0x80)
+
+        accessUnit.append(startCode)
+        accessUnit.append(nalu)
+    }
+
+    private func appendBigEndian(_ value: UInt64, to data: inout Data) {
+        for shift in stride(from: 56, through: 0, by: -8) {
+            data.append(UInt8((value >> UInt64(shift)) & 0xff))
+        }
     }
 
     private func isKeyframe(_ sampleBuffer: CMSampleBuffer) -> Bool {
