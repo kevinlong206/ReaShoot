@@ -41,7 +41,7 @@ struct ContentView: View {
                             HStack(alignment: .top) {
                                 VStack(alignment: .leading) {
                                     Text(recording.url.lastPathComponent)
-                                    Text("\(recording.byteCount) bytes - \(recording.state.rawValue)")
+                                    Text("\(Self.formattedByteCount(recording.byteCount)) - \(recording.state.rawValue)")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }
@@ -112,6 +112,10 @@ struct ContentView: View {
 
     private var buildInfoText: String {
         "Build \(ReaShootBuildInfo.commit) - \(ReaShootBuildInfo.timestampPacific)"
+    }
+
+    private static func formattedByteCount(_ byteCount: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: byteCount, countStyle: .file)
     }
 }
 #endif
