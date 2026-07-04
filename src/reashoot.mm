@@ -1381,6 +1381,7 @@ void setVideoEnabled(bool enabled);
   if (message.length == 0) {
     message = @"reashoot-mac failed.";
   }
+  message = stringFromStd(reashoot::core::friendlyStatusText(message.UTF8String ?: ""));
   return [NSError errorWithDomain:@"com.klong.reashoot"
                             code:code
                          userInfo:@{NSLocalizedDescriptionKey: message}];
@@ -2095,6 +2096,10 @@ void setVideoEnabled(bool enabled);
     callbacks.deleteAllPending = [](void *context) {
       ReaShootRecorder *target = (__bridge ReaShootRecorder *)context;
       dispatch_async(dispatch_get_main_queue(), ^{ [target deleteAllPendingIPhoneRecordings]; });
+    };
+    callbacks.toggleDock = [](void *context) {
+      ReaShootRecorder *target = (__bridge ReaShootRecorder *)context;
+      dispatch_async(dispatch_get_main_queue(), ^{ [target togglePreviewDockMode]; });
     };
     callbacks.previousLook = [](void *context) {
       ReaShootRecorder *target = (__bridge ReaShootRecorder *)context;

@@ -21,6 +21,7 @@
 #if REASHOOT_WITH_FFMPEG_DECODER
 extern "C" {
 #include <libavcodec/avcodec.h>
+#include <libavutil/display.h>
 #include <libavutil/error.h>
 #include <libavutil/frame.h>
 #include <libavutil/pixfmt.h>
@@ -29,6 +30,7 @@ extern "C" {
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstdint>
 #include <cstring>
@@ -117,6 +119,7 @@ struct PreviewDiagnosticMetadata {
   uint64_t sequence = 0;
   uint64_t sourceUnixMicros = 0;
   uint32_t nalTypes = 0;
+  uint8_t orientationCode = 0;
 };
 
 class BitReader {
@@ -299,6 +302,9 @@ PreviewDiagnosticMetadata parseDiagnosticSEI(const uint8_t *bytes, size_t length
     metadata.valid = true;
     metadata.sequence = readBigEndianU64(payload + 7);
     metadata.sourceUnixMicros = readBigEndianU64(payload + 15);
+    if (unescapedPayload.size() >= 24) {
+      metadata.orientationCode = payload[23];
+    }
     return metadata;
   }
   return metadata;
@@ -508,6 +514,78 @@ bool parseAccessUnitDimensions(const uint8_t *bytes, size_t length, H264Dimensio
   return false;
 }
 
+int normalizeRotationDegrees(double degrees) {
+  if (!std::isfinite(degrees)) {
+    return 0;
+  }
+  int rounded = static_cast<int>(std::llround(degrees / 90.0)) * 90;
+  rounded %= 360;
+  if (rounded < 0) {
+    rounded += 360;
+  }
+  return rounded == 360 ? 0 : rounded;
+}
+
+core::VideoFrame rotateBGRAFrame(const core::VideoFrame &source, int rotationDegrees) {
+  if (rotationDegrees == 0 || source.width <= 0 || source.height <= 0 || source.pixels.empty()) {
+    return source;
+  }
+  core::VideoFrame rotated;
+  const bool swapsAxes = rotationDegrees == 90 || rotationDegrees == 270;
+  rotated.width = swapsAxes ? source.height : source.width;
+  rotated.height = swapsAxes ? source.width : source.height;
+  rotated.strideBytes = rotated.width * 4;
+  rotated.pixels.resize(static_cast<size_t>(rotated.strideBytes) * static_cast<size_t>(rotated.height));
+  for (int y = 0; y < source.height; ++y) {
+    const uint8_t *sourcePixel = source.pixels.data() + static_cast<size_t>(y) * static_cast<size_t>(source.strideBytes);
+    for (int x = 0; x < source.width; ++x, sourcePixel += 4) {
+      int destX = x;
+      int destY = y;
+      switch (rotationDegrees) {
+      case 90:
+        destX = source.height - 1 - y;
+        destY = x;
+        break;
+      case 180:
+        destX = source.width - 1 - x;
+        destY = source.height - 1 - y;
+        break;
+      case 270:
+        destX = y;
+        destY = source.width - 1 - x;
+        break;
+      default:
+        break;
+      }
+      uint8_t *destPixel = rotated.pixels.data() +
+                           static_cast<size_t>(destY) * static_cast<size_t>(rotated.strideBytes) +
+                           static_cast<size_t>(destX) * 4u;
+      std::memcpy(destPixel, sourcePixel, 4);
+    }
+  }
+  rotated.previewReceiveToEmitMs = source.previewReceiveToEmitMs;
+  rotated.previewSourceToReceiveMs = source.previewSourceToReceiveMs;
+  rotated.previewSourceToEmitMs = source.previewSourceToEmitMs;
+  rotated.previewAccessUnitNalTypes = source.previewAccessUnitNalTypes;
+  rotated.previewSequence = source.previewSequence;
+  return rotated;
+}
+
+core::VideoFrame orientPreviewFrameFromMetadata(const core::VideoFrame &source, uint8_t orientationCode) {
+  if (orientationCode == 0 || source.width <= 0 || source.height <= 0) {
+    return source;
+  }
+  const bool wantsLandscape = orientationCode == 2 || orientationCode == 3;
+  const bool isLandscape = source.width > source.height;
+  if (wantsLandscape == isLandscape) {
+    return source;
+  }
+  if (wantsLandscape) {
+    return rotateBGRAFrame(source, orientationCode == 3 ? 270 : 90);
+  }
+  return rotateBGRAFrame(source, orientationCode == 4 ? 90 : 270);
+}
+
 void appendBigEndianU16(std::vector<uint8_t> &bytes, size_t value) {
   bytes.push_back(static_cast<uint8_t>((value >> 8) & 0xff));
   bytes.push_back(static_cast<uint8_t>(value & 0xff));
@@ -587,6 +665,8 @@ struct FFmpegApi {
   using AvFrameAllocFn = AVFrame *(*)();
   using AvFrameFreeFn = void (*)(AVFrame **);
   using AvFrameUnrefFn = void (*)(AVFrame *);
+  using AvFrameGetSideDataFn = AVFrameSideData *(*)(const AVFrame *, enum AVFrameSideDataType);
+  using AvDisplayRotationGetFn = double (*)(const int32_t *);
   using AvPacketAllocFn = AVPacket *(*)();
   using AvPacketFreeFn = void (*)(AVPacket **);
   using AvNewPacketFn = int (*)(AVPacket *, int);
@@ -602,6 +682,8 @@ struct FFmpegApi {
   AvFrameAllocFn av_frame_alloc = nullptr;
   AvFrameFreeFn av_frame_free = nullptr;
   AvFrameUnrefFn av_frame_unref = nullptr;
+  AvFrameGetSideDataFn av_frame_get_side_data = nullptr;
+  AvDisplayRotationGetFn av_display_rotation_get = nullptr;
   AvPacketAllocFn av_packet_alloc = nullptr;
   AvPacketFreeFn av_packet_free = nullptr;
   AvNewPacketFn av_new_packet = nullptr;
@@ -641,7 +723,9 @@ struct FFmpegApi {
            loadFunction(avcodec, "av_packet_unref", av_packet_unref) &&
            loadFunction(avutil, "av_frame_alloc", av_frame_alloc) &&
            loadFunction(avutil, "av_frame_free", av_frame_free) &&
-           loadFunction(avutil, "av_frame_unref", av_frame_unref);
+           loadFunction(avutil, "av_frame_unref", av_frame_unref) &&
+           loadFunction(avutil, "av_frame_get_side_data", av_frame_get_side_data) &&
+           loadFunction(avutil, "av_display_rotation_get", av_display_rotation_get);
     previewDebugLog(ok ? "ffmpeg api load ok" : "ffmpeg api load failed: symbol missing");
     return ok;
   }
@@ -663,31 +747,23 @@ public:
       previewDebugLog("ffmpeg renderer unavailable: api not loaded");
       return;
     }
-    const AVCodec *codec = api_->avcodec_find_decoder(AV_CODEC_ID_H264);
-    if (!codec) {
-      codec = api_->avcodec_find_decoder_by_name("h264");
+    codec_ = api_->avcodec_find_decoder(AV_CODEC_ID_H264);
+    if (!codec_) {
+      codec_ = api_->avcodec_find_decoder_by_name("h264");
     }
-    if (!codec) {
+    if (!codec_) {
       previewDebugLog("ffmpeg renderer unavailable: h264 decoder missing");
       return;
     }
     previewDebugLog("ffmpeg renderer h264 decoder found");
-    codecContext_ = api_->avcodec_alloc_context3(codec);
     frame_ = api_->av_frame_alloc();
     packet_ = api_->av_packet_alloc();
-    if (!codecContext_ || !frame_ || !packet_) {
+    if (!frame_ || !packet_) {
       previewDebugLog("ffmpeg renderer allocation failed");
       reset();
       return;
     }
-    codecContext_->flags |= AV_CODEC_FLAG_LOW_DELAY;
-    codecContext_->thread_count = 1;
-    codecContext_->thread_type = 0;
-    const int openResult = api_->avcodec_open2(codecContext_, codec, nullptr);
-    if (openResult < 0) {
-      std::ostringstream stream;
-      stream << "ffmpeg renderer open failed result=" << openResult;
-      previewDebugLog(stream.str());
+    if (!recreateCodecContextLocked()) {
       reset();
       return;
     }
@@ -728,6 +804,8 @@ public:
     if (codecContext_) {
       api_->avcodec_free_context(&codecContext_);
     }
+    activeCodedWidth_ = 0;
+    activeCodedHeight_ = 0;
     ready_ = false;
     waitingForKeyframe_ = true;
     lastFrameEmit_ = {};
@@ -782,6 +860,9 @@ private:
       return;
     }
     const PreviewDiagnosticMetadata diagnostic = parseDiagnosticSEI(bytes, length);
+    if (!ensureCodecContextForAccessUnit(bytes, length)) {
+      return;
+    }
     if (api_->av_new_packet(packet_, static_cast<int>(length)) < 0) {
       previewDebugLog("ffmpeg av_new_packet failed");
       return;
@@ -819,6 +900,57 @@ private:
     }
   }
 
+  bool recreateCodecContextLocked() {
+    if (!api_ || !codec_) {
+      return false;
+    }
+    if (codecContext_) {
+      api_->avcodec_free_context(&codecContext_);
+    }
+    codecContext_ = api_->avcodec_alloc_context3(codec_);
+    if (!codecContext_) {
+      previewDebugLog("ffmpeg renderer codec context allocation failed");
+      return false;
+    }
+    codecContext_->flags |= AV_CODEC_FLAG_LOW_DELAY;
+    codecContext_->thread_count = 1;
+    codecContext_->thread_type = 0;
+    const int openResult = api_->avcodec_open2(codecContext_, codec_, nullptr);
+    if (openResult < 0) {
+      std::ostringstream stream;
+      stream << "ffmpeg renderer open failed result=" << openResult;
+      previewDebugLog(stream.str());
+      api_->avcodec_free_context(&codecContext_);
+      return false;
+    }
+    lastFrameEmit_ = {};
+    return true;
+  }
+
+  bool ensureCodecContextForAccessUnit(const uint8_t *bytes, size_t length) {
+    H264Dimensions dimensions;
+    if (!isDecoderStartingAccessUnit(bytes, length) || !parseAccessUnitDimensions(bytes, length, dimensions)) {
+      return codecContext_ != nullptr;
+    }
+    const bool dimensionsChanged =
+        activeCodedWidth_ > 0 &&
+        activeCodedHeight_ > 0 &&
+        (dimensions.width != activeCodedWidth_ || dimensions.height != activeCodedHeight_);
+    if (dimensionsChanged) {
+      std::ostringstream stream;
+      stream << "ffmpeg preview dimensions changed "
+             << activeCodedWidth_ << "x" << activeCodedHeight_
+             << " -> " << dimensions.width << "x" << dimensions.height;
+      previewDebugLog(stream.str());
+      if (!recreateCodecContextLocked()) {
+        return false;
+      }
+    }
+    activeCodedWidth_ = dimensions.width;
+    activeCodedHeight_ = dimensions.height;
+    return codecContext_ != nullptr;
+  }
+
   bool shouldEmitFrame() {
     const auto now = std::chrono::steady_clock::now();
     if (lastFrameEmit_.time_since_epoch().count() != 0 &&
@@ -848,6 +980,11 @@ private:
       return;
     }
     convertYUV420PToBGRA(frame_, output);
+    const int rotationDegrees = frameRotationDegrees();
+    if (rotationDegrees != 0) {
+      output = rotateBGRAFrame(output, rotationDegrees);
+    }
+    output = orientPreviewFrameFromMetadata(output, diagnostic.orientationCode);
     ++emittedFrames_;
     const auto now = std::chrono::steady_clock::now();
     if (lastLog_.time_since_epoch().count() == 0 || now - lastLog_ >= std::chrono::seconds(1)) {
@@ -857,6 +994,8 @@ private:
              << " decoded=" << receivedFrames_
              << " emitted=" << emittedFrames_
              << " pixfmt=" << frame_->format
+             << " rotation=" << rotationDegrees
+             << " orient=" << static_cast<int>(diagnostic.orientationCode)
              << " size=" << width << "x" << height;
       previewDebugLog(stream.str());
     }
@@ -874,6 +1013,17 @@ private:
       output.previewSourceToReceiveMs = static_cast<double>(nowMicros - frame_->pts) / 1000.0;
     }
     frameHandler_(output);
+  }
+
+  int frameRotationDegrees() const {
+    if (!api_ || !api_->av_frame_get_side_data || !api_->av_display_rotation_get || !frame_) {
+      return 0;
+    }
+    AVFrameSideData *sideData = api_->av_frame_get_side_data(frame_, AV_FRAME_DATA_DISPLAYMATRIX);
+    if (!sideData || !sideData->data || sideData->size < sizeof(int32_t) * 9) {
+      return 0;
+    }
+    return normalizeRotationDegrees(api_->av_display_rotation_get(reinterpret_cast<const int32_t *>(sideData->data)));
   }
 
   static uint8_t clampByte(int value) {
@@ -910,10 +1060,13 @@ private:
   bool requireQueuedKeyframe_ = true;
   bool queueStopped_ = false;
   FFmpegApi *api_ = nullptr;
+  const AVCodec *codec_ = nullptr;
   core::VideoFrameCallback frameHandler_;
   AVCodecContext *codecContext_ = nullptr;
   AVFrame *frame_ = nullptr;
   AVPacket *packet_ = nullptr;
+  int activeCodedWidth_ = 0;
+  int activeCodedHeight_ = 0;
   std::chrono::steady_clock::time_point lastFrameEmit_;
   std::chrono::steady_clock::time_point lastLog_;
   uint64_t emittedFrameSequence_ = 0;

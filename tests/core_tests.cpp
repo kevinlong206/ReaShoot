@@ -49,8 +49,10 @@ void testFriendlyStatusText() {
          "iPhone authorization failed: reset pairing on the iPhone, enter the new code in Setup, then Pair again.");
   assert(friendlyStatusText("error: Invalid pairing code.") ==
          "Invalid pairing code: check the six-digit code on the iPhone and press Pair again.");
-  assert(friendlyStatusText("control socket: connection closed") ==
-         "iPhone connection closed. If you reset pairing, enter the current code and Pair again.");
+  assert(friendlyStatusText("Could not connect to the control socket: connection refused") ==
+         "Could not connect to the iPhone control socket. Make sure the ReaShoot iOS app is open in the foreground, "
+         "the iPhone is unlocked, and the phone and this computer are on the same Wi-Fi network. Then try Reconnect. "
+         "If the iPhone shows a new pairing code or you recently reset pairing, pair again from Setup. Details: connection refused");
   assert(friendlyStatusText("ReaShoot live video") == "ReaShoot live video");
   CaptureProfile profile{"", "4K", "30", "auto", "9:16", "wide", "1.0", "natural"};
   assert(previewStateText(false, false) == "preview idle");

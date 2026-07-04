@@ -28,6 +28,7 @@
 #include "core/path_utils.h"
 #include "core/remote_camera.h"
 #include "core/reashoot_controller.h"
+#include "core/reashoot_status.h"
 #include "platform/swell/swell_panel_probe.h"
 #include "platform/swell/swell_runtime.h"
 #include "platform/win32/win32_h264_preview_renderer.h"
@@ -142,9 +143,12 @@ std::unique_ptr<reashoot::core::PlaybackPreview> g_playbackPreviewRenderer;
 std::shared_ptr<reashoot::core::AsyncCommandHandle> g_previewCommandHandle;
 bool g_previewStreamStarting = false;
 bool g_previewStreamActive = false;
+bool g_previewCommandInFlight = false;
 bool g_previewReceivedAccessUnit = false;
 bool g_previewReceivedFrame = false;
 bool g_showingPlayback = false;
+bool g_stoppingRemotePreview = false;
+bool g_restartPreviewAfterStop = false;
 std::chrono::steady_clock::time_point g_lastPlaybackVideoHit;
 
 struct PlaybackVideo {
@@ -155,6 +159,30 @@ struct PlaybackVideo {
   double sourceOffset = 0.0;
   double playRate = 1.0;
 };
+
+struct WindowPlacement {
+  int x = 120;
+  int y = 120;
+  int width = 960;
+  int height = 690;
+};
+
+WindowPlacement defaultPreviewWindowPlacement() {
+  RECT workArea = {};
+  if (!SystemParametersInfoA(SPI_GETWORKAREA, 0, &workArea, 0)) {
+    workArea = {0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)};
+  }
+  const int workWidth = (std::max)(640, static_cast<int>(workArea.right - workArea.left));
+  const int workHeight = (std::max)(480, static_cast<int>(workArea.bottom - workArea.top));
+  WindowPlacement placement;
+  placement.width = (std::min)(1120, (std::max)(860, (workWidth * 3) / 5));
+  placement.height = (std::min)(820, (std::max)(620, (workHeight * 3) / 5));
+  placement.width = (std::min)(placement.width, workWidth - 80);
+  placement.height = (std::min)(placement.height, workHeight - 80);
+  placement.x = static_cast<int>(workArea.left) + (std::max)(40, (workWidth - placement.width) / 2);
+  placement.y = static_cast<int>(workArea.top) + (std::max)(40, (workHeight - placement.height) / 2);
+  return placement;
+}
 
 std::string withoutAsciiWhitespace(std::string value) {
   value.erase(std::remove_if(value.begin(), value.end(), [](unsigned char ch) {
@@ -271,13 +299,15 @@ void updatePanel() {
 
 void setPanelStatus(const std::string &status) {
   if (g_panel) {
-    reashoot::platform::swell::updateSwellPanelProbe(g_panel, status.c_str(), nullptr, g_iPhoneHost.c_str(), g_iPhoneToken.c_str());
+    const std::string friendlyStatus = reashoot::core::friendlyStatusText(status);
+    reashoot::platform::swell::updateSwellPanelProbe(g_panel, friendlyStatus.c_str(), nullptr, g_iPhoneHost.c_str(), g_iPhoneToken.c_str());
   }
 }
 
 std::string captureOutputDirectory(ReaProject *project);
 void startRemotePreview();
 void stopPlaybackAndShowLive();
+void togglePreviewDockMode();
 
 void persistSettings() {
   if (g_panel) {
@@ -351,7 +381,7 @@ void runHelperOnWorker(std::string command,
 
 std::string resultError(const reashoot::core::CommandResult &result, const std::string &fallback) {
   if (!result.errorMessage.empty()) {
-    return result.errorMessage;
+    return reashoot::core::friendlyStatusText(result.errorMessage);
   }
   if (!result.output.empty()) {
     std::istringstream stream(result.output);
@@ -369,7 +399,7 @@ std::string resultError(const reashoot::core::CommandResult &result, const std::
       }
     }
     const std::string text = filtered.str();
-    return text.empty() ? fallback : text;
+    return text.empty() ? fallback : reashoot::core::friendlyStatusText(text);
   }
   return fallback;
 }
@@ -522,6 +552,7 @@ void stopPreviewStream() {
   }
   if (g_previewRenderer) {
     g_previewRenderer->reset();
+    g_previewRenderer.reset();
   }
   reashoot::platform::swell::setSwellPanelPreviewPending(g_panel, "Preview stopped");
 }
@@ -529,10 +560,23 @@ void stopPreviewStream() {
 void stopRemotePreview() {
   stopPreviewStream();
   if (!g_iPhoneHost.empty() && !g_iPhoneToken.empty()) {
+    if (g_stoppingRemotePreview) {
+      return;
+    }
+    g_stoppingRemotePreview = true;
     reashoot::core::RemoteCameraSettings settings = cameraSettings();
     runHelperOnWorker("stop-preview",
                       reashoot::core::commandArguments(settings, "stop-preview", reashoot::core::tokenArguments(settings)),
-                      [](reashoot::core::CommandResult) {});
+                      [](reashoot::core::CommandResult) {
+                        g_stoppingRemotePreview = false;
+                        const bool shouldRestart = g_restartPreviewAfterStop &&
+                                                   !g_showingPlayback &&
+                                                   g_extensionController.videoEnabled();
+                        g_restartPreviewAfterStop = false;
+                        if (shouldRestart) {
+                          startRemotePreview();
+                        }
+                      });
   }
 }
 
@@ -630,7 +674,13 @@ void startPreviewStreamWithFields(const reashoot::core::FieldMap &fields) {
 }
 
 void startRemotePreview() {
+  readPanelSettings();
+  persistSettings();
   if (g_showingPlayback) {
+    return;
+  }
+  if (g_stoppingRemotePreview) {
+    g_restartPreviewAfterStop = true;
     return;
   }
   if (g_iPhoneHost.empty() || g_iPhoneToken.empty()) {
@@ -640,17 +690,22 @@ void startRemotePreview() {
   if (g_previewStreamStarting || g_previewStreamActive) {
     return;
   }
+  if (g_previewCommandInFlight) {
+    return;
+  }
   reashoot::core::RemoteCameraSettings settings = cameraSettings();
-  setPanelStatus("Preview: starting iPhone stream");
+  g_previewCommandInFlight = true;
+  setPanelStatus("Configuring iPhone preview");
   g_previewCommandHandle = remoteCameraController().runAsync(
       settings,
-      "start-preview",
-      reashoot::core::tokenArguments(settings),
+      "configure",
+      reashoot::core::configureArguments(settings),
       {},
-      [](reashoot::core::CommandResult result) {
-        postToMain([result = std::move(result)]() mutable {
-          if (result.exitCode != 0) {
-            if (isUnauthorizedResult(result)) {
+      [settings](reashoot::core::CommandResult configureResult) {
+        postToMain([settings, configureResult = std::move(configureResult)]() mutable {
+          if (configureResult.exitCode != 0) {
+            g_previewCommandInFlight = false;
+            if (isUnauthorizedResult(configureResult)) {
               g_iPhoneToken.clear();
               persistSettings();
               updatePanel();
@@ -658,12 +713,41 @@ void startRemotePreview() {
               setPanelStatus("Pair the iPhone before starting preview");
               return;
             }
-            reashoot::platform::swell::setSwellPanelPreviewPending(g_panel, "Preview start failed");
-            setPanelStatus("Preview start failed");
-            showError(resultError(result, "Preview start failed."));
+            reashoot::platform::swell::setSwellPanelPreviewPending(g_panel, "Preview configure failed");
+            setPanelStatus("Preview configure failed");
+            showError(resultError(configureResult, "Preview configure failed."));
             return;
           }
-          startPreviewStreamWithFields(reashoot::core::parseFields(result.output, '\t'));
+          if (g_showingPlayback || !g_extensionController.videoEnabled()) {
+            g_previewCommandInFlight = false;
+            return;
+          }
+          setPanelStatus("Preview: starting iPhone stream");
+          g_previewCommandHandle = remoteCameraController().runAsync(
+              settings,
+              "start-preview",
+              reashoot::core::tokenArguments(settings),
+              {},
+              [](reashoot::core::CommandResult result) {
+                postToMain([result = std::move(result)]() mutable {
+                  g_previewCommandInFlight = false;
+                  if (result.exitCode != 0) {
+                    if (isUnauthorizedResult(result)) {
+                      g_iPhoneToken.clear();
+                      persistSettings();
+                      updatePanel();
+                      reashoot::platform::swell::setSwellPanelPreviewPending(g_panel, "Preview unavailable: pair the iPhone again.");
+                      setPanelStatus("Pair the iPhone before starting preview");
+                      return;
+                    }
+                    reashoot::platform::swell::setSwellPanelPreviewPending(g_panel, "Preview start failed");
+                    setPanelStatus("Preview start failed");
+                    showError(resultError(result, "Preview start failed."));
+                    return;
+                  }
+                  startPreviewStreamWithFields(reashoot::core::parseFields(result.output, '\t'));
+                });
+              });
         });
       });
 }
@@ -855,6 +939,7 @@ void ensurePanel() {
   callbacks.previousLook = [](void *) { selectRelativeLook(-1); };
   callbacks.nextLook = [](void *) { selectRelativeLook(1); };
   callbacks.selectLook = [](void *, const char *lookID) { chooseLook(lookID); };
+  callbacks.toggleDock = [](void *) { togglePreviewDockMode(); };
   callbacks.restorePending = [](void *) { restorePendingRecording(); };
   callbacks.deleteAllPending = [](void *) { deleteAllPendingRecordings(); };
   callbacks.closed = [](void *) {
@@ -863,7 +948,8 @@ void ensurePanel() {
   g_panel = reashoot::platform::swell::createSwellPanelProbe(nullptr, callbacks);
   if (g_panel) {
     SetWindowTextA(g_panel, "ReaShoot Preview");
-    SetWindowPos(g_panel, nullptr, 120, 120, 700, 500, SWP_NOZORDER);
+    WindowPlacement placement = defaultPreviewWindowPlacement();
+    SetWindowPos(g_panel, nullptr, placement.x, placement.y, placement.width, placement.height, SWP_NOZORDER);
     updatePanel();
   }
 }
@@ -905,7 +991,8 @@ void applyPanelDockMode() {
   SetWindowLongPtr(g_panel, GWL_STYLE, WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN | WS_CLIPSIBLINGS);
   SetWindowLongPtr(g_panel, GWL_EXSTYLE, GetWindowLongPtr(g_panel, GWL_EXSTYLE) | WS_EX_TOPMOST);
   SetParent(g_panel, nullptr);
-  SetWindowPos(g_panel, HWND_TOPMOST, 120, 120, 700, 500, SWP_FRAMECHANGED);
+  WindowPlacement placement = defaultPreviewWindowPlacement();
+  SetWindowPos(g_panel, HWND_TOPMOST, placement.x, placement.y, placement.width, placement.height, SWP_FRAMECHANGED);
 }
 
 void showPanel(bool visible) {
@@ -922,6 +1009,16 @@ void showPanel(bool visible) {
   if (visible && g_extensionController.videoEnabled()) {
     startRemotePreview();
   }
+}
+
+void togglePreviewDockMode() {
+  g_previewFloating = !g_previewFloating;
+  persistSettings();
+  if (g_panel) {
+    stopPreviewStream();
+    destroyPanel();
+  }
+  showPanel(true);
 }
 
 MediaTrack *findVideoTrack(ReaProject *project) {
@@ -1236,13 +1333,7 @@ bool hookCommand2(KbdSectionInfo *, int command, int, int, int, HWND) {
     return true;
   }
   if (command == g_floatPreviewCommand) {
-    g_previewFloating = !g_previewFloating;
-    persistSettings();
-    if (g_panel) {
-      stopPreviewStream();
-      destroyPanel();
-    }
-    showPanel(true);
+    togglePreviewDockMode();
     return true;
   }
   if (command == g_alignSelectedCommand) {

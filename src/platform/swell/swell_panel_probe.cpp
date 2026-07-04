@@ -14,6 +14,7 @@ namespace reashoot::platform::swell {
 enum ControlID {
   kSetupButton = 1001,
   kManageButton = 1002,
+  kDockToggleButton = 1003,
   kStatusLabel = 1006,
   kFormatLabel = 1011,
   kPreviousLookButton = 1012,
@@ -174,8 +175,11 @@ void layoutPreviewPanel(HWND panel) {
 
   const int manageWidth = paddedTextWidth("Manage Recordings", 34, 180);
   const int setupWidth = paddedTextWidth("Setup", 34, 92);
+  const int dockWidth = paddedTextWidth("Dock/Undock", 34, 130);
   const int manageX = (std::max)(margin, clientWidth - margin - manageWidth);
   const int setupX = (std::max)(margin, manageX - gap - setupWidth);
+  const int dockX = (std::max)(margin, setupX - gap - dockWidth);
+  moveControl(panel, kDockToggleButton, dockX, 112, dockWidth, 26);
   moveControl(panel, kSetupButton, setupX, 112, setupWidth, 26);
   moveControl(panel, kManageButton, manageX, 112, manageWidth, 26);
 
@@ -583,6 +587,12 @@ static LRESULT swellProbeWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
       showManageWindow();
       return 0;
     }
+    if (controlID == kDockToggleButton) {
+      if (g_callbacks.toggleDock) {
+        g_callbacks.toggleDock(g_callbacks.context);
+      }
+      return 0;
+    }
     if (controlID == kPreviousLookButton) {
       if (g_callbacks.previousLook) {
         g_callbacks.previousLook(g_callbacks.context);
@@ -683,6 +693,7 @@ HWND createSwellPanelProbe(HWND parent, const SwellPanelCallbacks &callbacks) {
   makeSetCurParms(1.0f, 1.0f, 0.0f, 0.0f, panel, false, false);
   makeButton(0, "Setup", kSetupButton, 0, 0, 92, 26, 0);
   makeButton(0, "Manage Recordings", kManageButton, 0, 0, 180, 26, 0);
+  makeButton(0, "Dock/Undock", kDockToggleButton, 0, 0, 130, 26, 0);
   makeButton(0, "Prev", kPreviousLookButton, 0, 0, 56, 26, 0);
   makeButton(0, "Next", kNextLookButton, 0, 0, 56, 26, 0);
   makeCombo(kLookCombo, 0, 0, 528, 140, CBS_DROPDOWNLIST);

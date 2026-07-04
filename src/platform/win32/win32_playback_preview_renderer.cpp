@@ -11,6 +11,7 @@
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
+#include <libavutil/dict.h>
 #include <libavutil/frame.h>
 #include <libavutil/pixfmt.h>
 }
@@ -20,6 +21,7 @@ extern "C" {
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <cstdlib>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -33,6 +35,8 @@ extern "C" {
 
 namespace reashoot::platform::win32 {
 namespace {
+
+constexpr double kPlaybackPreviewMaxDimension = 1920.0;
 
 void playbackDebugLog(const std::string &message) {
   const std::string line = "ReaShoot: " + message + "\n";
@@ -114,6 +118,8 @@ public:
   using AvPacketAllocFn = AVPacket *(*)();
   using AvPacketFreeFn = void (*)(AVPacket **);
   using AvPacketUnrefFn = void (*)(AVPacket *);
+  using AvDictGetFn = AVDictionaryEntry *(*)(const AVDictionary *, const char *, const AVDictionaryEntry *, int);
+  using AvDisplayRotationGetFn = double (*)(const int32_t *);
 
   AvFormatOpenInputFn avformat_open_input = nullptr;
   AvFormatFindStreamInfoFn avformat_find_stream_info = nullptr;
@@ -134,6 +140,8 @@ public:
   AvPacketAllocFn av_packet_alloc = nullptr;
   AvPacketFreeFn av_packet_free = nullptr;
   AvPacketUnrefFn av_packet_unref = nullptr;
+  AvDictGetFn av_dict_get = nullptr;
+  AvDisplayRotationGetFn av_display_rotation_get = nullptr;
 
   template <typename T>
   static bool loadFunction(HMODULE module, const char *name, T &target) {
@@ -175,7 +183,9 @@ public:
            loadFunction(avcodec, "av_packet_unref", av_packet_unref) &&
            loadFunction(avutil, "av_frame_alloc", av_frame_alloc) &&
            loadFunction(avutil, "av_frame_free", av_frame_free) &&
-           loadFunction(avutil, "av_frame_unref", av_frame_unref);
+           loadFunction(avutil, "av_frame_unref", av_frame_unref) &&
+           loadFunction(avutil, "av_dict_get", av_dict_get) &&
+           loadFunction(avutil, "av_display_rotation_get", av_display_rotation_get);
   }
 };
 
@@ -183,6 +193,60 @@ FFmpegPlaybackApi *ffmpegPlaybackApi() {
   static FFmpegPlaybackApi api;
   static const bool loaded = api.load();
   return loaded ? &api : nullptr;
+}
+
+int normalizeRotationDegrees(double degrees) {
+  if (!std::isfinite(degrees)) {
+    return 0;
+  }
+  int rounded = static_cast<int>(std::llround(degrees / 90.0)) * 90;
+  rounded %= 360;
+  if (rounded < 0) {
+    rounded += 360;
+  }
+  return rounded == 360 ? 0 : rounded;
+}
+
+core::VideoFrame rotateBGRAFrame(const core::VideoFrame &source, int rotationDegrees) {
+  if (rotationDegrees == 0 || source.width <= 0 || source.height <= 0 || source.pixels.empty()) {
+    return source;
+  }
+
+  core::VideoFrame rotated;
+  const bool swapsAxes = rotationDegrees == 90 || rotationDegrees == 270;
+  rotated.width = swapsAxes ? source.height : source.width;
+  rotated.height = swapsAxes ? source.width : source.height;
+  rotated.strideBytes = rotated.width * 4;
+  rotated.pixels.resize(static_cast<size_t>(rotated.strideBytes) * static_cast<size_t>(rotated.height));
+
+  for (int y = 0; y < source.height; ++y) {
+    const uint8_t *sourcePixel = source.pixels.data() + static_cast<size_t>(y) * static_cast<size_t>(source.strideBytes);
+    for (int x = 0; x < source.width; ++x, sourcePixel += 4) {
+      int destX = x;
+      int destY = y;
+      switch (rotationDegrees) {
+      case 90:
+        destX = source.height - 1 - y;
+        destY = x;
+        break;
+      case 180:
+        destX = source.width - 1 - x;
+        destY = source.height - 1 - y;
+        break;
+      case 270:
+        destX = y;
+        destY = source.width - 1 - x;
+        break;
+      default:
+        break;
+      }
+      uint8_t *destPixel = rotated.pixels.data() +
+                           static_cast<size_t>(destY) * static_cast<size_t>(rotated.strideBytes) +
+                           static_cast<size_t>(destX) * 4u;
+      std::memcpy(destPixel, sourcePixel, 4);
+    }
+  }
+  return rotated;
 }
 
 class FFmpegPlaybackPreview final : public core::PlaybackPreview {
@@ -271,7 +335,31 @@ private:
     videoStreamIndex_ = -1;
     lastRenderedSourceTime_ = -1.0;
     lastDecoderSourceTime_ = -1.0;
+    rotationDegrees_ = 0;
     activePath_.clear();
+  }
+
+  int rotationForStream(const AVStream *stream) const {
+    if (!stream || !api_) {
+      return 0;
+    }
+    const AVCodecParameters *parameters = stream->codecpar;
+    if (parameters && parameters->coded_side_data && parameters->nb_coded_side_data > 0 && api_->av_display_rotation_get) {
+      for (int i = 0; i < parameters->nb_coded_side_data; ++i) {
+        const AVPacketSideData &sideData = parameters->coded_side_data[i];
+        if (sideData.type == AV_PKT_DATA_DISPLAYMATRIX && sideData.data && sideData.size >= sizeof(int32_t) * 9) {
+          return normalizeRotationDegrees(api_->av_display_rotation_get(reinterpret_cast<const int32_t *>(sideData.data)));
+        }
+      }
+    }
+    if (api_->av_dict_get) {
+      if (const AVDictionaryEntry *entry = api_->av_dict_get(stream->metadata, "rotate", nullptr, 0)) {
+        if (entry->value) {
+          return normalizeRotationDegrees(std::strtod(entry->value, nullptr));
+        }
+      }
+    }
+    return 0;
   }
 
   bool open(const std::string &path) {
@@ -309,6 +397,12 @@ private:
     lastRenderedSourceTime_ = -1.0;
     lastDecoderSourceTime_ = -1.0;
     streamStartTime_ = stream->start_time == AV_NOPTS_VALUE ? 0 : stream->start_time;
+    rotationDegrees_ = rotationForStream(stream);
+    if (rotationDegrees_ != 0) {
+      std::ostringstream log;
+      log << "ffmpeg playback rotation=" << rotationDegrees_;
+      playbackDebugLog(log.str());
+    }
     return true;
   }
 
@@ -412,13 +506,14 @@ private:
     }
     const int sourceWidth = frame_->width;
     const int sourceHeight = frame_->height;
-    const double scale = (std::min)(1.0, 640.0 / static_cast<double>((std::max)(sourceWidth, sourceHeight)));
-    core::VideoFrame output;
-    output.width = (std::max)(1, static_cast<int>(std::round(sourceWidth * scale)));
-    output.height = (std::max)(1, static_cast<int>(std::round(sourceHeight * scale)));
-    output.strideBytes = output.width * 4;
-    output.pixels.resize(static_cast<size_t>(output.strideBytes) * static_cast<size_t>(output.height));
-    convertYUV420PToBGRA(frame_, output);
+    const double scale = (std::min)(1.0, kPlaybackPreviewMaxDimension / static_cast<double>((std::max)(sourceWidth, sourceHeight)));
+    core::VideoFrame unrotated;
+    unrotated.width = (std::max)(1, static_cast<int>(std::round(sourceWidth * scale)));
+    unrotated.height = (std::max)(1, static_cast<int>(std::round(sourceHeight * scale)));
+    unrotated.strideBytes = unrotated.width * 4;
+    unrotated.pixels.resize(static_cast<size_t>(unrotated.strideBytes) * static_cast<size_t>(unrotated.height));
+    convertYUV420PToBGRA(frame_, unrotated);
+    core::VideoFrame output = rotateBGRAFrame(unrotated, rotationDegrees_);
     {
       std::lock_guard<std::mutex> lock(mutex_);
       if (hidden_ || activeRequestSerial_ != latestRequestSerial_) {
@@ -433,6 +528,8 @@ private:
       std::ostringstream stream;
       stream << "ffmpeg playback stats req=" << requestedSourceTime
              << " frame=" << frameTime
+             << " rotation=" << rotationDegrees_
+             << " output=" << output.width << "x" << output.height
              << " render_ms=" << std::chrono::duration<double, std::milli>(now - renderStarted).count()
              << " decoded=" << decodedFrames_
              << " emitted=" << emittedFrames_
@@ -466,6 +563,7 @@ private:
   std::string activePath_;
   double lastRenderedSourceTime_ = -1.0;
   double lastDecoderSourceTime_ = -1.0;
+  int rotationDegrees_ = 0;
   std::chrono::steady_clock::time_point lastLog_;
   uint64_t decodedFrames_ = 0;
   uint64_t emittedFrames_ = 0;

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <string>
 
 namespace reashoot::core {
 
@@ -14,10 +15,38 @@ std::string lowercase(std::string value) {
   return value;
 }
 
+std::string controlConnectionHelp(const std::string &status) {
+  std::string detail;
+  const size_t colon = status.find(':');
+  if (colon != std::string::npos && colon + 1 < status.size()) {
+    detail = status.substr(colon + 1);
+    while (!detail.empty() && std::isspace(static_cast<unsigned char>(detail.front()))) {
+      detail.erase(detail.begin());
+    }
+  }
+
+  std::string message =
+      "Could not connect to the iPhone control socket. Make sure the ReaShoot iOS app is open in the foreground, "
+      "the iPhone is unlocked, and the phone and this computer are on the same Wi-Fi network. Then try Reconnect. "
+      "If the iPhone shows a new pairing code or you recently reset pairing, pair again from Setup.";
+  if (!detail.empty()) {
+    message += " Details: " + detail;
+  }
+  return message;
+}
+
 } // namespace
 
 std::string friendlyStatusText(const std::string &status) {
   const std::string normalized = lowercase(status);
+  if (normalized.find("control socket") != std::string::npos &&
+      (normalized.find("could not connect") != std::string::npos ||
+       normalized.find("connection refused") != std::string::npos ||
+       normalized.find("timed out") != std::string::npos ||
+       normalized.find("connection closed") != std::string::npos ||
+       normalized.find("getaddrinfo") != std::string::npos)) {
+    return controlConnectionHelp(status);
+  }
   if (normalized.find("unauthorized") != std::string::npos) {
     return "iPhone authorization failed: reset pairing on the iPhone, enter the new code in Setup, then Pair again.";
   }

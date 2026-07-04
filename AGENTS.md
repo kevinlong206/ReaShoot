@@ -92,6 +92,7 @@ rm -rf iphone/Package.resolved iphone/.build helper/.build
 
 - Keep the implementation native; do not move iPhone control, preview, or media insertion into JSFX, VST3, or Lua.
 - Keep the preview transport dependency-light and same-LAN oriented; prefer simple H.264 streaming over heavyweight realtime SDKs unless requirements change.
+- Windows live preview should prefer the FFmpeg H.264 decoder path; do not suggest switching live preview back to Media Foundation to fix orientation or restart issues, because Media Foundation had other regressions.
 - Preserve the single-item model: one recorded `.mov` item with embedded camera audio. Do not add a separate reference-audio item unless the user explicitly asks.
 - Keep routine status in the preview UI, not REAPER popups. Use REAPER message boxes only for real errors.
 - Keep the REAPER extension GUI defined in the shared SWELL panel (`src/platform/swell/swell_panel_probe.cpp`). Do not add parallel Cocoa or Win32 control trees for preview/setup/status UI; platform files should only adapt SWELL, preview decoding, helper execution, prompts, and REAPER host glue.
