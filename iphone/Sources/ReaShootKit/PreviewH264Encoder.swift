@@ -85,7 +85,7 @@ final class PreviewH264Encoder {
         }
     }
 
-    func encode(pixelBuffer: CVPixelBuffer, timestamp: CMTime, captureUnixMicros: UInt64) {
+    func encode(pixelBuffer: CVPixelBuffer, timestamp: CMTime, captureUnixMicros: UInt64, orientation: String) {
         queue.async { [weak self] in
             guard let self, self.running else {
                 return
@@ -110,7 +110,7 @@ final class PreviewH264Encoder {
                     kVTEncodeFrameOptionKey_ForceKeyFrame as String: true
                 ] as CFDictionary
             }
-            let frameContext = PreviewFrameContext(captureUnixMicros: captureUnixMicros)
+            let frameContext = PreviewFrameContext(captureUnixMicros: captureUnixMicros, orientation: orientation)
             let sourceFrameRefcon = Unmanaged.passRetained(frameContext).toOpaque()
             let encodeStatus = VTCompressionSessionEncodeFrame(
                 session,
@@ -141,7 +141,12 @@ final class PreviewH264Encoder {
             }
         }
         frameSequence += 1
-        appendDiagnosticSEI(to: &accessUnit, sequence: frameSequence, sourceUnixMicros: context?.captureUnixMicros ?? UInt64(Date().timeIntervalSince1970 * 1_000_000.0))
+        appendDiagnosticSEI(
+            to: &accessUnit,
+            sequence: frameSequence,
+            sourceUnixMicros: context?.captureUnixMicros ?? UInt64(Date().timeIntervalSince1970 * 1_000_000.0),
+            orientation: context?.orientation ?? "unknown"
+        )
 
         var totalLength = 0
         var dataPointer: UnsafeMutablePointer<Int8>?
@@ -178,10 +183,11 @@ final class PreviewH264Encoder {
         Data([0, 0, 0, 1])
     }
 
-    private func appendDiagnosticSEI(to accessUnit: inout Data, sequence: UInt64, sourceUnixMicros: UInt64) {
+    private func appendDiagnosticSEI(to accessUnit: inout Data, sequence: UInt64, sourceUnixMicros: UInt64, orientation: String) {
         var payload = Data("RSDIAG1".utf8)
         appendBigEndian(sequence, to: &payload)
         appendBigEndian(sourceUnixMicros, to: &payload)
+        payload.append(orientationCode(orientation))
 
         var nalu = Data([0x06])
         var remainingType = 5
@@ -207,6 +213,21 @@ final class PreviewH264Encoder {
     private func appendBigEndian(_ value: UInt64, to data: inout Data) {
         for shift in stride(from: 56, through: 0, by: -8) {
             data.append(UInt8((value >> UInt64(shift)) & 0xff))
+        }
+    }
+
+    private func orientationCode(_ orientation: String) -> UInt8 {
+        switch orientation.lowercased() {
+        case "portrait":
+            return 1
+        case "landscapeleft":
+            return 2
+        case "landscaperight", "landscape":
+            return 3
+        case "portraitupsidedown":
+            return 4
+        default:
+            return 0
         }
     }
 
@@ -287,9 +308,11 @@ private func previewCompressionOutputCallback(
 
 fileprivate final class PreviewFrameContext {
     let captureUnixMicros: UInt64
+    let orientation: String
 
-    init(captureUnixMicros: UInt64) {
+    init(captureUnixMicros: UInt64, orientation: String) {
         self.captureUnixMicros = captureUnixMicros
+        self.orientation = orientation
     }
 }
 

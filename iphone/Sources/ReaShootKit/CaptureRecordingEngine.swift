@@ -379,7 +379,7 @@ private final class PreviewFrameStore: NSObject, AVCaptureVideoDataOutputSampleB
 
     private let context = CIContext()
     private let lock = NSLock()
-    private var sampleBufferConsumer: ((CVPixelBuffer, CMTime, UInt64) -> Void)?
+    private var sampleBufferConsumer: ((CVPixelBuffer, CMTime, UInt64, String) -> Void)?
     private var lastFrameTime = Date.distantPast
     private var minimumFrameInterval: TimeInterval = 1.0 / 12.0
     private var look = "natural"
@@ -404,7 +404,7 @@ private final class PreviewFrameStore: NSObject, AVCaptureVideoDataOutputSampleB
         lock.unlock()
     }
 
-    func setSampleBufferConsumer(_ consumer: ((CVPixelBuffer, CMTime, UInt64) -> Void)?) {
+    func setSampleBufferConsumer(_ consumer: ((CVPixelBuffer, CMTime, UInt64, String) -> Void)?) {
         lock.lock()
         sampleBufferConsumer = consumer
         lock.unlock()
@@ -462,7 +462,8 @@ private final class PreviewFrameStore: NSObject, AVCaptureVideoDataOutputSampleB
             consumer(
                 renderedPixelBuffer,
                 CMSampleBufferGetPresentationTimeStamp(sampleBuffer),
-                UInt64(now.timeIntervalSince1970 * 1_000_000.0)
+                UInt64(now.timeIntervalSince1970 * 1_000_000.0),
+                orientation
             )
         }
     }
@@ -580,7 +581,7 @@ public final class CaptureRecordingEngine: NSObject, ObservableObject {
         isConfigured = true
     }
 
-    public nonisolated func setPreviewSampleBufferConsumer(_ consumer: ((CVPixelBuffer, CMTime, UInt64) -> Void)?) {
+    public nonisolated func setPreviewSampleBufferConsumer(_ consumer: ((CVPixelBuffer, CMTime, UInt64, String) -> Void)?) {
         previewFrameStore.setSampleBufferConsumer(consumer)
     }
 
