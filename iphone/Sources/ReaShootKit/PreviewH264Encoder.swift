@@ -197,7 +197,7 @@ final class PreviewH264Encoder {
             remainingSize -= 255
         }
         nalu.append(UInt8(remainingSize))
-        nalu.append(payload)
+        appendEmulationPrevented(payload, to: &nalu)
         nalu.append(0x80)
 
         accessUnit.append(startCode)
@@ -207,6 +207,22 @@ final class PreviewH264Encoder {
     private func appendBigEndian(_ value: UInt64, to data: inout Data) {
         for shift in stride(from: 56, through: 0, by: -8) {
             data.append(UInt8((value >> UInt64(shift)) & 0xff))
+        }
+    }
+
+    private func appendEmulationPrevented(_ payload: Data, to data: inout Data) {
+        var zeroCount = 0
+        for byte in payload {
+            if zeroCount >= 2 && byte <= 0x03 {
+                data.append(0x03)
+                zeroCount = 0
+            }
+            data.append(byte)
+            if byte == 0 {
+                zeroCount += 1
+            } else {
+                zeroCount = 0
+            }
         }
     }
 
