@@ -35,6 +35,8 @@ target_compile_options(reashoot_core_tests PRIVATE ${REASHOOT_WARNING_FLAGS})
 
 enable_testing()
 add_test(NAME reashoot_core_tests COMMAND reashoot_core_tests)
+add_test(NAME reashoot_gui_drift_guard
+         COMMAND "${CMAKE_COMMAND}" "-DREASHOOT_ROOT=${REASHOOT_ROOT}" -P "${REASHOOT_ROOT}/tests/gui_drift_guard.cmake")
 
 file(GLOB REASHOOT_HELPER_SOURCES CONFIGURE_DEPENDS "${REASHOOT_ROOT}/src/helper/*.cpp")
 add_executable(reashoot_helper ${REASHOOT_HELPER_SOURCES})

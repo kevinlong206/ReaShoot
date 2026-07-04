@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <initializer_list>
 #include <string>
 #include <vector>
 
@@ -111,6 +112,85 @@ HWND g_dragWindow = nullptr;
 HFONT g_statusFont = nullptr;
 POINT g_dragStartCursor = {};
 RECT g_dragStartWindow = {};
+
+int paddedTextWidth(const char *text, int padding, int minimum) {
+  return (std::max)(minimum, measureTextWidth(text) + padding);
+}
+
+int maxTextWidth(std::initializer_list<const char *> labels) {
+  int width = 0;
+  for (const char *label : labels) {
+    width = (std::max)(width, measureTextWidth(label));
+  }
+  return width;
+}
+
+void moveControl(HWND parent, int controlID, int x, int y, int width, int height) {
+  HWND control = getDlgItem(parent, controlID);
+  if (control) {
+    setWindowPos(control, nullptr, x, y, width, height, SWP_NOZORDER | SWP_NOACTIVATE);
+  }
+}
+
+struct SetupLayout {
+  int margin = 12;
+  int labelGap = 12;
+  int columnGap = 28;
+  int labelHeight = 20;
+  int rowHeight = 26;
+  int leftLabelWidth = 0;
+  int leftControlX = 0;
+  int leftControlWidth = 250;
+  int rightLabelX = 0;
+  int rightLabelWidth = 0;
+  int rightControlX = 0;
+  int rightControlWidth = 220;
+  int contentWidth = 0;
+  int windowWidth = 0;
+
+  SetupLayout() {
+    leftLabelWidth = (std::max)(128, maxTextWidth({"Host", "Pair code", "Resolution", "Orientation"}) + 18);
+    rightLabelWidth = (std::max)(84, maxTextWidth({"FPS", "Lens"}) + 18);
+    leftControlX = margin + leftLabelWidth + labelGap;
+    rightLabelX = leftControlX + leftControlWidth + columnGap;
+    rightControlX = rightLabelX + rightLabelWidth + labelGap;
+    contentWidth = rightControlX + rightControlWidth + margin;
+    windowWidth = contentWidth + 36;
+  }
+};
+
+void layoutPreviewPanel(HWND panel) {
+  if (!panel) {
+    return;
+  }
+  RECT client = {};
+  if (!getClientRect(panel, &client)) {
+    return;
+  }
+  const int clientWidth = static_cast<int>(client.right - client.left);
+  const int margin = 12;
+  const int gap = 8;
+  const int statusWidth = (std::max)(1, clientWidth - (margin * 2));
+
+  const int manageWidth = paddedTextWidth("Manage Recordings", 34, 180);
+  const int setupWidth = paddedTextWidth("Setup", 34, 92);
+  const int manageX = (std::max)(margin, clientWidth - margin - manageWidth);
+  const int setupX = (std::max)(margin, manageX - gap - setupWidth);
+  moveControl(panel, kSetupButton, setupX, 112, setupWidth, 26);
+  moveControl(panel, kManageButton, manageX, 112, manageWidth, 26);
+
+  const int prevWidth = paddedTextWidth("Prev", 28, 56);
+  const int nextWidth = paddedTextWidth("Next", 28, 56);
+  const int prevX = margin;
+  const int nextX = (std::max)(prevX + prevWidth + gap + 180 + gap, clientWidth - margin - nextWidth);
+  const int comboX = prevX + prevWidth + gap;
+  const int comboWidth = (std::max)(180, nextX - gap - comboX);
+  moveControl(panel, kPreviousLookButton, prevX, 60, prevWidth, 26);
+  moveControl(panel, kLookCombo, comboX, 60, comboWidth, 140);
+  moveControl(panel, kNextLookButton, nextX, 60, nextWidth, 26);
+  moveControl(panel, kFormatLabel, margin, 36, statusWidth, 20);
+  moveControl(panel, kStatusLabel, margin, 7, statusWidth, 26);
+}
 
 int lookIndexForID(const char *lookID) {
   if (!lookID || !lookID[0]) {
@@ -475,6 +555,11 @@ static LRESULT swellProbeWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
   if (msg == WM_ERASEBKGND) {
     return 1;
   }
+  if (msg == WM_SIZE) {
+    layoutPreviewPanel(hwnd);
+    invalidateRect(hwnd, nullptr, false);
+    return 0;
+  }
   if (msg == WM_CLOSE) {
     showWindow(hwnd, SW_HIDE);
     if (g_callbacks.closed) {
@@ -527,30 +612,38 @@ void showSetupWindow() {
     if (!g_setupWindow) {
       return;
     }
-    configurePopupWindow(g_setupWindow, "ReaShoot Setup", 200, 200, 540, 280);
     makeSetCurParms(1.0f, 1.0f, 0.0f, 0.0f, g_setupWindow, false, false);
-    makeLabel(0, "Host", -1, 12, 194, 80, 18, 0);
-    makeEditField(kSetupHostField, 96, 192, 310, 22, 0);
-    makeButton(0, "Discover", kSetupDiscoverButton, 416, 192, 92, 24, 0);
-    makeLabel(0, "Pair code", -1, 12, 156, 80, 18, 0);
-    makeEditField(kSetupPairingCodeField, 96, 154, 180, 22, 0);
-    makeButton(0, "Pair", kSetupPairButton, 284, 154, 70, 24, 0);
-    makeButton(0, "Reconnect", kSetupTestButton, 362, 154, 146, 24, 0);
-    makeLabel(0, "Resolution", -1, 12, 116, 80, 18, 0);
-    makeCombo(kSetupResolutionCombo, 96, 112, 160, 120, CBS_DROPDOWNLIST);
+    SetupLayout layout;
+    configurePopupWindow(g_setupWindow, "ReaShoot Setup", 200, 200, layout.windowWidth, 280);
+    const int discoverWidth = paddedTextWidth("Discover", 34, 120);
+    const int pairWidth = paddedTextWidth("Pair", 34, 76);
+    const int reconnectWidth = paddedTextWidth("Reconnect", 34, 222);
+    const int closeWidth = paddedTextWidth("Close", 34, 76);
+    const int fullRowControlWidth = layout.contentWidth - layout.leftControlX - discoverWidth - layout.labelGap - layout.margin;
+    const int pairCodeWidth = layout.contentWidth - layout.leftControlX - pairWidth - reconnectWidth - (layout.labelGap * 2) - layout.margin;
+    makeLabel(0, "Host", -1, layout.margin, 194, layout.leftLabelWidth, layout.labelHeight, 0);
+    makeEditField(kSetupHostField, layout.leftControlX, 192, fullRowControlWidth, layout.rowHeight, 0);
+    makeButton(0, "Discover", kSetupDiscoverButton, layout.leftControlX + fullRowControlWidth + layout.labelGap, 192, discoverWidth, layout.rowHeight, 0);
+    makeLabel(0, "Pair code", -1, layout.margin, 156, layout.leftLabelWidth, layout.labelHeight, 0);
+    makeEditField(kSetupPairingCodeField, layout.leftControlX, 154, pairCodeWidth, layout.rowHeight, 0);
+    makeButton(0, "Pair", kSetupPairButton, layout.leftControlX + pairCodeWidth + layout.labelGap, 154, pairWidth, layout.rowHeight, 0);
+    makeButton(0, "Reconnect", kSetupTestButton, layout.leftControlX + pairCodeWidth + layout.labelGap + pairWidth + layout.labelGap, 154, reconnectWidth, layout.rowHeight, 0);
+    makeLabel(0, "Resolution", -1, layout.margin, 116, layout.leftLabelWidth, layout.labelHeight, 0);
+    makeCombo(kSetupResolutionCombo, layout.leftControlX, 112, layout.leftControlWidth, 140, CBS_DROPDOWNLIST);
     addOptions(g_setupWindow, kSetupResolutionCombo, kResolutionOptions);
-    makeLabel(0, "FPS", -1, 282, 116, 50, 18, 0);
-    makeCombo(kSetupFPSCombo, 332, 112, 176, 120, CBS_DROPDOWNLIST);
+    makeLabel(0, "FPS", -1, layout.rightLabelX, 116, layout.rightLabelWidth, layout.labelHeight, 0);
+    makeCombo(kSetupFPSCombo, layout.rightControlX, 112, layout.rightControlWidth, 140, CBS_DROPDOWNLIST);
     addOptions(g_setupWindow, kSetupFPSCombo, kFPSOptions);
-    makeLabel(0, "Orientation", -1, 12, 78, 80, 18, 0);
-    makeCombo(kSetupOrientationCombo, 96, 74, 160, 120, CBS_DROPDOWNLIST);
+    makeLabel(0, "Orientation", -1, layout.margin, 78, layout.leftLabelWidth, layout.labelHeight, 0);
+    makeCombo(kSetupOrientationCombo, layout.leftControlX, 74, layout.leftControlWidth, 140, CBS_DROPDOWNLIST);
     addOptions(g_setupWindow, kSetupOrientationCombo, kOrientationOptions);
-    makeLabel(0, "Lens", -1, 282, 78, 50, 18, 0);
-    makeCombo(kSetupLensCombo, 332, 74, 176, 120, CBS_DROPDOWNLIST);
+    makeLabel(0, "Lens", -1, layout.rightLabelX, 78, layout.rightLabelWidth, layout.labelHeight, 0);
+    makeCombo(kSetupLensCombo, layout.rightControlX, 74, layout.rightControlWidth, 140, CBS_DROPDOWNLIST);
     addOptions(g_setupWindow, kSetupLensCombo, kLensOptions);
-    makeButton(0, "Close", kSetupCloseButton, 438, 12, 70, 24, 0);
+    makeButton(0, "Close", kSetupCloseButton, layout.contentWidth - layout.margin - closeWidth, 12, closeWidth, layout.rowHeight, 0);
   }
   syncSetupFields();
+  setWindowPos(g_setupWindow, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
   showWindow(g_setupWindow, SW_SHOW);
 }
 
@@ -560,13 +653,20 @@ void showManageWindow() {
     if (!g_manageWindow) {
       return;
     }
-    configurePopupWindow(g_manageWindow, "ReaShoot Recordings", 240, 240, 390, 150);
     makeSetCurParms(1.0f, 1.0f, 0.0f, 0.0f, g_manageWindow, false, false);
-    makeLabel(0, "Manage recordings stored on the paired iPhone.", -1, 12, 82, 360, 18, 0);
-    makeButton(0, "Pending Videos...", kManagePendingButton, 12, 46, 150, 26, 0);
-    makeButton(0, "Delete All", kManageDeleteAllButton, 172, 46, 110, 26, 0);
-    makeButton(0, "Close", kManageCloseButton, 302, 12, 70, 24, 0);
+    const int margin = 12;
+    const int gap = 10;
+    const int pendingWidth = paddedTextWidth("Pending Videos...", 34, 170);
+    const int deleteWidth = paddedTextWidth("Delete All", 34, 120);
+    const int closeWidth = paddedTextWidth("Close", 34, 76);
+    const int contentWidth = (std::max)(420, margin + pendingWidth + gap + deleteWidth + gap + closeWidth + margin);
+    configurePopupWindow(g_manageWindow, "ReaShoot Recordings", 240, 240, contentWidth + 36, 150);
+    makeLabel(0, "Manage recordings stored on the paired iPhone.", -1, margin, 82, contentWidth - (margin * 2), 20, 0);
+    makeButton(0, "Pending Videos...", kManagePendingButton, margin, 46, pendingWidth, 26, 0);
+    makeButton(0, "Delete All", kManageDeleteAllButton, margin + pendingWidth + gap, 46, deleteWidth, 26, 0);
+    makeButton(0, "Close", kManageCloseButton, contentWidth - margin - closeWidth, 12, closeWidth, 26, 0);
   }
+  setWindowPos(g_manageWindow, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
   showWindow(g_manageWindow, SW_SHOW);
 }
 
@@ -581,18 +681,19 @@ HWND createSwellPanelProbe(HWND parent, const SwellPanelCallbacks &callbacks) {
   g_callbacks = callbacks;
   updatePlaceholderPreviewFrame();
   makeSetCurParms(1.0f, 1.0f, 0.0f, 0.0f, panel, false, false);
-  makeButton(0, "Setup", kSetupButton, 448, 112, 86, 24, 0);
-  makeButton(0, "Manage Recordings", kManageButton, 542, 112, 126, 24, 0);
-  makeButton(0, "Prev", kPreviousLookButton, 12, 60, 52, 24, 0);
-  makeButton(0, "Next", kNextLookButton, 616, 60, 52, 24, 0);
-  makeCombo(kLookCombo, 70, 60, 540, 200, CBS_DROPDOWNLIST);
+  makeButton(0, "Setup", kSetupButton, 0, 0, 92, 26, 0);
+  makeButton(0, "Manage Recordings", kManageButton, 0, 0, 180, 26, 0);
+  makeButton(0, "Prev", kPreviousLookButton, 0, 0, 56, 26, 0);
+  makeButton(0, "Next", kNextLookButton, 0, 0, 56, 26, 0);
+  makeCombo(kLookCombo, 0, 0, 528, 140, CBS_DROPDOWNLIST);
   for (const auto &look : kLookOptions) {
     comboAddString(panel, kLookCombo, look.title);
   }
   comboSetCurSel(panel, kLookCombo, 0);
-  makeLabel(0, "ReaShoot camera preview", kFormatLabel, 12, 36, 656, 18, 0);
-  makeLabel(0, "Video disabled", kStatusLabel, 12, 7, 656, 26, 0);
+  makeLabel(0, "ReaShoot camera preview", kFormatLabel, 0, 0, 656, 20, 0);
+  makeLabel(0, "Video disabled", kStatusLabel, 0, 0, 656, 26, 0);
   applyStatusFont(panel);
+  layoutPreviewPanel(panel);
   invalidateRect(panel, nullptr, false);
   return panel;
 }

@@ -12,7 +12,7 @@ ReaShoot is a native REAPER extension for controlling a companion iPhone camera 
   - `ReaShoot: Delete All Pending iPhone Recordings`
   - `ReaShoot: Enable/Disable Transport Follow`
 - Adds a main-toolbar toggle button for enabling/disabling all video behavior.
-- Shows the iPhone live preview in a native preview window on macOS. Windows starts the authenticated H.264 stream and decodes live/playback preview frames through Media Foundation for the shared SWELL panel.
+- Shows the iPhone live preview in the shared SWELL preview panel on both macOS and Windows. Platform code supplies helper execution and H.264/live/playback decoding, while the preview/setup/status controls are defined once in `src/platform/swell/swell_panel_probe.cpp`.
 - Shows the active iPhone profile below the preview, including resolution, frame rate, orientation, aspect, lens, zoom, and look; status text turns red while recording.
 - Controls the companion iPhone app for full-resolution iPhone capture. The REAPER extension no longer records directly from macOS webcams or Continuity Camera.
 - Records iPhone camera audio into the `.mov` alongside video so the inserted item contains an alignment reference.
