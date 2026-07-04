@@ -1,6 +1,6 @@
 # ReaShoot
 
-ReaShoot is a native REAPER extension for controlling a companion iPhone camera app from REAPER, recording full-quality iPhone video, and inserting the downloaded movie in sync with the REAPER transport. The macOS extension is the full implementation; the Windows CMake build currently provides the helper, REAPER DLL skeleton, shared setup panel, pairing/configure/start/stop/download flow, pending recording restore/delete, Media Foundation H.264 live/playback preview, and single-item insertion.
+ReaShoot is a native REAPER extension for controlling a companion iPhone camera app from REAPER, recording full-quality iPhone video, and inserting the downloaded movie in sync with the REAPER transport. The macOS extension is the full implementation; the Windows CMake build currently provides the helper, REAPER DLL skeleton, shared setup panel, pairing/configure/start/stop/download flow, pending recording restore/delete, FFmpeg H.264 live/playback preview, and single-item insertion.
 
 ## MVP behavior
 
@@ -24,8 +24,8 @@ ReaShoot is a native REAPER extension for controlling a companion iPhone camera 
 - Shows the preview in a floating window by default; the `Float/Dock Preview` action can still toggle docking and remembers that choice.
 - Shows recorded video playback in the same preview panel when REAPER plays over an item on the `ReaShoot` track.
 - Adds a `Float/Dock Preview` action because REAPER's normal docker undock controls do not work reliably for this custom native preview view.
-- Mutes the docked preview's internal player so playback audio comes only from REAPER.
-- Lets the docked playback player run smoothly and only re-seeks on source changes, playback start, or larger drift.
+- Uses shared FFmpeg playback preview code for recorded-file preview frames on macOS and Windows, while playback audio comes only from REAPER.
+- Keeps FFmpeg playback smooth by avoiding per-tick re-seek/flush churn and by limiting preview frame size.
 - Inserts the finalized `.mov` onto a `ReaShoot` track at the record-start timeline position.
 - After insertion, compares the movie's embedded camera audio against the first non-video track item that overlaps the video item and shifts the video item to the strongest correlation match on that reference.
 - Can manually re-run alignment for an existing project with `ReaShoot: Align Selected Video Item`; select the item on the `ReaShoot` track first, or it falls back to that track's latest item. If a REAPER time selection is active, only that region is analyzed.
@@ -44,6 +44,12 @@ ReaShoot is a native REAPER extension for controlling a companion iPhone camera 
 - The iPhone app keeps the screen awake while ready/listening, but does not show that implementation detail in the status screen.
 
 ## Build
+
+macOS playback preview requires FFmpeg headers and dylibs. Install FFmpeg with Homebrew or set `FFMPEG_ROOT` / `REASHOOT_FFMPEG_ROOT` to a prefix containing `include/` and `lib/`:
+
+```sh
+brew install ffmpeg
+```
 
 ```sh
 make
@@ -72,7 +78,7 @@ cmake --build build --config Release --parallel
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-By default the Makefile builds for the current Mac architecture. To build a universal binary:
+By default the Makefile builds for the current Mac architecture. Universal builds require a universal FFmpeg prefix; the default Apple Silicon Homebrew FFmpeg dylibs are arm64-only. If you have universal FFmpeg libraries, point `FFMPEG_ROOT` or `REASHOOT_FFMPEG_ROOT` at that prefix and build with both architectures:
 
 ```sh
 make ARCH_FLAGS="-arch arm64 -arch x86_64"

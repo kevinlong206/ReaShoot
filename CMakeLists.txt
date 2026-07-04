@@ -19,6 +19,8 @@ endif()
 
 file(GLOB REASHOOT_CORE_SOURCES CONFIGURE_DEPENDS "${REASHOOT_ROOT}/src/core/*.cpp")
 file(GLOB REASHOOT_CORE_HEADERS CONFIGURE_DEPENDS "${REASHOOT_ROOT}/src/core/*.h")
+file(GLOB REASHOOT_FFMPEG_SOURCES CONFIGURE_DEPENDS "${REASHOOT_ROOT}/src/platform/ffmpeg/*.cpp")
+file(GLOB REASHOOT_FFMPEG_HEADERS CONFIGURE_DEPENDS "${REASHOOT_ROOT}/src/platform/ffmpeg/*.h")
 
 add_library(reashoot_core STATIC ${REASHOOT_CORE_SOURCES} ${REASHOOT_CORE_HEADERS})
 target_include_directories(reashoot_core
@@ -52,6 +54,25 @@ else()
 endif()
 
 if(APPLE)
+  set(REASHOOT_FFMPEG_ROOT "" CACHE PATH "FFmpeg root containing include and lib directories")
+  set(REASHOOT_FFMPEG_HINTS)
+  if(NOT "${REASHOOT_FFMPEG_ROOT}" STREQUAL "")
+    list(APPEND REASHOOT_FFMPEG_HINTS "${REASHOOT_FFMPEG_ROOT}")
+  endif()
+  list(APPEND REASHOOT_FFMPEG_HINTS /opt/homebrew /usr/local)
+  find_path(REASHOOT_FFMPEG_INCLUDE_DIR
+    NAMES libavcodec/avcodec.h libavformat/avformat.h
+    HINTS ${REASHOOT_FFMPEG_HINTS}
+    PATH_SUFFIXES include
+  )
+  find_library(REASHOOT_AVFORMAT_LIBRARY NAMES avformat HINTS ${REASHOOT_FFMPEG_HINTS} PATH_SUFFIXES lib)
+  find_library(REASHOOT_AVCODEC_LIBRARY NAMES avcodec HINTS ${REASHOOT_FFMPEG_HINTS} PATH_SUFFIXES lib)
+  find_library(REASHOOT_AVUTIL_LIBRARY NAMES avutil HINTS ${REASHOOT_FFMPEG_HINTS} PATH_SUFFIXES lib)
+  if(NOT REASHOOT_FFMPEG_INCLUDE_DIR OR NOT REASHOOT_AVFORMAT_LIBRARY OR NOT REASHOOT_AVCODEC_LIBRARY OR NOT REASHOOT_AVUTIL_LIBRARY)
+    message(FATAL_ERROR "macOS FFmpeg playback requires FFmpeg headers/libs. Install with 'brew install ffmpeg' or set REASHOOT_FFMPEG_ROOT.")
+  endif()
+  get_filename_component(REASHOOT_FFMPEG_LIBRARY_DIR "${REASHOOT_AVFORMAT_LIBRARY}" DIRECTORY)
+
   file(GLOB REASHOOT_MAC_SOURCES CONFIGURE_DEPENDS "${REASHOOT_ROOT}/src/platform/mac/*.mm")
   file(GLOB REASHOOT_SWELL_CPP_SOURCES CONFIGURE_DEPENDS "${REASHOOT_ROOT}/src/platform/swell/*.cpp")
   file(GLOB REASHOOT_SWELL_OBJCXX_SOURCES CONFIGURE_DEPENDS "${REASHOOT_ROOT}/src/platform/swell/*.mm")
@@ -60,6 +81,8 @@ if(APPLE)
     "${REASHOOT_ROOT}/src/reashoot.mm"
     "${REASHOOT_ROOT}/src/reaper/reaper_host.cpp"
     ${REASHOOT_MAC_SOURCES}
+    ${REASHOOT_FFMPEG_SOURCES}
+    ${REASHOOT_FFMPEG_HEADERS}
     ${REASHOOT_SWELL_CPP_SOURCES}
     ${REASHOOT_SWELL_OBJCXX_SOURCES}
   )
@@ -70,8 +93,11 @@ if(APPLE)
       "-framework AVFoundation"
       "-framework QuartzCore"
       "-framework VideoToolbox"
+      "${REASHOOT_AVFORMAT_LIBRARY}"
+      "${REASHOOT_AVCODEC_LIBRARY}"
+      "${REASHOOT_AVUTIL_LIBRARY}"
   )
-  target_include_directories(reaper_reashoot PRIVATE "${REASHOOT_ROOT}/src" "${REASHOOT_SDK_DIR}")
+  target_include_directories(reaper_reashoot PRIVATE "${REASHOOT_ROOT}/src" "${REASHOOT_SDK_DIR}" "${REASHOOT_FFMPEG_INCLUDE_DIR}")
   target_compile_options(reaper_reashoot PRIVATE
     ${REASHOOT_WARNING_FLAGS}
     $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>
@@ -79,6 +105,7 @@ if(APPLE)
   target_link_options(reaper_reashoot PRIVATE
     -undefined dynamic_lookup
     -Wl,-rpath,@loader_path
+    "-Wl,-rpath,${REASHOOT_FFMPEG_LIBRARY_DIR}"
     -sectcreate __TEXT __info_plist "${REASHOOT_ROOT}/Info.plist"
   )
   set_target_properties(reaper_reashoot PROPERTIES PREFIX "" SUFFIX ".dylib")
@@ -116,6 +143,8 @@ if(WIN32)
   add_library(reaper_reashoot SHARED
     "${REASHOOT_ROOT}/src/reaper/reaper_host.cpp"
     ${REASHOOT_WIN32_SOURCES}
+    ${REASHOOT_FFMPEG_SOURCES}
+    ${REASHOOT_FFMPEG_HEADERS}
     ${REASHOOT_SWELL_CPP_SOURCES}
   )
   target_link_libraries(reaper_reashoot
