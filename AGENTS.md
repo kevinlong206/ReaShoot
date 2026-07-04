@@ -2,16 +2,17 @@
 
 ## Project
 
-This repository contains ReaShoot: a macOS-only native REAPER extension plus its companion iPhone camera app.
+This repository contains ReaShoot: a native REAPER extension plus its companion iPhone camera app.
 
-- The REAPER extension is implemented in Objective-C++ with the REAPER Extension SDK, AVFoundation, Cocoa, and a local H.264 preview stream.
+- The macOS REAPER extension is implemented in Objective-C++ with the REAPER Extension SDK, AVFoundation, Cocoa, and a local H.264 preview stream.
+- The Windows REAPER extension builds with CMake as `reaper_reashoot.dll`; it currently includes the helper, shared setup/status panel, pairing/configure/start/stop/download flow, pending recording restore/delete, Media Foundation H.264 live/playback preview, and media insertion.
 - The companion iPhone app lives in `iphone/` and records full-quality iPhone video while REAPER controls it over the local Wi-Fi/Bonjour network.
 - `iphone/` is the source of truth for the iPhone app; do not recreate old external development copies.
 
 ## Important files
 
 - `src/reashoot.mm` - Main extension implementation, including REAPER action registration, docked preview UI, iPhone app control, media insertion, playback preview, and post-record audio alignment.
-- `src/helper/` - Bundled C++ helper executable. Builds `reashoot-mac` for REAPER-side iPhone control, discovery, and media download.
+- `src/helper/` - Bundled C++ helper executable. Builds `reashoot-mac` on macOS and `reashoot-win.exe` on Windows for REAPER-side iPhone control, discovery, and media download.
 - `iphone/` - Consolidated iPhone app project and Swift package.
 - `iphone/Sources/ReaShootKit/` - iOS capture, H.264 preview streaming, WebSocket control, HTTP transfer, and pairing.
 - `src/core/control_protocol.*` and `iphone/Sources/ReaShootCore/ControlProtocol.swift` - Protocol definitions; keep these compatible when adding commands/events.

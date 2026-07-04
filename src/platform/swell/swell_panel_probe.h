@@ -16,6 +16,7 @@ struct SwellPanelCallbacks {
   void (*nextLook)(void *context) = nullptr;
   void (*selectLook)(void *context, const char *lookID) = nullptr;
   void (*profileChanged)(void *context) = nullptr;
+  void (*closed)(void *context) = nullptr;
 };
 
 struct SwellPanelSettings {

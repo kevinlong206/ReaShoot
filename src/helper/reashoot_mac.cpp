@@ -54,7 +54,7 @@ std::string required(const CLIArguments &args, const std::string &flag) {
 
 void printHelp() {
   std::cout
-      << "reashoot-mac commands:\n"
+      << "reashoot helper commands:\n"
       << "  discover [--timeout 3]\n"
       << "  pair --host HOST [--port 8787] --code CODE\n"
       << "  configure --host HOST [--port 8787] --token TOKEN [--resolution 4K] [--fps 30] [--orientation portrait] [--aspect 9:16] [--lens wide] [--zoom 1.0] [--look natural]\n"

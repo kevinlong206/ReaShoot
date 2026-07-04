@@ -127,6 +127,11 @@ public final class ReaShootService: ObservableObject {
                     }
                 }
             )
+            previewServer.clientConnectedHandler = { [weak self] in
+                Task { @MainActor [weak self] in
+                    self?.previewEncoder?.requestKeyframe()
+                }
+            }
             try previewServer.start()
             self.previewStreamServer = previewServer
 
@@ -325,6 +330,7 @@ public final class ReaShootService: ObservableObject {
         }
         capture.setPreviewSampleBufferConsumer(nil)
         previewEncoder?.stop()
+        previewStreamServer.clearCachedKeyframe()
         let encoder = PreviewH264Encoder { [weak previewStreamServer] accessUnit in
             previewStreamServer?.broadcast(accessUnit: accessUnit)
         }

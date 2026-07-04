@@ -18,7 +18,7 @@ bool isVideoPath(const std::string &path) {
 }
 
 std::string directoryName(const std::string &path) {
-  const std::string::size_type slash = path.find_last_of('/');
+  const std::string::size_type slash = path.find_last_of("/\\");
   if (slash == std::string::npos) {
     return {};
   }
@@ -27,7 +27,7 @@ std::string directoryName(const std::string &path) {
 
 std::string baseNameWithoutExtension(const std::string &path) {
   std::string name = path;
-  const std::string::size_type slash = name.find_last_of('/');
+  const std::string::size_type slash = name.find_last_of("/\\");
   if (slash != std::string::npos) {
     name = name.substr(slash + 1);
   }
@@ -51,7 +51,11 @@ std::string baseNameWithoutExtension(const std::string &path) {
 std::string timestampString() {
   std::time_t now = std::time(nullptr);
   std::tm localTime = {};
+#ifdef _WIN32
+  localtime_s(&localTime, &now);
+#else
   localtime_r(&now, &localTime);
+#endif
   char buffer[32] = {};
   std::strftime(buffer, sizeof(buffer), "%Y%m%d_%H%M%S", &localTime);
   return buffer;
