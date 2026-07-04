@@ -13,10 +13,12 @@
 #include <wrl/client.h>
 
 #include <cmath>
+#include <condition_variable>
 #include <cstdint>
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -67,23 +69,82 @@ std::wstring wideFromUtf8(const std::string &value) {
 class Win32PlaybackPreview final : public core::PlaybackPreview {
 public:
   explicit Win32PlaybackPreview(core::VideoFrameCallback frameHandler)
-      : frameHandler_(std::move(frameHandler)) {}
+      : frameHandler_(std::move(frameHandler)) {
+    worker_ = std::thread([this]() { workerLoop(); });
+  }
+
+  ~Win32PlaybackPreview() override {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      stopped_ = true;
+      hasPendingRequest_ = false;
+    }
+    cv_.notify_all();
+    if (worker_.joinable()) {
+      worker_.join();
+    }
+  }
 
   void showMedia(const std::string &path, double itemStart, double sourceOffset, double projectPosition) override {
-    thread_local ComThreadRuntime runtime;
-    if (!runtime.ready() || path.empty() || !frameHandler_) {
+    if (path.empty() || !frameHandler_) {
       return;
     }
-
     std::lock_guard<std::mutex> lock(mutex_);
-    const bool switchedSource = path != activePath_ || !reader_;
-    if (switchedSource && !open(path)) {
+    if (stopped_) {
+      return;
+    }
+    pendingRequest_ = {path, itemStart, sourceOffset, projectPosition};
+    hasPendingRequest_ = true;
+    hidden_ = false;
+    cv_.notify_one();
+  }
+
+  void hide() override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    hidden_ = true;
+    hasPendingRequest_ = false;
+  }
+
+private:
+  struct PlaybackRequest {
+    std::string path;
+    double itemStart = 0.0;
+    double sourceOffset = 0.0;
+    double projectPosition = 0.0;
+  };
+
+  void workerLoop() {
+    ComThreadRuntime runtime;
+    if (!runtime.ready()) {
+      return;
+    }
+    while (true) {
+      PlaybackRequest request;
+      {
+        std::unique_lock<std::mutex> lock(mutex_);
+        cv_.wait(lock, [this]() { return stopped_ || hasPendingRequest_; });
+        if (stopped_) {
+          return;
+        }
+        request = std::move(pendingRequest_);
+        hasPendingRequest_ = false;
+      }
+      renderRequest(request);
+    }
+  }
+
+  void renderRequest(const PlaybackRequest &request) {
+    if (request.path.empty()) {
+      return;
+    }
+    const bool switchedSource = request.path != activePath_ || !reader_;
+    if (switchedSource && !open(request.path)) {
       return;
     }
 
-    const double sourceTime = (std::max)(0.0, projectPosition - itemStart + sourceOffset);
+    const double sourceTime = (std::max)(0.0, request.projectPosition - request.itemStart + request.sourceOffset);
     if (!switchedSource && visible_ && lastRenderedSourceTime_ >= 0.0 &&
-        std::fabs(sourceTime - lastRenderedSourceTime_) < (1.0 / 40.0)) {
+        std::fabs(sourceTime - lastRenderedSourceTime_) < 0.20) {
       return;
     }
 
@@ -93,13 +154,6 @@ public:
     }
   }
 
-  void hide() override {
-    std::lock_guard<std::mutex> lock(mutex_);
-    visible_ = false;
-    lastRenderedSourceTime_ = -1.0;
-  }
-
-private:
   bool open(const std::string &path) {
     reader_.Reset();
     activePath_.clear();
@@ -217,11 +271,23 @@ private:
                   static_cast<size_t>(frame.strideBytes));
     }
     buffer->Unlock();
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (hidden_) {
+        return false;
+      }
+    }
     frameHandler_(frame);
     return true;
   }
 
   std::mutex mutex_;
+  std::condition_variable cv_;
+  std::thread worker_;
+  PlaybackRequest pendingRequest_;
+  bool hasPendingRequest_ = false;
+  bool stopped_ = false;
+  bool hidden_ = false;
   core::VideoFrameCallback frameHandler_;
   ComPtr<IMFSourceReader> reader_;
   std::string activePath_;

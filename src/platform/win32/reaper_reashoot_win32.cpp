@@ -347,7 +347,22 @@ std::string resultError(const reashoot::core::CommandResult &result, const std::
     return result.errorMessage;
   }
   if (!result.output.empty()) {
-    return result.output;
+    std::istringstream stream(result.output);
+    std::ostringstream filtered;
+    std::string line;
+    while (std::getline(stream, line)) {
+      if (!line.empty() && line.back() == '\r') {
+        line.pop_back();
+      }
+      if (line.rfind("progress ", 0) == 0 || line.rfind("encode ", 0) == 0) {
+        continue;
+      }
+      if (!line.empty()) {
+        filtered << line << '\n';
+      }
+    }
+    const std::string text = filtered.str();
+    return text.empty() ? fallback : text;
   }
   return fallback;
 }
@@ -674,6 +689,8 @@ void downloadRecordingAt(const reashoot::core::RemoteRecordingDescriptor &record
                          double insertPosition) {
   reashoot::core::RemoteCameraSettings settings = cameraSettings();
   const std::string directory = captureOutputDirectory(project);
+  const std::string expectedPath =
+      (std::filesystem::path(directory) / (recording.filename.empty() ? "recording.mov" : recording.filename)).string();
   g_downloadHandle = remoteCameraController().downloadRecording(
       settings,
       recording,
@@ -684,18 +701,30 @@ void downloadRecordingAt(const reashoot::core::RemoteRecordingDescriptor &record
           postToMain([status]() { setPanelStatus(status); });
         }
       },
-      [project, insertPosition](reashoot::core::CommandResult result) {
-        postToMain([result = std::move(result), project, insertPosition]() mutable {
+      [recording, expectedPath, project, insertPosition](reashoot::core::CommandResult result) {
+        postToMain([recording, expectedPath, result = std::move(result), project, insertPosition]() mutable {
+          bool recoveredCompletedDownload = false;
           if (result.exitCode != 0) {
-            setPanelStatus("iPhone download failed");
-            showError(resultError(result, "iPhone download failed."));
-            return;
+            const int64_t expectedBytes = recording.byteCount.empty() ? 0 : std::strtoll(recording.byteCount.c_str(), nullptr, 10);
+            std::error_code ec;
+            const bool fileLooksComplete = std::filesystem::exists(expectedPath, ec) &&
+                                           (expectedBytes <= 0 || static_cast<int64_t>(std::filesystem::file_size(expectedPath, ec)) == expectedBytes);
+            if (!fileLooksComplete) {
+              setPanelStatus("iPhone download failed");
+              showError(resultError(result, "iPhone download failed."));
+              return;
+            }
+            recoveredCompletedDownload = true;
+            setPanelStatus("Downloaded iPhone video; transfer acknowledgement failed");
           }
           std::string path = reashoot::core::parseDownloadedPath(result.output);
           if (path.empty()) {
-            setPanelStatus("iPhone download failed");
-            showError("The iPhone video downloaded, but the helper did not report the downloaded path.");
-            return;
+            if (!recoveredCompletedDownload) {
+              setPanelStatus("iPhone download failed");
+              showError("The iPhone video downloaded, but the helper did not report the downloaded path.");
+              return;
+            }
+            path = expectedPath;
           }
           g_pendingInsertPath = path;
           g_pendingInsertPosition = insertPosition;
@@ -1026,7 +1055,7 @@ void updatePlaybackWithVideo(const PlaybackVideo &video, double projectPosition)
   const bool enteringPlayback = !g_showingPlayback;
   g_showingPlayback = true;
   if (enteringPlayback) {
-    stopRemotePreview();
+    stopPreviewStream();
   }
   if (g_playbackPreviewRenderer) {
     g_playbackPreviewRenderer->showMedia(video.path, video.itemStart, video.sourceOffset, projectPosition);
@@ -1044,6 +1073,7 @@ void stopPlaybackAndShowLive() {
   }
   updatePanel();
   if (g_extensionController.videoEnabled()) {
+    stopPreviewStream();
     startRemotePreview();
   }
 }
