@@ -13,6 +13,7 @@ final class PreviewH264Encoder {
     private var activeWidth: Int32 = 0
     private var activeHeight: Int32 = 0
     private var running = false
+    private var forceNextKeyframe = true
 
     init(width: Int32 = 640, height: Int32 = 360, fps: Int32 = 12, outputHandler: @escaping OutputHandler) {
         self.fps = fps
@@ -22,6 +23,13 @@ final class PreviewH264Encoder {
     func start() throws {
         queue.sync {
             running = true
+            forceNextKeyframe = true
+        }
+    }
+
+    func requestKeyframe() {
+        queue.async { [weak self] in
+            self?.forceNextKeyframe = true
         }
     }
 
@@ -94,12 +102,19 @@ final class PreviewH264Encoder {
             }
             let fallbackTimestamp = CMTime(value: CMTimeValue(Int64(Date().timeIntervalSince1970 * 1_000_000_000)), timescale: 1_000_000_000)
             let presentationTime = timestamp.isValid ? timestamp : fallbackTimestamp
+            var frameProperties: CFDictionary?
+            if self.forceNextKeyframe {
+                self.forceNextKeyframe = false
+                frameProperties = [
+                    kVTEncodeFrameOptionKey_ForceKeyFrame as String: true
+                ] as CFDictionary
+            }
             VTCompressionSessionEncodeFrame(
                 session,
                 imageBuffer: pixelBuffer,
                 presentationTimeStamp: presentationTime,
                 duration: CMTime(value: 1, timescale: self.fps),
-                frameProperties: nil,
+                frameProperties: frameProperties,
                 sourceFrameRefcon: nil,
                 infoFlagsOut: nil
             )

@@ -2,18 +2,15 @@
 
 #include "checksum.h"
 #include "control_client.h"
+#include "socket_utils.h"
 
 #include <algorithm>
-#include <cerrno>
 #include <cctype>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
-#include <netdb.h>
 #include <sstream>
-#include <sys/socket.h>
 #include <sys/stat.h>
-#include <unistd.h>
 #include <utility>
 
 namespace reashoot::helper {
@@ -26,42 +23,10 @@ int64_t fileSize(const std::string &path) {
   return stat(path.c_str(), &info) == 0 ? static_cast<int64_t>(info.st_size) : 0;
 }
 
-int openSocket(const std::string &host, int port) {
-  addrinfo hints = {};
-  hints.ai_family = AF_UNSPEC;
-  hints.ai_socktype = SOCK_STREAM;
-  hints.ai_protocol = IPPROTO_TCP;
-  addrinfo *result = nullptr;
-  const int status = getaddrinfo(host.c_str(), std::to_string(port).c_str(), &hints, &result);
-  if (status != 0 || !result) {
-    throw HelperError("Could not connect to download server: " + std::string(gai_strerror(status)));
-  }
-  int connected = -1;
-  for (addrinfo *address = result; address; address = address->ai_next) {
-    const int fd = socket(address->ai_family, address->ai_socktype, address->ai_protocol);
-    if (fd < 0) {
-      continue;
-    }
-    timeval timeout = {20, 0};
-    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
-    if (connect(fd, address->ai_addr, address->ai_addrlen) == 0) {
-      connected = fd;
-      break;
-    }
-    close(fd);
-  }
-  freeaddrinfo(result);
-  if (connected < 0) {
-    throw HelperError("Could not connect to download server: " + std::string(strerror(errno)));
-  }
-  return connected;
-}
-
-void writeAll(int socket, const std::string &data) {
+void writeAll(SocketHandle socket, const std::string &data) {
   size_t offset = 0;
   while (offset < data.size()) {
-    const ssize_t sent = send(socket, data.data() + offset, data.size() - offset, 0);
+    const int sent = sendSocketBytes(socket, data.data() + offset, data.size() - offset);
     if (sent <= 0) {
       throw HelperError("Download connection closed before the file was complete.");
     }
@@ -69,11 +34,11 @@ void writeAll(int socket, const std::string &data) {
   }
 }
 
-std::pair<std::vector<std::string>, std::string> readHeaders(int socket) {
+std::pair<std::vector<std::string>, std::string> readHeaders(SocketHandle socket) {
   std::string data;
   char buffer[16 * 1024] = {};
   while (data.find("\r\n\r\n") == std::string::npos) {
-    const ssize_t count = recv(socket, buffer, sizeof(buffer), 0);
+    const int count = receiveSocketBytes(socket, buffer, sizeof(buffer));
     if (count <= 0) {
       throw HelperError("Download did not return an HTTP response.");
     }
@@ -117,7 +82,7 @@ int64_t downloadAttempt(const core::ProtocolRecording &recording,
                         const std::string &temporaryPath,
                         int64_t offset,
                         DownloadProgress progress) {
-  const int socket = openSocket(host, httpPort);
+  const SocketHandle socket = connectTcpSocket(host, httpPort, 20, "download server");
   try {
     const int64_t expectedBytes = recording.byteCount;
     const int64_t end = expectedBytes > 0 ? std::min(expectedBytes - 1, offset + kChunkBytes - 1) : -1;
@@ -158,7 +123,7 @@ int64_t downloadAttempt(const core::ProtocolRecording &recording,
 
     char buffer[256 * 1024] = {};
     while (true) {
-      const ssize_t count = recv(socket, buffer, sizeof(buffer), 0);
+      const int count = receiveSocketBytes(socket, buffer, sizeof(buffer));
       if (count > 0) {
         output.write(buffer, count);
         written += count;
@@ -169,10 +134,10 @@ int64_t downloadAttempt(const core::ProtocolRecording &recording,
         throw HelperError("Download connection closed before the file was complete.");
       }
     }
-    close(socket);
+    closeSocket(socket);
     return written;
   } catch (...) {
-    close(socket);
+    closeSocket(socket);
     throw;
   }
 }
@@ -211,7 +176,7 @@ std::string downloadRecording(const core::ProtocolRecording &recording,
       if (++attempts >= 8) {
         throw;
       }
-      sleep(static_cast<unsigned int>(std::min(attempts, 5)));
+      sleepSeconds(std::min(attempts, 5));
       offset = fileSize(temporary);
     }
   }

@@ -36,18 +36,17 @@ target_compile_options(reashoot_core_tests PRIVATE ${REASHOOT_WARNING_FLAGS})
 enable_testing()
 add_test(NAME reashoot_core_tests COMMAND reashoot_core_tests)
 
-if(NOT WIN32)
-  file(GLOB REASHOOT_HELPER_SOURCES CONFIGURE_DEPENDS "${REASHOOT_ROOT}/src/helper/*.cpp")
-  add_executable(reashoot_helper ${REASHOOT_HELPER_SOURCES})
-  target_link_libraries(reashoot_helper PRIVATE reashoot_core)
-  target_compile_options(reashoot_helper PRIVATE ${REASHOOT_WARNING_FLAGS})
-  if(APPLE)
-    set_target_properties(reashoot_helper PROPERTIES OUTPUT_NAME "reashoot-mac")
-  else()
-    set_target_properties(reashoot_helper PROPERTIES OUTPUT_NAME "reashoot-helper")
-  endif()
+file(GLOB REASHOOT_HELPER_SOURCES CONFIGURE_DEPENDS "${REASHOOT_ROOT}/src/helper/*.cpp")
+add_executable(reashoot_helper ${REASHOOT_HELPER_SOURCES})
+target_link_libraries(reashoot_helper PRIVATE reashoot_core)
+target_compile_options(reashoot_helper PRIVATE ${REASHOOT_WARNING_FLAGS})
+if(WIN32)
+  target_link_libraries(reashoot_helper PRIVATE ws2_32)
+  set_target_properties(reashoot_helper PROPERTIES OUTPUT_NAME "reashoot-win")
+elseif(APPLE)
+  set_target_properties(reashoot_helper PROPERTIES OUTPUT_NAME "reashoot-mac")
 else()
-  message(STATUS "Windows helper target is deferred until WinSock/discovery adapters are added.")
+  set_target_properties(reashoot_helper PROPERTIES OUTPUT_NAME "reashoot-helper")
 endif()
 
 if(APPLE)
@@ -95,4 +94,39 @@ if(APPLE)
   install(CODE
     "execute_process(COMMAND /usr/bin/codesign --force --sign - \"${REAPER_USERPLUGINS_DIR}/reashoot-mac\" COMMAND_ERROR_IS_FATAL ANY)
      execute_process(COMMAND /usr/bin/codesign --force --sign - \"${REAPER_USERPLUGINS_DIR}/reaper_reashoot.dylib\" COMMAND_ERROR_IS_FATAL ANY)")
+endif()
+
+if(WIN32)
+  file(GLOB REASHOOT_WIN32_SOURCES CONFIGURE_DEPENDS "${REASHOOT_ROOT}/src/platform/win32/*.cpp")
+  file(GLOB REASHOOT_SWELL_CPP_SOURCES CONFIGURE_DEPENDS "${REASHOOT_ROOT}/src/platform/swell/*.cpp")
+
+  add_library(reaper_reashoot SHARED
+    "${REASHOOT_ROOT}/src/reaper/reaper_host.cpp"
+    ${REASHOOT_WIN32_SOURCES}
+    ${REASHOOT_SWELL_CPP_SOURCES}
+  )
+  target_link_libraries(reaper_reashoot
+    PRIVATE
+      reashoot_core
+      user32
+      gdi32
+      mf
+      mfplat
+      mfreadwrite
+      mfuuid
+      ole32
+      ws2_32
+      winhttp
+      wmcodecdspuuid
+  )
+  target_include_directories(reaper_reashoot PRIVATE "${REASHOOT_ROOT}/src" "${REASHOOT_SDK_DIR}")
+  target_compile_options(reaper_reashoot PRIVATE ${REASHOOT_WARNING_FLAGS})
+  target_compile_definitions(reaper_reashoot PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+  set_target_properties(reaper_reashoot PROPERTIES PREFIX "" SUFFIX ".dll" OUTPUT_NAME "reaper_reashoot")
+
+  set(REAPER_WINDOWS_USERPLUGINS_DIR "$ENV{APPDATA}/REAPER/UserPlugins"
+      CACHE PATH "Windows REAPER UserPlugins install directory")
+  install(TARGETS reaper_reashoot reashoot_helper
+          RUNTIME DESTINATION "${REAPER_WINDOWS_USERPLUGINS_DIR}"
+          LIBRARY DESTINATION "${REAPER_WINDOWS_USERPLUGINS_DIR}")
 endif()

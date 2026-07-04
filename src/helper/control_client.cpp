@@ -1,15 +1,8 @@
 #include "control_client.h"
 
-#include <arpa/inet.h>
-#include <cerrno>
 #include <cctype>
-#include <cstring>
-#include <fcntl.h>
-#include <netdb.h>
 #include <random>
 #include <sstream>
-#include <sys/socket.h>
-#include <unistd.h>
 #include <utility>
 #include <vector>
 
@@ -130,11 +123,11 @@ std::string randomBytes(size_t count) {
   return bytes;
 }
 
-std::string readExact(int socket, size_t count) {
+std::string readExact(SocketHandle socket, size_t count) {
   std::string data(count, '\0');
   size_t offset = 0;
   while (offset < count) {
-    const ssize_t result = recv(socket, data.data() + offset, count - offset, 0);
+    const int result = receiveSocketBytes(socket, data.data() + offset, count - offset);
     if (result <= 0) {
       throw HelperError("Could not connect to the control socket: connection closed");
     }
@@ -143,12 +136,12 @@ std::string readExact(int socket, size_t count) {
   return data;
 }
 
-void writeAll(int socket, const std::string &data) {
+void writeAll(SocketHandle socket, const std::string &data) {
   size_t offset = 0;
   while (offset < data.size()) {
-    const ssize_t result = send(socket, data.data() + offset, data.size() - offset, 0);
+    const int result = sendSocketBytes(socket, data.data() + offset, data.size() - offset);
     if (result <= 0) {
-      throw HelperError("Could not connect to the control socket: " + std::string(strerror(errno)));
+      throw HelperError("Could not connect to the control socket: " + socketErrorMessage());
     }
     offset += static_cast<size_t>(result);
   }
@@ -187,53 +180,24 @@ ControlClient::ControlClient(std::string host, int port, int timeoutSeconds)
     : host_(std::move(host)), port_(port), timeoutSeconds_(timeoutSeconds) {}
 
 core::ProtocolEvent ControlClient::send(const core::ProtocolCommand &command) const {
-  const int socket = openSocket();
+  const SocketHandle socket = openSocket();
   try {
     performHandshake(socket);
     sendFrame(socket, core::encodeCommandJson(command));
     const std::string response = receiveFrame(socket);
-    close(socket);
+    closeSocket(socket);
     return core::decodeEventJson(response);
   } catch (...) {
-    close(socket);
+    closeSocket(socket);
     throw;
   }
 }
 
-int ControlClient::openSocket() const {
-  addrinfo hints = {};
-  hints.ai_family = AF_UNSPEC;
-  hints.ai_socktype = SOCK_STREAM;
-  hints.ai_protocol = IPPROTO_TCP;
-  addrinfo *result = nullptr;
-  const int status = getaddrinfo(host_.c_str(), std::to_string(port_).c_str(), &hints, &result);
-  if (status != 0 || !result) {
-    throw HelperError("Could not connect to the control socket: " + std::string(gai_strerror(status)));
-  }
-
-  int connected = -1;
-  for (addrinfo *address = result; address; address = address->ai_next) {
-    const int socketFd = socket(address->ai_family, address->ai_socktype, address->ai_protocol);
-    if (socketFd < 0) {
-      continue;
-    }
-    timeval timeout = {timeoutSeconds_, 0};
-    setsockopt(socketFd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-    setsockopt(socketFd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
-    if (connect(socketFd, address->ai_addr, address->ai_addrlen) == 0) {
-      connected = socketFd;
-      break;
-    }
-    close(socketFd);
-  }
-  freeaddrinfo(result);
-  if (connected < 0) {
-    throw HelperError("Could not connect to the control socket: " + std::string(strerror(errno)));
-  }
-  return connected;
+SocketHandle ControlClient::openSocket() const {
+  return connectTcpSocket(host_, port_, timeoutSeconds_, "the control socket");
 }
 
-void ControlClient::performHandshake(int socket) const {
+void ControlClient::performHandshake(SocketHandle socket) const {
   const std::string key = randomWebSocketKey();
   std::ostringstream request;
   request << "GET /control HTTP/1.1\r\n"
@@ -247,7 +211,7 @@ void ControlClient::performHandshake(int socket) const {
   std::string response;
   char buffer[4096] = {};
   while (response.find("\r\n\r\n") == std::string::npos) {
-    const ssize_t count = recv(socket, buffer, sizeof(buffer), 0);
+    const int count = receiveSocketBytes(socket, buffer, sizeof(buffer));
     if (count <= 0) {
       throw HelperError("Could not connect to the control socket: connection closed");
     }
@@ -259,7 +223,7 @@ void ControlClient::performHandshake(int socket) const {
   }
 }
 
-void ControlClient::sendFrame(int socket, const std::string &payload) const {
+void ControlClient::sendFrame(SocketHandle socket, const std::string &payload) const {
   std::string frame;
   frame.push_back(static_cast<char>(0x81));
   if (payload.size() < 126) {
@@ -279,7 +243,7 @@ void ControlClient::sendFrame(int socket, const std::string &payload) const {
   writeAll(socket, frame);
 }
 
-std::string ControlClient::receiveFrame(int socket) const {
+std::string ControlClient::receiveFrame(SocketHandle socket) const {
   const std::string header = readExact(socket, 2);
   const uint8_t first = static_cast<uint8_t>(header[0]);
   const uint8_t second = static_cast<uint8_t>(header[1]);

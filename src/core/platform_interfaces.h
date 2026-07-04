@@ -27,6 +27,8 @@ struct VideoFrame {
   int width = 0;
   int height = 0;
   int strideBytes = 0;
+  double previewReceiveToEmitMs = 0.0;
+  uint64_t previewSequence = 0;
 };
 
 using VideoFrameCallback = std::function<void(const VideoFrame &)>;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/control_protocol.h"
+#include "socket_utils.h"
 
 #include <cstdint>
 #include <stdexcept>
@@ -19,10 +20,10 @@ public:
   reashoot::core::ProtocolEvent send(const reashoot::core::ProtocolCommand &command) const;
 
 private:
-  int openSocket() const;
-  void performHandshake(int socket) const;
-  void sendFrame(int socket, const std::string &payload) const;
-  std::string receiveFrame(int socket) const;
+  SocketHandle openSocket() const;
+  void performHandshake(SocketHandle socket) const;
+  void sendFrame(SocketHandle socket, const std::string &payload) const;
+  std::string receiveFrame(SocketHandle socket) const;
 
   std::string host_;
   int port_ = 8787;

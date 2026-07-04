@@ -10,6 +10,8 @@ final class PreviewStreamServer {
     private final class Client {
         let id = UUID()
         let connection: NWConnection
+        var binarySendInFlight = false
+        var acceptsBroadcasts = false
 
         init(connection: NWConnection) {
             self.connection = connection
@@ -23,6 +25,8 @@ final class PreviewStreamServer {
     private let lock = NSLock()
     private var listener: NWListener?
     private var clients: [UUID: Client] = [:]
+    private var latestKeyframe: Data?
+    var clientConnectedHandler: (() -> Void)?
     var clientCount: Int {
         lock.lock()
         defer { lock.unlock() }
@@ -52,26 +56,39 @@ final class PreviewStreamServer {
         lock.lock()
         let activeClients = Array(clients.values)
         clients.removeAll()
+        latestKeyframe = nil
         lock.unlock()
         for client in activeClients {
             client.connection.cancel()
         }
     }
 
-    func broadcast(accessUnit: Data) {
+    func clearCachedKeyframe() {
         lock.lock()
-        let activeClients = Array(clients.values)
+        latestKeyframe = nil
+        lock.unlock()
+    }
+
+    func broadcast(accessUnit: Data) {
+        let isKeyframe = isKeyframeAccessUnit(accessUnit)
+        lock.lock()
+        if isKeyframe {
+            latestKeyframe = accessUnit
+        }
+        let activeClients = clients.values.filter { client in
+            if !client.acceptsBroadcasts || client.binarySendInFlight {
+                return false
+            }
+            client.binarySendInFlight = true
+            return true
+        }
         lock.unlock()
         guard !activeClients.isEmpty else {
             return
         }
         let frame = encodeWebSocketFrame(opcode: 0x2, payload: accessUnit)
         for client in activeClients {
-            client.connection.send(content: frame, completion: .contentProcessed { [weak self, weak client] error in
-                if error != nil, let client {
-                    self?.remove(client)
-                }
-            })
+            sendBinaryFrame(frame, to: client)
         }
     }
 
@@ -119,8 +136,16 @@ final class PreviewStreamServer {
                     }
                 }
                 self.add(client)
-                self.sendDescriptor(to: client)
-                self.receiveClientFrames(from: client)
+                self.clientConnectedHandler?()
+                self.sendDescriptor(to: client) { [weak self, weak client] in
+                    guard let self, let client else {
+                        return
+                    }
+                    if !self.sendCachedKeyframe(to: client) {
+                        self.enableBroadcasts(to: client)
+                    }
+                    self.receiveClientFrames(from: client)
+                }
             })
         }
     }
@@ -144,15 +169,57 @@ final class PreviewStreamServer {
         client.connection.cancel()
     }
 
-    private func sendDescriptor(to client: Client) {
+    private func sendDescriptor(to client: Client, completion: (() -> Void)? = nil) {
         guard let data = try? JSONEncoder().encode(descriptor) else {
+            completion?()
             return
         }
         client.connection.send(content: encodeWebSocketFrame(opcode: 0x1, payload: data), completion: .contentProcessed { [weak self, weak client] error in
             if error != nil, let client {
                 self?.remove(client)
+                return
+            }
+            completion?()
+        })
+    }
+
+    @discardableResult
+    private func sendCachedKeyframe(to client: Client) -> Bool {
+        lock.lock()
+        let keyframe = latestKeyframe
+        let canSend = keyframe != nil && !client.binarySendInFlight
+        if canSend {
+            client.binarySendInFlight = true
+        }
+        lock.unlock()
+        guard canSend, let keyframe else {
+            return false
+        }
+        sendBinaryFrame(encodeWebSocketFrame(opcode: 0x2, payload: keyframe), to: client, enablesBroadcasts: true)
+        return true
+    }
+
+    private func sendBinaryFrame(_ frame: Data, to client: Client, enablesBroadcasts: Bool = false) {
+        client.connection.send(content: frame, completion: .contentProcessed { [weak self, weak client] error in
+            guard let self, let client else {
+                return
+            }
+            self.lock.lock()
+            client.binarySendInFlight = false
+            if enablesBroadcasts {
+                client.acceptsBroadcasts = true
+            }
+            self.lock.unlock()
+            if error != nil {
+                self.remove(client)
             }
         })
+    }
+
+    private func enableBroadcasts(to client: Client) {
+        lock.lock()
+        client.acceptsBroadcasts = true
+        lock.unlock()
     }
 
     private func receiveClientFrames(from client: Client) {
@@ -263,6 +330,39 @@ final class PreviewStreamServer {
         }
         frame.append(payload)
         return frame
+    }
+
+    private func isKeyframeAccessUnit(_ accessUnit: Data) -> Bool {
+        accessUnit.withUnsafeBytes { rawBuffer in
+            guard let base = rawBuffer.bindMemory(to: UInt8.self).baseAddress else {
+                return false
+            }
+            let count = rawBuffer.count
+            var offset = 0
+            while offset < count {
+                let codeLength = h264StartCodeLength(base, count: count, offset: offset)
+                if codeLength == 0 {
+                    offset += 1
+                    continue
+                }
+                let naluStart = offset + codeLength
+                if naluStart < count, (base[naluStart] & 0x1f) == 5 {
+                    return true
+                }
+                offset = naluStart
+            }
+            return false
+        }
+    }
+
+    private func h264StartCodeLength(_ bytes: UnsafePointer<UInt8>, count: Int, offset: Int) -> Int {
+        if offset + 3 <= count, bytes[offset] == 0, bytes[offset + 1] == 0, bytes[offset + 2] == 1 {
+            return 3
+        }
+        if offset + 4 <= count, bytes[offset] == 0, bytes[offset + 1] == 0, bytes[offset + 2] == 0, bytes[offset + 3] == 1 {
+            return 4
+        }
+        return 0
     }
 }
 

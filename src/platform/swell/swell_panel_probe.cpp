@@ -213,19 +213,22 @@ void paintPreview(HWND hwnd) {
 
   RECT client = {};
   if (getClientRect(hwnd, &client)) {
+    fillDialogBackground(hdc, &client, 0);
     const int margin = 12;
     const int controlsHeight = 150;
-    const int width = max(1, client.right - client.left - margin * 2);
-    const int height = max(1, client.bottom - client.top - controlsHeight - margin);
+    const int clientWidth = static_cast<int>(client.right - client.left);
+    const int clientHeight = static_cast<int>(client.bottom - client.top);
+    const int width = (std::max)(1, clientWidth - margin * 2);
+    const int height = (std::max)(1, clientHeight - controlsHeight - margin);
     if (!g_previewFrame.empty()) {
       int targetWidth = width;
       int targetHeight = height;
       const double sourceAspect = g_previewWidth > 0 && g_previewHeight > 0 ? static_cast<double>(g_previewWidth) / static_cast<double>(g_previewHeight) : 16.0 / 9.0;
       const double availableAspect = static_cast<double>(width) / static_cast<double>(height);
       if (availableAspect > sourceAspect) {
-        targetWidth = max(1, static_cast<int>(targetHeight * sourceAspect));
+        targetWidth = (std::max)(1, static_cast<int>(targetHeight * sourceAspect));
       } else {
-        targetHeight = max(1, static_cast<int>(targetWidth / sourceAspect));
+        targetHeight = (std::max)(1, static_cast<int>(targetWidth / sourceAspect));
       }
       const int targetX = margin + (width - targetWidth) / 2;
       const int targetY = controlsHeight + (height - targetHeight) / 2;
@@ -437,6 +440,13 @@ static LRESULT swellProbeWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
   (void)lParam;
   if (msg == WM_PAINT) {
     paintPreview(hwnd);
+    return 0;
+  }
+  if (msg == WM_CLOSE) {
+    showWindow(hwnd, SW_HIDE);
+    if (g_callbacks.closed) {
+      g_callbacks.closed(g_callbacks.context);
+    }
     return 0;
   }
   if (msg == WM_DESTROY) {

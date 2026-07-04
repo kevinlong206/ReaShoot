@@ -27,6 +27,9 @@ void testHelperParsing() {
   FieldMap fields = parseFields("recording\tid=abc\tfilename=take.mov\tbyteCount=42", '\t');
   assert(fields["id"] == "abc");
   assert(fields["filename"] == "take.mov");
+  FieldMap windowsFields = parseFields("paired token=abc123\r", ' ');
+  assert(windowsFields["token"] == "abc123");
+  assert(parseDownloadedPath("downloaded C:\\tmp\\take.mov\r\n") == "C:\\tmp\\take.mov");
   assert(parseDownloadedPath("progress bytes=1\ndownloaded /tmp/take.mov\n") == "/tmp/take.mov");
   std::vector<FieldMap> recordings = parseRecordings("recording\tid=one\nrecording\tid=two\n");
   assert(recordings.size() == 2);

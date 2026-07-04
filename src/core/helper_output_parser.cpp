@@ -1,8 +1,22 @@
 #include "helper_output_parser.h"
 
+#include <cctype>
 #include <sstream>
 
 namespace reashoot::core {
+namespace {
+
+std::string trimAsciiWhitespace(std::string value) {
+  while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front()))) {
+    value.erase(value.begin());
+  }
+  while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back()))) {
+    value.pop_back();
+  }
+  return value;
+}
+
+} // namespace
 
 FieldMap parseFields(const std::string &line, char separator) {
   FieldMap fields;
@@ -13,7 +27,11 @@ FieldMap parseFields(const std::string &line, char separator) {
     if (equals == std::string::npos || equals == 0) {
       continue;
     }
-    fields[part.substr(0, equals)] = part.substr(equals + 1);
+    std::string key = trimAsciiWhitespace(part.substr(0, equals));
+    if (key.empty()) {
+      continue;
+    }
+    fields[key] = trimAsciiWhitespace(part.substr(equals + 1));
   }
   return fields;
 }
@@ -50,7 +68,7 @@ std::string parseDownloadedPath(const std::string &output) {
   while (std::getline(stream, line)) {
     constexpr const char *prefix = "downloaded ";
     if (line.rfind(prefix, 0) == 0) {
-      return line.substr(std::char_traits<char>::length(prefix));
+      return trimAsciiWhitespace(line.substr(std::char_traits<char>::length(prefix)));
     }
   }
   return {};
