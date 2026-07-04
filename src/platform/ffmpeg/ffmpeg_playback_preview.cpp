@@ -145,8 +145,16 @@ core::VideoFrame rotateBGRAFrame(const core::VideoFrame &source, int rotationDeg
 
 class FFmpegPlaybackPreview final : public core::PlaybackPreview {
 public:
-  FFmpegPlaybackPreview(core::VideoFrameCallback frameHandler, FFmpegPlaybackApi *api, PlaybackOptions options, PlaybackLogCallback log)
-      : frameHandler_(std::move(frameHandler)), api_(api), options_(std::move(options)), log_(std::move(log)) {
+  FFmpegPlaybackPreview(core::VideoFrameCallback frameHandler,
+                        FFmpegPlaybackApi *api,
+                        PlaybackOptions options,
+                        core::PlaybackDecoderStatusCallback decoderStatusHandler,
+                        PlaybackLogCallback log)
+      : frameHandler_(std::move(frameHandler)),
+        api_(api),
+        options_(std::move(options)),
+        decoderStatusHandler_(std::move(decoderStatusHandler)),
+        log_(std::move(log)) {
     if (api_ && api_->valid()) {
       worker_ = std::thread([this]() { workerLoop(); });
       ready_ = true;
@@ -184,6 +192,7 @@ public:
     std::lock_guard<std::mutex> lock(mutex_);
     hidden_ = true;
     hasPendingRequest_ = false;
+    lastDecoderStatusKey_.clear();
   }
 
 private:
@@ -199,6 +208,38 @@ private:
     if (log_) {
       log_(message);
     }
+  }
+
+  void notifyDecoderStatus(bool hardwareAccelerated, std::string system) {
+    const std::string key = (hardwareAccelerated ? "hw:" : "sw:") + system;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (key == lastDecoderStatusKey_) {
+        return;
+      }
+      lastDecoderStatusKey_ = key;
+    }
+    if (decoderStatusHandler_) {
+      core::PlaybackDecoderStatus status;
+      status.hardwareAccelerated = hardwareAccelerated;
+      status.system = std::move(system);
+      decoderStatusHandler_(status);
+    }
+  }
+
+  std::string hardwareStatusName() const {
+    if (!options_.hardwareDisplayName.empty()) {
+      return options_.hardwareDisplayName;
+    }
+    if (!options_.hardwareDeviceName.empty()) {
+      return options_.hardwareDeviceName;
+    }
+    return "FFmpeg hardware";
+  }
+
+  void notifyCurrentDecoderStatus() {
+    notifyDecoderStatus(hardwareDeviceContext_ != nullptr,
+                        hardwareDeviceContext_ ? hardwareStatusName() : "FFmpeg software");
   }
 
   void workerLoop() {
@@ -266,10 +307,12 @@ private:
   bool configureHardwareDecoder(const AVCodec *codec) {
     hardwarePixelFormat_ = AV_PIX_FMT_NONE;
     if (!api_ || options_.hardwareDeviceType == AV_HWDEVICE_TYPE_NONE) {
+      notifyDecoderStatus(false, "FFmpeg software");
       return false;
     }
     if (!api_->av_hwdevice_ctx_create || !api_->avcodec_get_hw_config || !api_->av_buffer_ref) {
       log("ffmpeg playback hardware unavailable: required API missing");
+      notifyDecoderStatus(false, "FFmpeg software");
       return false;
     }
     const AVCodecHWConfig *selectedConfig = nullptr;
@@ -286,17 +329,20 @@ private:
     }
     if (!selectedConfig) {
       log("ffmpeg playback hardware unavailable: decoder does not support requested device");
+      notifyDecoderStatus(false, "FFmpeg software");
       return false;
     }
     AVBufferRef *deviceContext = nullptr;
     const char *deviceName = options_.hardwareDeviceName.empty() ? nullptr : options_.hardwareDeviceName.c_str();
     if (api_->av_hwdevice_ctx_create(&deviceContext, options_.hardwareDeviceType, deviceName, nullptr, 0) < 0 || !deviceContext) {
       log("ffmpeg playback hardware unavailable: device creation failed");
+      notifyDecoderStatus(false, "FFmpeg software");
       return false;
     }
     hardwareDeviceContext_ = deviceContext;
     hardwarePixelFormat_ = selectedConfig->pix_fmt;
     log("ffmpeg playback hardware decoder enabled");
+    notifyDecoderStatus(true, hardwareStatusName());
     return true;
   }
 
@@ -362,6 +408,7 @@ private:
         log("ffmpeg playback hardware unavailable: device context ref failed");
         api_->av_buffer_unref(&hardwareDeviceContext_);
         hardwarePixelFormat_ = AV_PIX_FMT_NONE;
+        notifyDecoderStatus(false, "FFmpeg software");
       }
     }
     codecContext_->thread_count = 0;
@@ -395,6 +442,7 @@ private:
     const double sourceTime = (std::max)(0.0, request.projectPosition - request.itemStart + request.sourceOffset);
     if (!switchedSource && lastRenderedSourceTime_ >= 0.0 &&
         std::fabs(sourceTime - lastRenderedSourceTime_) < (1.0 / 30.0)) {
+      notifyCurrentDecoderStatus();
       return;
     }
     activeRequestSerial_ = request.serial;
@@ -493,6 +541,9 @@ private:
       }
       sourceFrame = softwareFrame_;
       ++hardwareFramesTransferred_;
+      notifyDecoderStatus(true, hardwareStatusName());
+    } else {
+      notifyDecoderStatus(false, "FFmpeg software");
     }
     const int sourceWidth = sourceFrame->width;
     const int sourceHeight = sourceFrame->height;
@@ -549,6 +600,7 @@ private:
   core::VideoFrameCallback frameHandler_;
   FFmpegPlaybackApi *api_ = nullptr;
   PlaybackOptions options_;
+  core::PlaybackDecoderStatusCallback decoderStatusHandler_;
   PlaybackLogCallback log_;
   AVFormatContext *formatContext_ = nullptr;
   AVCodecContext *codecContext_ = nullptr;
@@ -564,6 +616,7 @@ private:
   double lastDecoderSourceTime_ = -1.0;
   bool soughtSinceOpen_ = false;
   int rotationDegrees_ = 0;
+  std::string lastDecoderStatusKey_;
   std::chrono::steady_clock::time_point lastLog_;
   uint64_t decodedFrames_ = 0;
   uint64_t emittedFrames_ = 0;
@@ -591,8 +644,13 @@ bool FFmpegPlaybackApi::valid() const {
 std::unique_ptr<core::PlaybackPreview> createPlaybackPreview(core::VideoFrameCallback frameHandler,
                                                              FFmpegPlaybackApi *api,
                                                              PlaybackOptions options,
+                                                             core::PlaybackDecoderStatusCallback decoderStatusHandler,
                                                              PlaybackLogCallback log) {
-  return std::make_unique<FFmpegPlaybackPreview>(std::move(frameHandler), api, std::move(options), std::move(log));
+  return std::make_unique<FFmpegPlaybackPreview>(std::move(frameHandler),
+                                                 api,
+                                                 std::move(options),
+                                                 std::move(decoderStatusHandler),
+                                                 std::move(log));
 }
 
 } // namespace reashoot::platform::ffmpeg

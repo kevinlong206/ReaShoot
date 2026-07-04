@@ -158,6 +158,7 @@ bool g_transportPlaybackActive = false;
 bool g_stoppingRemotePreview = false;
 bool g_restartPreviewAfterStop = false;
 std::chrono::steady_clock::time_point g_lastPlaybackVideoHit;
+std::string g_playbackDecoderStatus;
 
 struct PlaybackVideo {
   bool found = false;
@@ -1245,18 +1246,29 @@ void ensurePlaybackPreviewRenderer() {
   if (g_playbackPreviewRenderer) {
     return;
   }
-  g_playbackPreviewRenderer = reashoot::platform::win32::createPlaybackPreview([](const reashoot::core::VideoFrame &frame) {
-    postToMain([frame]() {
-      if (frame.pixels.empty() || g_previewMode != PreviewMode::Playback) {
-        return;
-      }
-      reashoot::platform::swell::setSwellPanelPreviewFrame(g_panel,
-                                                           frame.pixels.data(),
-                                                           frame.width,
-                                                           frame.height,
-                                                           frame.strideBytes);
-    });
-  });
+  g_playbackPreviewRenderer = reashoot::platform::win32::createPlaybackPreview(
+      [](const reashoot::core::VideoFrame &frame) {
+        postToMain([frame]() {
+          if (frame.pixels.empty() || g_previewMode != PreviewMode::Playback) {
+            return;
+          }
+          reashoot::platform::swell::setSwellPanelPreviewFrame(g_panel,
+                                                               frame.pixels.data(),
+                                                               frame.width,
+                                                               frame.height,
+                                                               frame.strideBytes);
+        });
+      },
+      [](const reashoot::core::PlaybackDecoderStatus &status) {
+        const std::string system = status.system.empty() ? (status.hardwareAccelerated ? "hardware" : "FFmpeg software") : status.system;
+        const std::string statusText = std::string(status.hardwareAccelerated ? "HW decode: " : "Software decode: ") + system;
+        postToMain([statusText]() {
+          g_playbackDecoderStatus = statusText;
+          if (showingPlayback()) {
+            setPanelStatus("Playback: " + g_playbackDecoderStatus);
+          }
+        });
+      });
 }
 
 void updatePlaybackWithVideo(const PlaybackVideo &video, double projectPosition) {
@@ -1277,7 +1289,7 @@ void updatePlaybackWithVideo(const PlaybackVideo &video, double projectPosition)
   if (g_playbackPreviewRenderer) {
     const double sourceOffset = video.sourceOffset + ((projectPosition - video.itemStart) * (video.playRate - 1.0));
     g_playbackPreviewRenderer->showMedia(video.path, video.itemStart, sourceOffset, projectPosition);
-    setPanelStatus("Playback");
+    setPanelStatus(g_playbackDecoderStatus.empty() ? "Playback: decoder starting" : "Playback: " + g_playbackDecoderStatus);
   }
 }
 
@@ -1287,6 +1299,7 @@ void stopPlaybackAndShowLive() {
   }
   g_transportPlaybackActive = false;
   g_lastPlaybackVideoHit = {};
+  g_playbackDecoderStatus.clear();
   if (g_playbackPreviewRenderer) {
     g_playbackPreviewRenderer->hide();
   }

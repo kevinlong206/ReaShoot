@@ -49,10 +49,16 @@ void playbackDebugLog(const std::string &message) {
 
 } // namespace
 
-std::unique_ptr<core::PlaybackPreview> createPlaybackPreview(core::VideoFrameCallback frameHandler) {
+std::unique_ptr<core::PlaybackPreview> createPlaybackPreview(core::VideoFrameCallback frameHandler,
+                                                             core::PlaybackDecoderStatusCallback decoderStatusHandler) {
   ffmpeg::PlaybackOptions options;
   options.hardwareDeviceType = AV_HWDEVICE_TYPE_VIDEOTOOLBOX;
-  return ffmpeg::createPlaybackPreview(std::move(frameHandler), macFFmpegPlaybackApi(), std::move(options), playbackDebugLog);
+  options.hardwareDisplayName = "VideoToolbox";
+  return ffmpeg::createPlaybackPreview(std::move(frameHandler),
+                                       macFFmpegPlaybackApi(),
+                                       std::move(options),
+                                       std::move(decoderStatusHandler),
+                                       playbackDebugLog);
 }
 
 } // namespace reashoot::platform::mac

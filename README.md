@@ -24,7 +24,7 @@ ReaShoot is a native REAPER extension for controlling a companion iPhone camera 
 - Shows the preview in a floating window by default; the `Float/Dock Preview` action can still toggle docking and remembers that choice.
 - Shows recorded video playback in the same preview panel when REAPER plays over an item on the `ReaShoot` track.
 - Adds a `Float/Dock Preview` action because REAPER's normal docker undock controls do not work reliably for this custom native preview view.
-- Uses shared FFmpeg playback preview code for recorded-file preview frames on macOS and Windows, while playback audio comes only from REAPER. On macOS, the FFmpeg path requests VideoToolbox hardware decoding.
+- Uses shared FFmpeg playback preview code for recorded-file preview frames on macOS and Windows, while playback audio comes only from REAPER. The preview status label reports whether playback is using hardware or software decode and the decode system; on macOS, the FFmpeg path requests VideoToolbox hardware decoding.
 - Keeps FFmpeg playback smooth by avoiding per-tick re-seek/flush churn and by limiting preview frame size.
 - Inserts the finalized `.mov` onto a `ReaShoot` track at the record-start timeline position.
 - After insertion, compares the movie's embedded camera audio against the first non-video track item that overlaps the video item and shifts the video item to the strongest correlation match on that reference.

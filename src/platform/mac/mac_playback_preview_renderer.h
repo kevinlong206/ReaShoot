@@ -6,7 +6,7 @@
 
 namespace reashoot::platform::mac {
 
-std::unique_ptr<core::PlaybackPreview> createPlaybackPreview(core::VideoFrameCallback frameHandler);
+std::unique_ptr<core::PlaybackPreview> createPlaybackPreview(core::VideoFrameCallback frameHandler,
+                                                             core::PlaybackDecoderStatusCallback decoderStatusHandler = {});
 
 } // namespace reashoot::platform::mac
-

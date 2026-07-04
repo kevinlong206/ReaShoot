@@ -115,10 +115,12 @@ reashoot::platform::ffmpeg::FFmpegPlaybackApi *ffmpegPlaybackApi() {
 
 } // namespace
 
-std::unique_ptr<core::PlaybackPreview> createPlaybackPreview(core::VideoFrameCallback frameHandler) {
+std::unique_ptr<core::PlaybackPreview> createPlaybackPreview(core::VideoFrameCallback frameHandler,
+                                                             core::PlaybackDecoderStatusCallback decoderStatusHandler) {
   return reashoot::platform::ffmpeg::createPlaybackPreview(std::move(frameHandler),
                                                            ffmpegPlaybackApi(),
                                                            reashoot::platform::ffmpeg::PlaybackOptions{},
+                                                           std::move(decoderStatusHandler),
                                                            playbackDebugLog);
 }
 

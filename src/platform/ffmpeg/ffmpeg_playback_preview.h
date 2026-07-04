@@ -82,11 +82,13 @@ using PlaybackLogCallback = std::function<void(const std::string &)>;
 struct PlaybackOptions {
   AVHWDeviceType hardwareDeviceType = AV_HWDEVICE_TYPE_NONE;
   std::string hardwareDeviceName;
+  std::string hardwareDisplayName;
 };
 
 std::unique_ptr<core::PlaybackPreview> createPlaybackPreview(core::VideoFrameCallback frameHandler,
                                                              FFmpegPlaybackApi *api,
                                                              PlaybackOptions options,
+                                                             core::PlaybackDecoderStatusCallback decoderStatusHandler,
                                                              PlaybackLogCallback log);
 
 } // namespace reashoot::platform::ffmpeg

@@ -6,6 +6,7 @@
 
 namespace reashoot::platform::win32 {
 
-std::unique_ptr<core::PlaybackPreview> createPlaybackPreview(core::VideoFrameCallback frameHandler);
+std::unique_ptr<core::PlaybackPreview> createPlaybackPreview(core::VideoFrameCallback frameHandler,
+                                                             core::PlaybackDecoderStatusCallback decoderStatusHandler = {});
 
 } // namespace reashoot::platform::win32

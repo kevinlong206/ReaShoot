@@ -89,7 +89,7 @@ rm -rf iphone/Package.resolved iphone/.build helper/.build
 - The iPhone app UI has a `Preview` row showing idle/streaming/failure state.
 - The iPhone capture profile includes resolution, FPS, orientation, aspect, lens, zoom, and look. The look picker keeps custom looks plus a curated raw Core Image subset, not the full Core Image catalog. Lens availability is hardware-dependent; zoom is clamped by AVFoundation on iPhone and is not guaranteed optical for every value.
 - The iPhone app records a single `.mov` with video and camera audio embedded. The extension inserts only one media item on the `ReaShoot` track.
-- Recorded-file playback preview uses shared FFmpeg code on macOS and Windows to decode preview frames for the SWELL panel. macOS requests FFmpeg VideoToolbox hardware decoding; Windows currently passes no hardware device but should use the same shared hardware-device option when D3D11VA/DXVA is added. Audio is heard only through REAPER.
+- Recorded-file playback preview uses shared FFmpeg code on macOS and Windows to decode preview frames for the SWELL panel. The preview status label shows whether playback is using hardware or software decode and names the decode system. macOS requests FFmpeg VideoToolbox hardware decoding; Windows currently passes no hardware device but should use the same shared hardware-device option when D3D11VA/DXVA is added. Audio is heard only through REAPER.
 - After inserting the movie item, the extension tries to auto-align it to the first non-video track item that overlaps the video item using peak-envelope correlation.
 
 ## Design constraints and preferences

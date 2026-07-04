@@ -70,6 +70,13 @@ public:
   virtual void hide() = 0;
 };
 
+struct PlaybackDecoderStatus {
+  bool hardwareAccelerated = false;
+  std::string system;
+};
+
+using PlaybackDecoderStatusCallback = std::function<void(const PlaybackDecoderStatus &status)>;
+
 enum class StoppedRecordingAction {
   Download,
   Delete,

@@ -1225,6 +1225,7 @@ void setVideoEnabled(bool enabled);
 @property(nonatomic, assign) BOOL floatingPreview;
 @property(nonatomic, assign) BOOL recordingVisualState;
 @property(nonatomic, assign) BOOL showingPlayback;
+@property(nonatomic, copy) NSString *playbackDecoderStatus;
 @property(nonatomic, assign) BOOL remoteRecording;
 - (void)ensureDockView;
 - (void)ensurePreviewAdapters;
@@ -1304,6 +1305,21 @@ void setVideoEnabled(bool enabled);
                                                              frame.height,
                                                              frame.strideBytes);
       }
+    }, [weakSelf](const reashoot::core::PlaybackDecoderStatus &status) {
+      ReaShootRecorder *strongSelf = weakSelf;
+      if (!strongSelf) {
+        return;
+      }
+      const std::string system = status.system.empty() ? (status.hardwareAccelerated ? "hardware" : "FFmpeg software") : status.system;
+      NSString *statusText = [NSString stringWithFormat:@"%@ decode: %s",
+                                                        status.hardwareAccelerated ? @"HW" : @"Software",
+                                                        system.c_str()];
+      dispatch_async(dispatch_get_main_queue(), ^{
+        strongSelf.playbackDecoderStatus = statusText;
+        if (strongSelf.showingPlayback) {
+          [strongSelf setStatus:[NSString stringWithFormat:@"Playback: %@", statusText]];
+        }
+      });
     });
   }
   if (!_previewStreamClient) {
@@ -2319,6 +2335,7 @@ void setVideoEnabled(bool enabled);
 
 - (void)showLivePreview {
   self.showingPlayback = NO;
+  self.playbackDecoderStatus = nil;
   if (_playbackPreviewRenderer) {
     _playbackPreviewRenderer->hide();
   }
@@ -2334,10 +2351,12 @@ void setVideoEnabled(bool enabled);
   self.showingPlayback = YES;
   if (_playbackPreviewRenderer) {
     if (enteringPlayback) {
+      self.playbackDecoderStatus = nil;
       [self stopRemotePreview];
     }
     _playbackPreviewRenderer->showMedia(path, itemStart, sourceOffset, projectPosition);
-    [self setStatus:@"Playback"];
+    NSString *decoderStatus = self.playbackDecoderStatus.length > 0 ? self.playbackDecoderStatus : @"decoder starting";
+    [self setStatus:[NSString stringWithFormat:@"Playback: %@", decoderStatus]];
   } else {
     (void)path;
     (void)itemStart;
@@ -2357,6 +2376,7 @@ void setVideoEnabled(bool enabled);
 
 - (void)stopAllPreviewActivity {
   self.showingPlayback = NO;
+  self.playbackDecoderStatus = nil;
   if (_playbackPreviewRenderer) {
     _playbackPreviewRenderer->hide();
   }
