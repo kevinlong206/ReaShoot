@@ -211,7 +211,6 @@ public final class ReaShootService: ObservableObject {
     public func deletePendingRecording(id: String) {
         do {
             try store.deleteRecording(id: id)
-            status = "Deleted pending video"
             lastError = nil
         } catch {
             lastError = error.localizedDescription
