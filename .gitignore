@@ -2,6 +2,7 @@ build/
 build-cmake/
 helper/.build/
 iphone/.build/
+iphone/Apps/ReaShoot/GeneratedBuildInfo.swift
 iphone/Package.resolved
 iphone/test-downloads/
 *.dSYM/

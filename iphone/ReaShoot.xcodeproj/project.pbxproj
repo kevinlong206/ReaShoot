@@ -21,6 +21,7 @@
 		A0010000000000000000000E /* Apps/ReaShoot/Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A0020000000000000000000F /* Apps/ReaShoot/Assets.xcassets */; };
 		A0010000000000000000000F /* Sources/ReaShootKit/PreviewH264Encoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200000000000000000010 /* Sources/ReaShootKit/PreviewH264Encoder.swift */; };
 		A00100000000000000000010 /* Sources/ReaShootKit/PreviewStreamServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200000000000000000011 /* Sources/ReaShootKit/PreviewStreamServer.swift */; };
+		A00100000000000000000011 /* Apps/ReaShoot/GeneratedBuildInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200000000000000000012 /* Apps/ReaShoot/GeneratedBuildInfo.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -40,6 +41,7 @@
 		A0020000000000000000000F /* Apps/ReaShoot/Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Apps/ReaShoot/Assets.xcassets; sourceTree = "<group>"; };
 		A00200000000000000000010 /* Sources/ReaShootKit/PreviewH264Encoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/ReaShootKit/PreviewH264Encoder.swift; sourceTree = "<group>"; };
 		A00200000000000000000011 /* Sources/ReaShootKit/PreviewStreamServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/ReaShootKit/PreviewStreamServer.swift; sourceTree = "<group>"; };
+		A00200000000000000000012 /* Apps/ReaShoot/GeneratedBuildInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Apps/ReaShoot/GeneratedBuildInfo.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -76,6 +78,7 @@
 			children = (
 				A00200000000000000000001 /* Apps/ReaShoot/ReaShootApp.swift */,
 				A00200000000000000000002 /* Apps/ReaShoot/ContentView.swift */,
+				A00200000000000000000012 /* Apps/ReaShoot/GeneratedBuildInfo.swift */,
 				A0020000000000000000000C /* Apps/ReaShoot/Info.plist */,
 				A0020000000000000000000F /* Apps/ReaShoot/Assets.xcassets */,
 			);
@@ -114,6 +117,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = A00900000000000000000002 /* Build configuration list for PBXNativeTarget "ReaShoot" */;
 			buildPhases = (
+				A00500000000000000000004 /* Generate Build Info */,
 				A00500000000000000000001 /* Sources */,
 				A00500000000000000000002 /* Frameworks */,
 				A00500000000000000000003 /* Resources */,
@@ -176,6 +180,29 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		A00500000000000000000004 /* Generate Build Info */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Generate Build Info";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(SRCROOT)/Apps/ReaShoot/GeneratedBuildInfo.swift",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -eu\nOUTPUT=\"$SRCROOT/Apps/ReaShoot/GeneratedBuildInfo.swift\"\nREPO_ROOT=\"$SRCROOT/..\"\nCOMMIT=\"$(git -C \"$REPO_ROOT\" rev-parse --short HEAD 2>/dev/null || echo unknown)\"\nTIMESTAMP=\"$(TZ=America/Los_Angeles date '+%Y-%m-%d %H:%M:%S %Z')\"\ncat > \"$OUTPUT\" <<EOF\n#if os(iOS)\nenum ReaShootBuildInfo {\n    static let commit = \"$COMMIT\"\n    static let timestampPacific = \"$TIMESTAMP\"\n}\n#endif\nEOF\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		A00500000000000000000001 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -183,6 +210,7 @@
 			files = (
 				A00100000000000000000001 /* Apps/ReaShoot/ReaShootApp.swift in Sources */,
 				A00100000000000000000002 /* Apps/ReaShoot/ContentView.swift in Sources */,
+				A00100000000000000000011 /* Apps/ReaShoot/GeneratedBuildInfo.swift in Sources */,
 				A00100000000000000000003 /* Sources/ReaShootCore/Checksum.swift in Sources */,
 				A00100000000000000000004 /* Sources/ReaShootCore/ControlProtocol.swift in Sources */,
 				A00100000000000000000005 /* Sources/ReaShootCore/FileState.swift in Sources */,

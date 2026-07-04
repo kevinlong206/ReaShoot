@@ -56,10 +56,19 @@ struct ContentView: View {
                                 }
                             }
                         }
+
                     }
                 }
             }
             .navigationTitle("ReaShoot")
+            .safeAreaInset(edge: .bottom) {
+                Text(buildInfoText)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+                    .background(.bar)
+            }
             .confirmationDialog(
                 "Delete pending video?",
                 isPresented: isShowingDeleteConfirmation,
@@ -99,6 +108,10 @@ struct ContentView: View {
             return "Encoding"
         }
         return service.capture.isRecording ? "Yes" : "No"
+    }
+
+    private var buildInfoText: String {
+        "Build \(ReaShootBuildInfo.commit) - \(ReaShootBuildInfo.timestampPacific)"
     }
 }
 #endif

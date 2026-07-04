@@ -200,6 +200,9 @@ public final class ReaShootService: ObservableObject {
     }
 
     public func resetPairing() {
+        stopPreviewStream()
+        previewStreamServer?.disconnectClients()
+        previewStatus = "Idle"
         pairingStore.reset()
         updateBonjourTXTRecord()
         status = "Pairing reset"

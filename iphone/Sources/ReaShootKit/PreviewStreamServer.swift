@@ -60,6 +60,10 @@ final class PreviewStreamServer {
         DebugLog.write("preview stream server stopped")
         listener?.cancel()
         listener = nil
+        disconnectClients()
+    }
+
+    func disconnectClients() {
         lock.lock()
         let activeClients = Array(clients.values)
         clients.removeAll()
