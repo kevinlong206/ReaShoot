@@ -338,8 +338,8 @@ public final class ReaShootService: ObservableObject {
         }
         try encoder.start()
         previewEncoder = encoder
-        capture.setPreviewSampleBufferConsumer { [weak encoder] pixelBuffer, timestamp, captureUnixMicros in
-            encoder?.encode(pixelBuffer: pixelBuffer, timestamp: timestamp, captureUnixMicros: captureUnixMicros)
+        capture.setPreviewSampleBufferConsumer { [weak encoder] pixelBuffer, timestamp, captureUnixMicros, orientation in
+            encoder?.encode(pixelBuffer: pixelBuffer, timestamp: timestamp, captureUnixMicros: captureUnixMicros, orientation: orientation)
         }
         return descriptor
     }
