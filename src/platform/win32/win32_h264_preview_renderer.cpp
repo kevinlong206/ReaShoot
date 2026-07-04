@@ -91,6 +91,7 @@ struct PreviewDiagnosticMetadata {
   bool valid = false;
   uint64_t sequence = 0;
   uint64_t sourceUnixMicros = 0;
+  uint32_t nalTypes = 0;
 };
 
 class BitReader {
@@ -218,6 +219,9 @@ uint64_t readBigEndianU64(const uint8_t *bytes) {
 PreviewDiagnosticMetadata parseDiagnosticSEI(const uint8_t *bytes, size_t length) {
   PreviewDiagnosticMetadata metadata;
   for (const auto &unit : core::splitAnnexB(bytes, length)) {
+    if (unit.type < 32) {
+      metadata.nalTypes |= (1u << unit.type);
+    }
     if (unit.type != 6 || unit.size < 2) {
       continue;
     }
@@ -908,6 +912,7 @@ private:
     frame.pixels.resize(static_cast<size_t>(frame.strideBytes) * static_cast<size_t>(frame.height));
     frame.previewReceiveToEmitMs = receiveToEmitMillis();
     frame.previewSourceToReceiveMs = sourceToReceiveMillis();
+    frame.previewAccessUnitNalTypes = activeDiagnostic_.nalTypes;
     frame.previewSequence = activeDiagnostic_.valid ? activeDiagnostic_.sequence : ++emittedFrameSequence_;
     for (int y = 0; y < outputHeight; ++y) {
       const uint8_t *sourceRow = pitch < 0
@@ -948,6 +953,7 @@ private:
     frame.pixels.resize(static_cast<size_t>(frame.strideBytes) * static_cast<size_t>(frame.height));
     frame.previewReceiveToEmitMs = receiveToEmitMillis();
     frame.previewSourceToReceiveMs = sourceToReceiveMillis();
+    frame.previewAccessUnitNalTypes = activeDiagnostic_.nalTypes;
     frame.previewSequence = activeDiagnostic_.valid ? activeDiagnostic_.sequence : ++emittedFrameSequence_;
     const uint8_t *uvPlane = data + yPlaneBytes;
     for (int y = 0; y < outputHeight; ++y) {

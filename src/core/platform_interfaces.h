@@ -29,6 +29,7 @@ struct VideoFrame {
   int strideBytes = 0;
   double previewReceiveToEmitMs = 0.0;
   double previewSourceToReceiveMs = 0.0;
+  uint32_t previewAccessUnitNalTypes = 0;
   uint64_t previewSequence = 0;
 };
 

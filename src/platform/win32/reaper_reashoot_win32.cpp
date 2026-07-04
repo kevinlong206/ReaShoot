@@ -539,6 +539,7 @@ void startPreviewStreamWithFields(const reashoot::core::FieldMap &fields) {
                    << " recv_to_emit_ms=" << frame.previewReceiveToEmitMs
                    << " emit_to_ui_ms=" << emitToUiMs
                    << " total_known_ms=" << (frame.previewSourceToReceiveMs + frame.previewReceiveToEmitMs + emitToUiMs)
+                   << " nal_mask=0x" << std::hex << frame.previewAccessUnitNalTypes << std::dec
                    << " size=" << frame.width << "x" << frame.height;
             debugLog(timing.str());
           }

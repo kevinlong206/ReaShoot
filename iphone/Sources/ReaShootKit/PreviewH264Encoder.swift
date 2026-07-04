@@ -85,7 +85,7 @@ final class PreviewH264Encoder {
         }
     }
 
-    func encode(pixelBuffer: CVPixelBuffer, timestamp: CMTime) {
+    func encode(pixelBuffer: CVPixelBuffer, timestamp: CMTime, captureUnixMicros: UInt64) {
         queue.async { [weak self] in
             guard let self, self.running else {
                 return
@@ -110,19 +110,24 @@ final class PreviewH264Encoder {
                     kVTEncodeFrameOptionKey_ForceKeyFrame as String: true
                 ] as CFDictionary
             }
-            VTCompressionSessionEncodeFrame(
+            let frameContext = PreviewFrameContext(captureUnixMicros: captureUnixMicros)
+            let sourceFrameRefcon = Unmanaged.passRetained(frameContext).toOpaque()
+            let encodeStatus = VTCompressionSessionEncodeFrame(
                 session,
                 imageBuffer: pixelBuffer,
                 presentationTimeStamp: presentationTime,
                 duration: CMTime(value: 1, timescale: self.fps),
                 frameProperties: frameProperties,
-                sourceFrameRefcon: nil,
+                sourceFrameRefcon: sourceFrameRefcon,
                 infoFlagsOut: nil
             )
+            if encodeStatus != noErr {
+                Unmanaged<PreviewFrameContext>.fromOpaque(sourceFrameRefcon).release()
+            }
         }
     }
 
-    fileprivate func handleEncodedSampleBuffer(_ sampleBuffer: CMSampleBuffer) {
+    fileprivate func handleEncodedSampleBuffer(_ sampleBuffer: CMSampleBuffer, context: PreviewFrameContext?) {
         guard CMSampleBufferDataIsReady(sampleBuffer),
               let dataBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else {
             return
@@ -136,7 +141,7 @@ final class PreviewH264Encoder {
             }
         }
         frameSequence += 1
-        appendDiagnosticSEI(to: &accessUnit, sequence: frameSequence)
+        appendDiagnosticSEI(to: &accessUnit, sequence: frameSequence, sourceUnixMicros: context?.captureUnixMicros ?? UInt64(Date().timeIntervalSince1970 * 1_000_000.0))
 
         var totalLength = 0
         var dataPointer: UnsafeMutablePointer<Int8>?
@@ -173,10 +178,10 @@ final class PreviewH264Encoder {
         Data([0, 0, 0, 1])
     }
 
-    private func appendDiagnosticSEI(to accessUnit: inout Data, sequence: UInt64) {
+    private func appendDiagnosticSEI(to accessUnit: inout Data, sequence: UInt64, sourceUnixMicros: UInt64) {
         var payload = Data("RSDIAG1".utf8)
         appendBigEndian(sequence, to: &payload)
-        appendBigEndian(UInt64(Date().timeIntervalSince1970 * 1_000_000.0), to: &payload)
+        appendBigEndian(sourceUnixMicros, to: &payload)
 
         var nalu = Data([0x06])
         var remainingType = 5
@@ -252,13 +257,24 @@ private func previewCompressionOutputCallback(
     infoFlags: VTEncodeInfoFlags,
     sampleBuffer: CMSampleBuffer?
 ) {
+    let context = sourceFrameRefCon.map {
+        Unmanaged<PreviewFrameContext>.fromOpaque($0).takeRetainedValue()
+    }
     guard status == noErr,
           let outputCallbackRefCon,
           let sampleBuffer else {
         return
     }
     let encoder = Unmanaged<PreviewH264Encoder>.fromOpaque(outputCallbackRefCon).takeUnretainedValue()
-    encoder.handleEncodedSampleBuffer(sampleBuffer)
+    encoder.handleEncodedSampleBuffer(sampleBuffer, context: context)
+}
+
+fileprivate final class PreviewFrameContext {
+    let captureUnixMicros: UInt64
+
+    init(captureUnixMicros: UInt64) {
+        self.captureUnixMicros = captureUnixMicros
+    }
 }
 
 enum PreviewH264EncoderError: Error, LocalizedError {
