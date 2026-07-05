@@ -32,6 +32,24 @@ xcodebuild \
 
 The bundle identifier is `com.kevinlong.reashoot`. iOS treats this as a separate app from older personal-device installs, so old pairing state and pending recordings will not migrate automatically.
 
+## App Store Connect upload
+
+Use `Scripts/app-store-upload.sh` to archive the Release build, export it for App Store Connect, and upload it with `xcodebuild`. Keep the App Store Connect API key outside the repository:
+
+```sh
+export APP_STORE_CONNECT_API_KEY_ID='ABC123DEFG'
+export APP_STORE_CONNECT_API_ISSUER_ID='00000000-0000-0000-0000-000000000000'
+export APP_STORE_CONNECT_API_KEY_PATH="$HOME/private_keys/AuthKey_ABC123DEFG.p8"
+
+Scripts/app-store-upload.sh --marketing-version 1.0
+```
+
+The script assigns a UTC timestamp build number by default so repeated uploads of the same marketing version do not collide. To preview the archive/export flow without uploading, run:
+
+```sh
+Scripts/app-store-upload.sh --export-only --marketing-version 1.0
+```
+
 ## End-to-end smoke test
 
 Keep the iPhone unlocked with the app in the foreground. Set the current pairing token in your shell without committing it:

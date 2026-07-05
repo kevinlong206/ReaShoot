@@ -101,6 +101,10 @@ int normalizeRotationDegrees(double degrees) {
   return rounded == 360 ? 0 : rounded;
 }
 
+int displayMatrixRotationToClockwiseDegrees(double degrees) {
+  return normalizeRotationDegrees(-degrees);
+}
+
 core::VideoFrame rotateBGRAFrame(const core::VideoFrame &source, int rotationDegrees) {
   if (rotationDegrees == 0 || source.width <= 0 || source.height <= 0 || source.pixels.empty()) {
     return source;
@@ -355,7 +359,8 @@ private:
       for (int i = 0; i < parameters->nb_coded_side_data; ++i) {
         const AVPacketSideData &sideData = parameters->coded_side_data[i];
         if (sideData.type == AV_PKT_DATA_DISPLAYMATRIX && sideData.data && sideData.size >= sizeof(int32_t) * 9) {
-          return normalizeRotationDegrees(api_->av_display_rotation_get(reinterpret_cast<const int32_t *>(sideData.data)));
+          return displayMatrixRotationToClockwiseDegrees(
+              api_->av_display_rotation_get(reinterpret_cast<const int32_t *>(sideData.data)));
         }
       }
     }

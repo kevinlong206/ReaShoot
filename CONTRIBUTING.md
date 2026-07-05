@@ -102,6 +102,19 @@ GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=all \
   build
 ```
 
+To upload a Release build to App Store Connect, create an App Store Connect API key and keep the `.p8` file outside the repository:
+
+```sh
+cd iphone
+export APP_STORE_CONNECT_API_KEY_ID='ABC123DEFG'
+export APP_STORE_CONNECT_API_ISSUER_ID='00000000-0000-0000-0000-000000000000'
+export APP_STORE_CONNECT_API_KEY_PATH="$HOME/private_keys/AuthKey_ABC123DEFG.p8"
+
+Scripts/app-store-upload.sh --marketing-version 1.0
+```
+
+Use `Scripts/app-store-upload.sh --export-only --marketing-version 1.0` to create a local App Store export without uploading. The script defaults to team `6QTJXLJJ62`, bundle ID `com.kevinlong.reashoot`, automatic signing, and a UTC timestamp build number; override those with `--team-id`, `REASHOOT_BUNDLE_ID`, or `--build-number` when needed.
+
 After Xcode or SwiftPM builds, remove generated local artifacts unless they are intentional:
 
 ```sh
