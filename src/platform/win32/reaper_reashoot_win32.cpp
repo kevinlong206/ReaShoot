@@ -7,6 +7,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <chrono>
 #include <cstdio>
@@ -133,6 +134,7 @@ std::string g_iPhoneZoom = "1.0";
 std::string g_iPhoneLook = "natural";
 std::mutex g_mainQueueMutex;
 std::queue<std::function<void()>> g_mainQueue;
+std::atomic<bool> g_mainQueueWakePending{false};
 std::shared_ptr<reashoot::core::AsyncCommandHandle> g_stopHandle;
 std::shared_ptr<reashoot::core::AsyncCommandHandle> g_downloadHandle;
 std::shared_ptr<reashoot::core::AsyncCommandHandle> g_listHandle;
@@ -219,8 +221,15 @@ void debugLog(const std::string &message) {
 }
 
 void postToMain(std::function<void()> callback) {
-  std::lock_guard<std::mutex> lock(g_mainQueueMutex);
-  g_mainQueue.push(std::move(callback));
+  {
+    std::lock_guard<std::mutex> lock(g_mainQueueMutex);
+    g_mainQueue.push(std::move(callback));
+  }
+  // MessageBoxA runs its own modal loop and can pause REAPER's timer hook.
+  // Wake the panel directly so live-preview frames keep draining while prompts are open.
+  if (g_panel && !g_mainQueueWakePending.exchange(true)) {
+    PostMessageA(g_panel, reashoot::platform::swell::kDrainQueuedWorkMessage, 0, 0);
+  }
 }
 
 const char *previewModeName(PreviewMode mode) {
@@ -241,6 +250,7 @@ void setPreviewMode(PreviewMode mode) {
 }
 
 void drainMainQueue() {
+  g_mainQueueWakePending = false;
   std::queue<std::function<void()>> pending;
   {
     std::lock_guard<std::mutex> lock(g_mainQueueMutex);
@@ -1082,6 +1092,7 @@ void ensurePanel() {
   callbacks.toggleDock = [](void *) { togglePreviewDockMode(); };
   callbacks.restorePending = [](void *) { restorePendingRecording(); };
   callbacks.deleteAllPending = [](void *) { deleteAllPendingRecordings(); };
+  callbacks.drainQueuedWork = [](void *) { drainMainQueue(); };
   callbacks.closed = [](void *) {
     g_panelVisible = false;
   };

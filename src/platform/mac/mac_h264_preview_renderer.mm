@@ -19,6 +19,18 @@
 
 namespace {
 
+void performOnMainRunLoopCommonModes(dispatch_block_t block) {
+  if (!block) {
+    return;
+  }
+  if ([NSThread isMainThread]) {
+    block();
+    return;
+  }
+  CFRunLoopPerformBlock(CFRunLoopGetMain(), kCFRunLoopCommonModes, block);
+  CFRunLoopWakeUp(CFRunLoopGetMain());
+}
+
 void ReaShootMacH264FrameDecoderOutputCallback(void *refCon,
                                                void *sourceFrameRefCon,
                                                OSStatus status,
@@ -239,7 +251,7 @@ void ReaShootMacH264FrameDecoderOutputCallback(void *refCon,
 
   NSData *immutableFrame = [frameData copy];
   ReaShootMacH264FrameHandler handler = self.frameHandler;
-  dispatch_async(dispatch_get_main_queue(), ^{
+  performOnMainRunLoopCommonModes(^{
     handler(immutableFrame.bytes, width, height, static_cast<int>(destinationStride));
   });
 }

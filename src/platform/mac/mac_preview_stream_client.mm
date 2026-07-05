@@ -17,6 +17,18 @@ namespace reashoot::platform::mac {
 
 namespace {
 
+void performOnMainRunLoopCommonModes(dispatch_block_t block) {
+  if (!block) {
+    return;
+  }
+  if ([NSThread isMainThread]) {
+    block();
+    return;
+  }
+  CFRunLoopPerformBlock(CFRunLoopGetMain(), kCFRunLoopCommonModes, block);
+  CFRunLoopWakeUp(CFRunLoopGetMain());
+}
+
 class MacPreviewStreamClient final : public core::PreviewStreamClient {
 public:
   MacPreviewStreamClient() : client_([[ReaShootMacPreviewStreamClient alloc] init]) {}
@@ -118,7 +130,7 @@ std::unique_ptr<core::PreviewStreamClient> createPreviewStreamClient() {
   }
   __weak ReaShootMacPreviewStreamClient *weakSelf = self;
   [task receiveMessageWithCompletionHandler:^(NSURLSessionWebSocketMessage *message, NSError *error) {
-    dispatch_async(dispatch_get_main_queue(), ^{
+    reashoot::platform::mac::performOnMainRunLoopCommonModes(^{
       ReaShootMacPreviewStreamClient *strongSelf = weakSelf;
       if (!strongSelf || task != strongSelf.task) {
         return;

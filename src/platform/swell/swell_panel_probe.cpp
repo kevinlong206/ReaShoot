@@ -562,6 +562,12 @@ static LRESULT manageWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
 static LRESULT swellProbeWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
   (void)lParam;
+  if (msg == kDrainQueuedWorkMessage) {
+    if (g_callbacks.drainQueuedWork) {
+      g_callbacks.drainQueuedWork(g_callbacks.context);
+    }
+    return 1;
+  }
   if (msg == WM_PAINT) {
     paintPreview(hwnd);
     return 0;

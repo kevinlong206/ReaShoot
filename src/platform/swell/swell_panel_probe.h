@@ -4,6 +4,8 @@
 
 namespace reashoot::platform::swell {
 
+constexpr unsigned int kDrainQueuedWorkMessage = 0x8000 + 0x524;
+
 struct SwellPanelCallbacks {
   void *context = nullptr;
   void (*setup)(void *context) = nullptr;
@@ -18,6 +20,7 @@ struct SwellPanelCallbacks {
   void (*selectLook)(void *context, const char *lookID) = nullptr;
   void (*profileChanged)(void *context) = nullptr;
   void (*closed)(void *context) = nullptr;
+  void (*drainQueuedWork)(void *context) = nullptr;
 };
 
 struct SwellPanelSettings {
