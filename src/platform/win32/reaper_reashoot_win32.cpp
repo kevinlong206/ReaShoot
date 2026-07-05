@@ -356,6 +356,9 @@ void setPanelStatus(const std::string &status) {
   if (!g_panel) {
     return;
   }
+  if (g_transferProgressActive && isVolatilePreviewStatus(status)) {
+    return;
+  }
   const std::string friendlyStatus = reashoot::core::friendlyStatusText(status);
   // Skip redundant updates. updateSwellPanelProbe re-sets label text, syncs the
   // setup fields, and invalidates the whole panel; calling it every timer tick
@@ -379,6 +382,7 @@ std::string captureOutputDirectory(ReaProject *project);
 void startRemotePreview();
 void stopPlaybackAndShowLive();
 void togglePreviewDockMode();
+bool isVolatilePreviewStatus(const std::string &status);
 
 void persistSettings() {
   if (g_panel) {
@@ -494,6 +498,15 @@ bool recentlySawPlaybackVideo() {
 
 bool playbackOwnsPreview() {
   return showingPlayback() || g_transportPlaybackActive || transportPlaying() || recentlySawPlaybackVideo();
+}
+
+bool isVolatilePreviewStatus(const std::string &status) {
+  return status == "Playback" ||
+         status == "ReaShoot live video" ||
+         status == "Preview: H.264 stream" ||
+         status.rfind("Preview: H.264 received", 0) == 0 ||
+         status.rfind("Preview: connecting H.264 stream", 0) == 0 ||
+         status.rfind("Preview: no video received", 0) == 0;
 }
 
 bool ensureCameraConfiguredForAction(const char *action) {

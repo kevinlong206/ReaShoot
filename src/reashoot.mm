@@ -1229,6 +1229,7 @@ void setVideoEnabled(bool enabled);
 @property(nonatomic, copy) NSString *previewDecoderStatus;
 @property(nonatomic, assign) BOOL transferProgressActive;
 @property(nonatomic, assign) BOOL remoteRecording;
+- (BOOL)isVolatilePreviewStatus:(NSString *)status;
 - (void)ensureDockView;
 - (void)ensurePreviewAdapters;
 - (void)showLivePreview;
@@ -1273,6 +1274,18 @@ void setVideoEnabled(bool enabled);
 @end
 
 @implementation ReaShootRecorder
+
+- (BOOL)isVolatilePreviewStatus:(NSString *)status {
+  if (status.length == 0) {
+    return NO;
+  }
+  return [status isEqualToString:@"Playback"] ||
+         [status isEqualToString:@"ReaShoot live video"] ||
+         [status isEqualToString:@"Preview: H.264 stream"] ||
+         [status hasPrefix:@"Preview: H.264 received"] ||
+         [status hasPrefix:@"Preview: connecting H.264 stream"] ||
+         [status hasPrefix:@"Preview: no video received"];
+}
 
 - (void)ensurePreviewAdapters {
   __weak ReaShootRecorder *weakSelf = self;
@@ -2462,6 +2475,9 @@ void setVideoEnabled(bool enabled);
 }
 
 - (void)setStatus:(NSString *)status {
+  if (self.transferProgressActive && [self isVolatilePreviewStatus:status]) {
+    return;
+  }
   std::string friendlyStatus = reashoot::core::friendlyStatusText(status ? status.UTF8String : "Idle");
   NSString *statusText = [NSString stringWithUTF8String:friendlyStatus.c_str()];
   self.statusText = statusText;

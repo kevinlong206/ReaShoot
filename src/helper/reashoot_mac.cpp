@@ -4,9 +4,12 @@
 #include "downloader.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
+#include <future>
 #include <iostream>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -114,6 +117,14 @@ void printProgress(int64_t bytes, int64_t expected) {
   std::cerr.setf(std::ios::fixed);
   std::cerr.precision(1);
   std::cerr << "progress bytes=" << bytes << " total=" << total << " percent=" << percent << "\n";
+}
+
+void printEncodeProgress(double progress) {
+  const double normalized = progress <= 1.0 ? progress * 100.0 : progress;
+  const double percent = std::min(100.0, std::max(0.0, normalized));
+  std::cerr.setf(std::ios::fixed);
+  std::cerr.precision(1);
+  std::cerr << "encode percent=" << percent << "\n";
 }
 
 void requireEventType(const reashoot::core::ProtocolEvent &event, const std::string &type) {
@@ -239,6 +250,39 @@ reashoot::core::ProtocolRecording prepareRecording(const reashoot::helper::Contr
   return event.recording;
 }
 
+reashoot::core::ProtocolRecording prepareRecordingWithProgress(const reashoot::helper::ControlClient &client,
+                                                               const reashoot::helper::ControlClient &progressClient,
+                                                               const std::string &token,
+                                                               const std::string &recordingID,
+                                                               bool reportProgress) {
+  auto preparation = std::async(std::launch::async, [&client, &token, &recordingID]() {
+    return prepareRecording(client, token, recordingID);
+  });
+  int lastTenths = -1;
+  while (preparation.wait_for(std::chrono::milliseconds(250)) != std::future_status::ready) {
+    if (!reportProgress) {
+      continue;
+    }
+    try {
+      reashoot::core::ProtocolCommand ping;
+      ping.requestID = reashoot::helper::randomUUID();
+      ping.type = "ping";
+      ping.token = token;
+      const reashoot::core::ProtocolEvent event = progressClient.send(ping);
+      if (event.hasCaptureProgress && (event.captureStatus == "encoding" || event.captureStatus == "applyingLook")) {
+        const double normalized = event.captureProgress <= 1.0 ? event.captureProgress * 100.0 : event.captureProgress;
+        const int tenths = static_cast<int>(std::max(0.0, std::min(100.0, normalized)) * 10.0);
+        if (tenths != lastTenths) {
+          lastTenths = tenths;
+          printEncodeProgress(event.captureProgress);
+        }
+      }
+    } catch (const std::exception &) {
+    }
+  }
+  return preparation.get();
+}
+
 void acknowledgeTransfer(const reashoot::helper::ControlClient &client,
                          const std::string &token,
                          const std::string &recordingID) {
@@ -260,9 +304,12 @@ void runDownloadRecording(const CLIArguments &args,
                           const std::string &host,
                           const std::string &token) {
   const int httpPort = args.intAfter("--http-port", 8788);
+  const int controlPort = args.intAfter("--port", 8787);
   const std::string recordingID = required(args, "--recording-id");
   const std::string directory = args.valueAfter("--download-dir").empty() ? "." : args.valueAfter("--download-dir");
-  const reashoot::core::ProtocolRecording recording = prepareRecording(client, token, recordingID);
+  const reashoot::helper::ControlClient progressClient(host, controlPort, 5);
+  const reashoot::core::ProtocolRecording recording =
+      prepareRecordingWithProgress(client, progressClient, token, recordingID, args.hasFlag("--progress"));
   const std::string downloaded = reashoot::helper::downloadRecording(recording, host, httpPort, token, directory, progressCallbackForArgs(args));
   try {
     acknowledgeTransfer(client, token, recording.id);
@@ -286,8 +333,11 @@ void runStop(const CLIArguments &args,
     fail("Unexpected control event: " + stopped.type);
   }
   const int httpPort = args.intAfter("--http-port", 8788);
+  const int controlPort = args.intAfter("--port", 8787);
   const std::string directory = args.valueAfter("--download-dir").empty() ? "." : args.valueAfter("--download-dir");
-  const reashoot::core::ProtocolRecording prepared = prepareRecording(client, token, stopped.recording.id);
+  const reashoot::helper::ControlClient progressClient(host, controlPort, 5);
+  const reashoot::core::ProtocolRecording prepared =
+      prepareRecordingWithProgress(client, progressClient, token, stopped.recording.id, args.hasFlag("--progress"));
   const std::string downloaded = reashoot::helper::downloadRecording(prepared, host, httpPort, token, directory, progressCallbackForArgs(args));
   try {
     acknowledgeTransfer(client, token, prepared.id);
@@ -321,6 +371,16 @@ int main(int argc, char **argv) {
     }
     if (command == "stop") {
       runStop(args, client, host, required(args, "--token"));
+      return 0;
+    }
+    if (command == "prepare-recording") {
+      const reashoot::helper::ControlClient progressClient(host, port, 5);
+      const reashoot::core::ProtocolRecording recording = prepareRecordingWithProgress(client,
+                                                                                      progressClient,
+                                                                                      required(args, "--token"),
+                                                                                      required(args, "--recording-id"),
+                                                                                      args.hasFlag("--progress"));
+      printRecording(recording);
       return 0;
     }
     reashoot::core::ProtocolCommand protocolCommand = commandForArgs(args);

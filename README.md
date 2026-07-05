@@ -1,153 +1,122 @@
 # ReaShoot
 
-ReaShoot is a native REAPER extension for controlling a companion iPhone camera app from REAPER, recording full-quality iPhone video, and inserting the downloaded movie in sync with the REAPER transport. The macOS extension is the full implementation; the Windows CMake build currently provides the helper, REAPER DLL skeleton, shared setup panel, pairing/configure/start/stop/download flow, pending recording restore/delete, FFmpeg H.264 live/playback preview, and single-item insertion.
+ReaShoot lets REAPER control an iPhone as a video camera. Start recording in REAPER, capture full-quality iPhone video, download the finished movie, and place it on a `ReaShoot` track in time with your session.
 
-## MVP behavior
+**Need help or want to contribute?** Open a [GitHub issue](https://github.com/kevinlong206/ReaPhoneVideo/issues) for bugs, crashes, confusing behavior, or feature requests. Technical build and contribution notes live in [CONTRIBUTING.md](CONTRIBUTING.md).
 
-- Adds REAPER actions:
-  - `ReaShoot: Enable ReaShoot`
-  - `ReaShoot: Float/Dock Preview`
-  - `ReaShoot: Align Selected Video Item`
-  - `ReaShoot: Restore Pending iPhone Recording`
-  - `ReaShoot: Delete All Pending iPhone Recordings`
-  - `ReaShoot: Enable/Disable Transport Follow`
-- Adds a main-toolbar toggle button for enabling/disabling all video behavior.
-- Shows the iPhone live preview in the shared SWELL preview panel on both macOS and Windows. Platform code supplies helper execution and H.264/live/playback decoding, while the preview/setup/status controls are defined once in `src/platform/swell/swell_panel_probe.cpp`.
-- Shows the active iPhone profile below the preview, including resolution, frame rate, orientation, aspect, lens, zoom, and look; status text turns red while recording.
-- Controls the companion iPhone app for full-resolution iPhone capture. The REAPER extension no longer records directly from macOS webcams or Continuity Camera.
-- Records iPhone camera audio into the `.mov` alongside video so the inserted item contains an alignment reference.
-- Starts video recording when REAPER enters record.
-- Stops video recording when REAPER leaves record.
-- Keeps video behavior disabled by default until the toolbar/action toggle is enabled.
-- Creates the `ReaShoot` track as soon as video features are enabled, before the first recording finishes.
-- Keeps REAPER audio recording disabled on the `ReaShoot` track; camera audio stays embedded in the recorded movie item.
-- Shows the preview in a floating window by default; the `Float/Dock Preview` action can still toggle docking and remembers that choice.
-- Shows recorded video playback in the same preview panel when REAPER plays over an item on the `ReaShoot` track.
-- Adds a `Float/Dock Preview` action because REAPER's normal docker undock controls do not work reliably for this custom native preview view.
-- Uses shared FFmpeg playback preview code for recorded-file preview frames on macOS and Windows, while playback audio comes only from REAPER. The small preview detail line reports whether live preview and recorded-file playback are using hardware or software decode and names the decode system; on macOS, both H.264 live preview and FFmpeg playback use VideoToolbox when hardware decode is available.
-- Keeps FFmpeg playback smooth by avoiding per-tick re-seek/flush churn and by limiting preview frame size.
-- Inserts the finalized `.mov` onto a `ReaShoot` track at the record-start timeline position.
-- After insertion, compares the movie's embedded camera audio against the first non-video track item that overlaps the video item and shifts the video item to the strongest correlation match on that reference.
-- Can manually re-run alignment for an existing project with `ReaShoot: Align Selected Video Item`; select the item on the `ReaShoot` track first, or it falls back to that track's latest item. If a REAPER time selection is active, only that region is analyzed.
-- Shows load/record/finalize/import state in the preview status label instead of console chatter.
-- Places downloaded iPhone video at the REAPER record-start timeline position.
-- Controls the companion iPhone app for 4K recording, low-latency Wi-Fi preview, download/restore, and timeline insertion over the local Wi-Fi/Bonjour network.
-- The iPhone preview uses a low-latency local H.264 stream. The iPhone renders the selected look into low-resolution preview frames before sending them to REAPER.
-- The dock includes capture profile controls for resolution, FPS, orientation, social aspect ratio, lens, zoom, and baked-in artistic look. Changing a profile control sends the new profile to the iPhone immediately when paired.
-- The look picker keeps the custom looks plus a curated Core Image subset for music-video use, including thermal/X-ray, gradients/edges, crystallize/pixel/halftone, and a few kaleidoscope/distortion looks. `Prev` and `Next` buttons beside the picker make it quick to audition looks.
-- During iPhone recording stop, REAPER prompts before any on-phone look encoding so unwanted takes can be deleted without waiting.
-- If a non-natural iPhone look is selected and the user chooses Download, the dock status shows on-phone look encoding progress before the full-resolution movie downloads.
-- When an iPhone recording stops, REAPER prompts to either download the video or delete it from the iPhone. Delete requires a second confirmation; canceling that confirmation downloads instead.
-- If a download fails or is canceled before transfer acknowledgement, the iPhone keeps the pending recording. Use the preview window's `Pending...` button or `ReaShoot: Restore Pending iPhone Recording` to list pending clips on the phone, then either download one into the project or delete it from the phone. Use `Delete All` in the preview window or `ReaShoot: Delete All Pending iPhone Recordings` to remove every pending clip from the phone after confirmation.
-- After the Mac verifies the downloaded movie and acknowledges transfer, the iPhone app deletes its local copy immediately.
-- The iPhone app disables the idle timer while it is ready/listening so the phone does not sleep and interrupt preview on a tripod.
-- The iPhone app keeps the screen awake while ready/listening, but does not show that implementation detail in the status screen.
+## What ReaShoot does
 
-## Build
+ReaShoot is built for musicians, producers, and video creators who want a simple way to capture phone video while recording in REAPER.
 
-macOS playback preview requires FFmpeg headers and dylibs. Install FFmpeg with Homebrew or set `FFMPEG_ROOT` / `REASHOOT_FFMPEG_ROOT` to a prefix containing `include/` and `lib/`:
+- Controls the companion iPhone app from REAPER over local Wi-Fi.
+- Shows a live iPhone preview in a floating or docked REAPER window.
+- Starts and stops iPhone video capture with the REAPER transport.
+- Downloads the finished `.mov` and inserts it as one media item on a `ReaShoot` track.
+- Keeps iPhone camera audio embedded in the movie as an alignment reference.
+- Tries to auto-align the video item to overlapping REAPER audio after import.
+- Lets you recover pending recordings if a transfer is canceled or interrupted.
 
-```sh
-brew install ffmpeg
-```
+## Requirements
 
-```sh
-make
-```
+- REAPER on macOS for the full current experience.
+- The ReaShoot iPhone app from this repository.
+- iPhone and computer on the same local Wi-Fi network.
+- Local-network permission enabled for the iPhone app.
 
-Run the lightweight validation suite with:
+Windows support is in progress. The Windows build includes the helper, REAPER extension DLL, shared setup panel, pairing/configure/start/stop/download flow, pending recording restore/delete, preview, playback preview, and media insertion.
 
-```sh
-make check
-```
+## Quick start
 
-The Makefile remains the primary macOS install path. A CMake build is also available. On macOS it builds the shared core, core tests, helper, and extension:
+1. Install the REAPER extension and the iPhone app.
+2. Restart REAPER.
+3. In REAPER, open the Action List and run `ReaShoot: Enable ReaShoot`.
+4. Open the ReaShoot preview window.
+5. Launch ReaShoot on the iPhone.
+6. In the REAPER preview window, click `Setup`, then `Discover`.
+7. Enter the pairing code shown on the iPhone and click `Pair`.
+8. Press record in REAPER. ReaShoot starts recording on the iPhone.
+9. Stop recording in REAPER. Choose whether to download or delete the stopped take.
 
-```sh
-cmake -S . -B build-cmake -DCMAKE_BUILD_TYPE=Debug
-cmake --build build-cmake --parallel
-ctest --test-dir build-cmake --output-on-failure
-cmake --install build-cmake
-```
+## Preview window
 
-On Windows, build the shared core tests, `reashoot-win.exe`, and `reaper_reashoot.dll` with:
+The preview window is the main control surface:
 
-```powershell
-cmake -S . -B build -G "Visual Studio 17 2022" -A x64
-cmake --build build --config Release --parallel
-ctest --test-dir build -C Release --output-on-failure
-```
+- **Large status text** shows important user-facing state, including recording, transfer, encoding, and error messages.
+- **Small detail text** shows transport/profile information such as Wi-Fi, resolution, FPS, orientation, aspect, lens, zoom, look, and decode status.
+- **Setup** opens pairing and connection controls.
+- **Pending...** lists recordings still stored on the iPhone.
+- **Delete All** removes all pending iPhone recordings after confirmation.
+- **Prev / Next** quickly auditions video looks.
 
-By default the Makefile builds for the current Mac architecture. Universal builds require a universal FFmpeg prefix; the default Apple Silicon Homebrew FFmpeg dylibs are arm64-only. If you have universal FFmpeg libraries, point `FFMPEG_ROOT` or `REASHOOT_FFMPEG_ROOT` at that prefix and build with both architectures:
+During playback or live preview, the small detail text reports whether preview decoding is using hardware or software and names the decode system, for example `Preview HW decode: VideoToolbox` or `Playback Software decode: FFmpeg software`.
 
-```sh
-make ARCH_FLAGS="-arch arm64 -arch x86_64"
-```
+## Recording workflow
 
-The companion iPhone app is now consolidated in this repository under `iphone/`. Build it with:
+Enable ReaShoot before recording. When REAPER enters record, the iPhone starts recording video. When REAPER leaves record, ReaShoot asks what to do with the iPhone take.
 
-```sh
-cd iphone
-xcodebuild -project ReaShoot.xcodeproj -scheme ReaShoot -destination 'generic/platform=iOS' build
-```
+If you choose **Download**, the phone prepares the movie, the helper downloads it, and REAPER inserts it on the `ReaShoot` track at the original record-start position. If you choose **Delete**, the phone deletes the take after confirmation.
 
-For local device iteration, this tested device command is usually more useful:
+The `ReaShoot` track is intentionally kept record-disabled. REAPER remains responsible for production audio recording; iPhone audio stays inside the movie so ReaShoot can use it for sync and alignment.
 
-```sh
-GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=all \
-  xcodebuild -project iphone/ReaShoot.xcodeproj \
-  -scheme ReaShoot \
-  -destination 'platform=iOS,id=797DC5E5-610E-5972-9FD3-B0045CA5745F' \
-  DEVELOPMENT_TEAM=6QTJXLJJ62 \
-  build
-```
+## Looks and capture settings
 
-## Install
+The preview window includes iPhone capture controls:
 
-```sh
-make install
-codesign --verify "$HOME/Library/Application Support/REAPER/UserPlugins/reashoot-mac"
-codesign --verify "$HOME/Library/Application Support/REAPER/UserPlugins/reaper_reashoot.dylib"
-```
+- Resolution
+- FPS
+- Orientation
+- Social aspect ratio
+- Lens
+- Zoom
+- Look
 
-`make install` ad-hoc signs the helper and REAPER extension dylib.
+Changing a profile control sends the new profile to the paired iPhone. Lens options depend on iPhone hardware, and zoom is clamped to the selected camera's supported range.
 
-Restart REAPER, then open the Action List and search for `ReaShoot`.
+Non-natural looks are applied on the iPhone after you choose to download a stopped take. While the phone encodes a look, the large status text shows progress such as `Encoding iPhone look: 42%`. Download progress is also shown there so it is clear the app is still working.
 
-On Windows, install the helper and DLL next to each other in REAPER's `UserPlugins` directory:
+## Pending recordings
 
-```powershell
-cmake --install build --config Release
-```
+If a download fails, is canceled, or cannot be acknowledged, the iPhone keeps the recording instead of deleting it. Use `Pending...` in the preview window, or run `ReaShoot: Restore Pending iPhone Recording`, to choose a pending clip and either download it into the project or delete it.
 
-The Windows DLL filename is `reaper_reashoot.dll`; REAPER will not load extension DLLs that do not start with `reaper_`.
+Use `Delete All` in the preview window, or run `ReaShoot: Delete All Pending iPhone Recordings`, to remove all pending clips after confirmation.
 
-If macOS blocks the dylib during local development:
+After REAPER verifies a downloaded movie and acknowledges the transfer, the iPhone app deletes its local copy.
 
-```sh
-xattr -dr com.apple.quarantine "$HOME/Library/Application Support/REAPER/UserPlugins/reaper_reashoot.dylib"
-make install
-```
+## REAPER actions
 
-## Notes
+ReaShoot registers these actions:
 
-- REAPER remains responsible for production audio recording and mixing; iPhone camera audio is captured as a sync/alignment reference.
-- macOS camera and microphone permission are not required because capture happens in the iPhone app.
-- The companion iPhone app sources live in `iphone/`; old external development copies should no longer be treated as the source of truth.
-- The extension builds and installs a bundled helper next to the REAPER extension (`reashoot-mac` on macOS, `reashoot-win.exe` on Windows).
-- To use the extension, launch the iPhone app, click `iPhone Setup` in the REAPER dock, click `Discover`, enter the pairing code shown on the iPhone, then click `Pair`. Use `Reconnect` later if the phone is already paired and preview/control needs to be restarted.
-- The iPhone app shows the currently configured capture profile and pending recordings. Pending videos can be deleted directly in the app. Aspect ratio is currently metadata/framing intent; resolution, FPS, orientation, lens, zoom, and selected look are applied on the iPhone side. Non-natural looks are applied only after the user chooses to download a stopped clip and are baked into the downloaded movie while preserving the camera audio track.
-- Lens options depend on the connected iPhone hardware. Zoom is clamped to the selected camera's supported range; values beyond a physical lens's native view may be digital crop rather than guaranteed optical zoom.
-- Captures are written under `ReaShoot Recordings` in the saved project directory, or under REAPER's resource path for unsaved projects.
-- A tested recording inspected with `ffprobe` was `1920x1080` H.264 at a stable ~30 fps and ~24 Mbps, so laggy motion in the docked preview can be a preview playback issue rather than a bad recording.
-- The docked playback preview intentionally avoids frequent exact seeks on macOS; it may drift slightly before correcting, but this keeps AVPlayer playback smooth.
-- Windows alignment media-audio reading and device smoke testing of the new preview paths are still follow-up items.
-- True real-time waveform drawing during capture is not implemented because REAPER receives the media after the iPhone app finalizes and downloads the movie.
+- `ReaShoot: Enable ReaShoot`
+- `ReaShoot: Float/Dock Preview`
+- `ReaShoot: Align Selected Video Item`
+- `ReaShoot: Restore Pending iPhone Recording`
+- `ReaShoot: Delete All Pending iPhone Recordings`
+- `ReaShoot: Enable/Disable Transport Follow`
 
-## Iterating locally
+## Troubleshooting
 
-- Restart REAPER after every `make install`; the extension dylib is loaded at process startup.
-- Keep the C++ helper protocol in `src/core/control_protocol.*` compatible with the iPhone protocol models in `iphone/Sources/ReaShootCore`.
-- Keep the C++ helper CLI behavior in `src/helper/` compatible with the REAPER extension's line-based output parsers.
-- Run `make check` before committing; it builds the C++ helper and runs the iPhone Swift checks.
-- Xcode/SwiftPM may regenerate `iphone/Package.resolved` or local `.build` directories during builds. Do not commit those unless dependency pinning intentionally changes.
+### REAPER does not see ReaShoot
+
+Restart REAPER after installing the extension. REAPER loads native extensions only at process startup.
+
+### The iPhone is not discovered
+
+Make sure the iPhone and computer are on the same local Wi-Fi network, the iPhone app is open, and local-network permission is enabled for ReaShoot on iOS.
+
+### Pairing fails
+
+Use the current pairing code shown in the iPhone app. If the phone rejects a saved token, pair again from `Setup`.
+
+### Preview works but playback looks different
+
+The docked preview is optimized for responsiveness and smooth editing. Playback audio comes from REAPER, not the internal preview renderer. The downloaded `.mov` is the source of truth for final media quality.
+
+### A download failed
+
+Use `Pending...` to recover the recording from the iPhone. Failed or canceled transfers remain pending until REAPER verifies the movie and acknowledges the transfer.
+
+## Project status
+
+ReaShoot is under active development. The macOS version is the primary full implementation today. Windows support is actively being brought up with shared UI, helper, preview, playback, and media insertion code.
+
+For build instructions, architecture notes, validation commands, and contribution guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).
