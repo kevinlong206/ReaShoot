@@ -6,6 +6,7 @@ This repository contains ReaShoot: a native REAPER extension plus its companion 
 
 - The macOS REAPER extension is implemented in Objective-C++ with the REAPER Extension SDK, AVFoundation/Cocoa for Mac services, a local H.264 preview stream, and shared FFmpeg recorded-file playback preview.
 - The Windows REAPER extension builds with CMake as `reaper_reashoot.dll`; it currently includes the helper, shared setup/status panel, pairing/configure/start/stop/download flow, pending recording restore/delete, FFmpeg-based H.264 live/recorded-file playback preview, and media insertion.
+- The REAPER extension is cross-platform. Fixes and features should be applied to both macOS and Windows wherever behavior exists on both platforms.
 - The companion iPhone app lives in `iphone/` and records full-quality iPhone video while REAPER controls it over the local Wi-Fi/Bonjour network.
 - `iphone/` is the source of truth for the iPhone app; do not recreate old external development copies.
 
@@ -95,6 +96,7 @@ rm -rf iphone/Package.resolved iphone/.build helper/.build
 ## Design constraints and preferences
 
 - Keep the implementation native; do not move iPhone control, preview, or media insertion into JSFX, VST3, or Lua.
+- Prefer shared code for behavior that should be consistent across macOS and Windows. Add platform-specific code only when host APIs, OS services, or build constraints make sharing impractical, and keep platform adapters thin.
 - Keep the preview transport dependency-light and same-LAN oriented; prefer simple H.264 streaming over heavyweight realtime SDKs unless requirements change.
 - Windows live preview should prefer the FFmpeg H.264 decoder path; do not suggest switching live preview back to Media Foundation to fix orientation or restart issues, because Media Foundation had other regressions.
 - macOS recorded-file playback preview should use the shared FFmpeg playback path rather than restoring AVFoundation/`AVAssetImageGenerator`; the macOS build intentionally fails when FFmpeg headers/libs are missing.
