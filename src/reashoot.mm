@@ -398,6 +398,9 @@ MediaTrack *findOrCreateVideoTrack(ReaProject *project) {
   if (track) {
     char name[] = "ReaShoot";
     GetSetMediaTrackInfo_String(track, "P_NAME", name, true);
+    if (SetMediaTrackInfo_Value) {
+      SetMediaTrackInfo_Value(track, "D_VOL", 0.0);
+    }
   }
   return track;
 }
