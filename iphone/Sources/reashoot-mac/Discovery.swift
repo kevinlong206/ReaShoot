@@ -27,13 +27,17 @@ enum DNSSDDiscovery {
     private static func resolve(serviceName: String, timeout: TimeInterval) -> DiscoveredPhone? {
         let output = runDNSSD(arguments: ["-L", serviceName, "_reashoot._tcp", "local"], timeout: timeout)
         let host = firstMatch(in: output, pattern: #"hostname = ([^,\s]+)"#)
-        let port = firstMatch(in: output, pattern: #"port = ([0-9]+)"#).flatMap(Int.init)
+            ?? firstMatch(in: output, pattern: #"reached at ([^\s:]+):[0-9]+"#)
+        let normalizedHost = host.map { $0.hasSuffix(".") ? String($0.dropLast()) : $0 }
+        let port = (firstMatch(in: output, pattern: #"port = ([0-9]+)"#)
+            ?? firstMatch(in: output, pattern: #"reached at [^\s:]+:([0-9]+)"#))
+            .flatMap(Int.init)
         let httpPort = firstMatch(in: output, pattern: #"httpPort=([0-9]+)"#).flatMap(Int.init)
         let paired = output.contains("paired=true")
-        guard let host, let port else {
+        guard let normalizedHost, let port else {
             return nil
         }
-        return DiscoveredPhone(name: serviceName, host: host, controlPort: port, httpPort: httpPort, isPaired: paired)
+        return DiscoveredPhone(name: serviceName, host: normalizedHost, controlPort: port, httpPort: httpPort, isPaired: paired)
     }
 
     private static func serviceName(from line: String) -> String? {

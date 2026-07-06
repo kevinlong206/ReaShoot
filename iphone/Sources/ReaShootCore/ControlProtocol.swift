@@ -193,6 +193,8 @@ public struct RecordingDescriptor: Codable, Equatable, Sendable {
     public var durationSeconds: Double?
     public var checksumSHA256: String?
     public var downloadPath: String
+    public var createdAt: String?
+    public var thumbnailPath: String?
 
     public init(
         id: String,
@@ -200,7 +202,9 @@ public struct RecordingDescriptor: Codable, Equatable, Sendable {
         byteCount: Int64,
         durationSeconds: Double? = nil,
         checksumSHA256: String? = nil,
-        downloadPath: String
+        downloadPath: String,
+        createdAt: String? = nil,
+        thumbnailPath: String? = nil
     ) {
         self.id = id
         self.filename = filename
@@ -208,6 +212,8 @@ public struct RecordingDescriptor: Codable, Equatable, Sendable {
         self.durationSeconds = durationSeconds
         self.checksumSHA256 = checksumSHA256
         self.downloadPath = downloadPath
+        self.createdAt = createdAt
+        self.thumbnailPath = thumbnailPath
     }
 }
 

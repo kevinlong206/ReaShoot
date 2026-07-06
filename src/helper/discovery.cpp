@@ -18,7 +18,9 @@
 #include <cstdint>
 #include <vector>
 #else
+#include <cerrno>
 #include <csignal>
+#include <fcntl.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
@@ -333,9 +335,27 @@ std::string runDnsSd(const std::vector<std::string> &arguments, int timeoutSecon
     return {};
   }
 
+  fcntl(pipefd[0], F_SETFL, fcntl(pipefd[0], F_GETFL, 0) | O_NONBLOCK);
+  std::string output;
+  std::array<char, 4096> buffer = {};
+  auto drainOutput = [&]() {
+    while (true) {
+      const ssize_t count = read(pipefd[0], buffer.data(), buffer.size());
+      if (count > 0) {
+        output.append(buffer.data(), static_cast<size_t>(count));
+        continue;
+      }
+      if (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+        break;
+      }
+      break;
+    }
+  };
+
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeoutSeconds);
   int status = 0;
   while (std::chrono::steady_clock::now() < deadline) {
+    drainOutput();
     if (waitpid(pid, &status, WNOHANG) == pid) {
       break;
     }
@@ -343,16 +363,7 @@ std::string runDnsSd(const std::vector<std::string> &arguments, int timeoutSecon
   }
   kill(pid, SIGTERM);
   waitpid(pid, &status, 0);
-
-  std::string output;
-  std::array<char, 4096> buffer = {};
-  while (true) {
-    const ssize_t count = read(pipefd[0], buffer.data(), buffer.size());
-    if (count <= 0) {
-      break;
-    }
-    output.append(buffer.data(), static_cast<size_t>(count));
-  }
+  drainOutput();
   close(pipefd[0]);
   return output;
 }
@@ -386,12 +397,25 @@ std::string firstMatch(const std::string &text, const std::regex &pattern) {
   return std::regex_search(text, match, pattern) && match.size() > 1 ? match[1].str() : "";
 }
 
+void stripTrailingDot(std::string &value) {
+  if (!value.empty() && value.back() == '.') {
+    value.pop_back();
+  }
+}
+
 DiscoveredPhone resolvePhone(const std::string &serviceName, int timeoutSeconds) {
   const std::string output = runDnsSd({"-L", serviceName, "_reashoot._tcp", "local"}, timeoutSeconds);
   DiscoveredPhone phone;
   phone.name = serviceName;
   phone.host = firstMatch(output, std::regex("hostname = ([^,\\s]+)"));
-  const std::string port = firstMatch(output, std::regex("port = ([0-9]+)"));
+  std::string port = firstMatch(output, std::regex("port = ([0-9]+)"));
+  if (phone.host.empty()) {
+    phone.host = firstMatch(output, std::regex("reached at ([^\\s:]+):[0-9]+"));
+  }
+  if (port.empty()) {
+    port = firstMatch(output, std::regex("reached at [^\\s:]+:([0-9]+)"));
+  }
+  stripTrailingDot(phone.host);
   if (!port.empty()) {
     phone.controlPort = std::stoi(port);
   }

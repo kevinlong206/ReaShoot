@@ -52,6 +52,8 @@ ProtocolRecording recordingFromJson(const JsonValue &json) {
   recording.byteCount = json.int64Value("byteCount");
   recording.downloadPath = json.stringValue("downloadPath");
   recording.checksumSHA256 = json.stringValue("checksumSHA256");
+  recording.createdAt = json.stringValue("createdAt");
+  recording.thumbnailPath = json.stringValue("thumbnailPath");
   if (json.find("durationSeconds")) {
     recording.durationSeconds = json.numberValue("durationSeconds");
     recording.hasDurationSeconds = true;

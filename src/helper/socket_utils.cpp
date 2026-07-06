@@ -7,6 +7,7 @@
 #include <cstring>
 #include <sstream>
 #include <thread>
+#include <vector>
 
 #ifndef _WIN32
 #include <cerrno>
@@ -112,21 +113,36 @@ SocketHandle connectTcpSocket(const std::string &host, int port, int timeoutSeco
   }
 
   SocketHandle connected = kInvalidSocket;
-  for (addrinfo *address = result; address; address = address->ai_next) {
-    const SocketHandle candidate = socket(address->ai_family, address->ai_socktype, address->ai_protocol);
-    if (candidate == kInvalidSocket) {
-      continue;
+  std::string lastError = "connection failed";
+  std::vector<int> familyPasses = {AF_INET, AF_UNSPEC};
+  for (int family : familyPasses) {
+    for (addrinfo *address = result; address; address = address->ai_next) {
+      if (family != AF_UNSPEC && address->ai_family != family) {
+        continue;
+      }
+      if (family == AF_UNSPEC && address->ai_family == AF_INET) {
+        continue;
+      }
+      const SocketHandle candidate = socket(address->ai_family, address->ai_socktype, address->ai_protocol);
+      if (candidate == kInvalidSocket) {
+        lastError = socketErrorMessage();
+        continue;
+      }
+      setSocketTimeout(candidate, timeoutSeconds);
+      if (connect(candidate, address->ai_addr, static_cast<int>(address->ai_addrlen)) == 0) {
+        connected = candidate;
+        break;
+      }
+      lastError = socketErrorMessage();
+      closeSocket(candidate);
     }
-    setSocketTimeout(candidate, timeoutSeconds);
-    if (connect(candidate, address->ai_addr, static_cast<int>(address->ai_addrlen)) == 0) {
-      connected = candidate;
+    if (connected != kInvalidSocket) {
       break;
     }
-    closeSocket(candidate);
   }
   freeaddrinfo(result);
   if (connected == kInvalidSocket) {
-    throw HelperError("Could not connect to " + description + ": " + socketErrorMessage());
+    throw HelperError("Could not connect to " + description + ": " + lastError);
   }
   return connected;
 }

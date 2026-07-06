@@ -5,6 +5,8 @@ HELPER_TARGET := $(BUILD_DIR)/reashoot-mac
 SRC := src/reashoot.mm
 CORE_SRC := $(wildcard src/core/*.cpp)
 CORE_HEADERS := $(wildcard src/core/*.h)
+DESKTOP_SRC := $(wildcard src/desktop/*.cpp)
+DESKTOP_HEADERS := $(wildcard src/desktop/*.h)
 MAC_SRC := $(filter-out src/platform/mac/mac_reashoot_panel.mm,$(wildcard src/platform/mac/*.mm))
 MAC_HEADERS := $(filter-out src/platform/mac/mac_reashoot_panel.h,$(wildcard src/platform/mac/*.h))
 FFMPEG_SRC := $(wildcard src/platform/ffmpeg/*.cpp)
@@ -63,7 +65,7 @@ install: $(TARGET) $(HELPER_TARGET)
 
 check:
 	mkdir -p $(BUILD_DIR)
-	$(CXX) $(CORE_TEST_CXXFLAGS) tests/core_tests.cpp $(CORE_SRC) -o $(CORE_TEST_TARGET)
+	$(CXX) $(CORE_TEST_CXXFLAGS) tests/core_tests.cpp $(CORE_SRC) $(DESKTOP_SRC) -o $(CORE_TEST_TARGET)
 	$(CORE_TEST_TARGET)
 	$(CXX) $(CORE_TEST_CXXFLAGS) -c $(WIN32_STUB_SRC) -o $(WIN32_STUB_TARGET)
 	$(CXX) $(CORE_TEST_CXXFLAGS) -isystem $(SDK_DIR) -c $(SWELL_PROBE_SRC) -o $(SWELL_PROBE_TARGET)

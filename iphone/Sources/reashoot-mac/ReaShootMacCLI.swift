@@ -37,7 +37,7 @@ struct ReaShootMacCLI {
             let profile = CaptureProfile(
                 resolution: args.value(after: "--resolution") ?? "4K",
                 fps: args.int(after: "--fps", default: 30),
-                orientation: args.value(after: "--orientation") ?? "portrait",
+                orientation: args.value(after: "--orientation") ?? "auto",
                 aspectRatio: args.value(after: "--aspect") ?? "9:16",
                 lens: args.value(after: "--lens") ?? "wide",
                 zoomFactor: args.double(after: "--zoom", default: 1.0),
@@ -206,7 +206,7 @@ struct ReaShootMacCLI {
         reashoot-mac commands:
           discover [--timeout 3]
           pair --host HOST [--port 8787] [--client-name NAME]
-          configure --host HOST [--port 8787] --token TOKEN [--resolution 4K] [--fps 30] [--orientation portrait] [--aspect 9:16] [--lens wide] [--zoom 1.0] [--look natural]
+          configure --host HOST [--port 8787] --token TOKEN [--resolution 4K] [--fps 30] [--orientation auto] [--aspect 9:16] [--lens wide] [--zoom 1.0] [--look natural]
           start --host HOST [--port 8787] --token TOKEN [--session SESSION]
           stop --host HOST [--port 8787] [--http-port 8788] --token TOKEN [--download-dir DIR] [--progress]
           stop-only --host HOST [--port 8787] --token TOKEN
@@ -286,6 +286,12 @@ struct ReaShootMacCLI {
             "byteCount=\(recording.byteCount)",
             "downloadPath=\(recording.downloadPath)"
         ]
+        if let createdAt = recording.createdAt {
+            fields.append("createdAt=\(createdAt)")
+        }
+        if let thumbnailPath = recording.thumbnailPath {
+            fields.append("thumbnailPath=\(thumbnailPath)")
+        }
         if let checksum = recording.checksumSHA256 {
             fields.append("checksum=\(checksum)")
         }

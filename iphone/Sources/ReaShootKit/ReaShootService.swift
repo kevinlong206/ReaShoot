@@ -207,7 +207,9 @@ public final class ReaShootService: ObservableObject {
             filename: recording.url.lastPathComponent,
             byteCount: recording.byteCount,
             checksumSHA256: recording.checksumSHA256,
-            downloadPath: "/recordings/\(recording.id)"
+            downloadPath: "/recordings/\(recording.id)",
+            createdAt: ISO8601DateFormatter().string(from: recording.createdAt),
+            thumbnailPath: "/recordings/\(recording.id)/thumbnail"
         )
     }
 

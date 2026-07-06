@@ -29,6 +29,8 @@ struct ProtocolRecording {
   bool hasDurationSeconds = false;
   std::string checksumSHA256;
   std::string downloadPath;
+  std::string createdAt;
+  std::string thumbnailPath;
 };
 
 struct ProtocolPreview {

@@ -17,7 +17,7 @@ struct RemoteCameraSettings {
   std::string token;
   std::string resolution = "4K";
   std::string fps = "30";
-  std::string orientation = "portrait";
+  std::string orientation = "auto";
   std::string aspect = "9:16";
   std::string lens = "wide";
   std::string zoom = "1.0";
@@ -30,6 +30,8 @@ struct RemoteRecordingDescriptor {
   std::string byteCount = "0";
   std::string downloadPath;
   std::string checksum;
+  std::string createdAt;
+  std::string thumbnailPath;
 };
 
 struct PreviewStreamDescriptor {

@@ -66,7 +66,7 @@ void printHelp() {
       << "reashoot helper commands:\n"
       << "  discover [--timeout 3]\n"
       << "  pair --host HOST [--port 8787] [--client-name NAME]\n"
-      << "  configure --host HOST [--port 8787] --token TOKEN [--resolution 4K] [--fps 30] [--orientation portrait] [--aspect 9:16] [--lens wide] [--zoom 1.0] [--look natural]\n"
+      << "  configure --host HOST [--port 8787] --token TOKEN [--resolution 4K] [--fps 30] [--orientation auto] [--aspect 9:16] [--lens wide] [--zoom 1.0] [--look natural]\n"
       << "  start --host HOST [--port 8787] --token TOKEN [--session SESSION]\n"
       << "  stop --host HOST [--port 8787] [--http-port 8788] --token TOKEN [--download-dir DIR] [--progress]\n"
       << "  stop-only --host HOST [--port 8787] --token TOKEN\n"
@@ -124,6 +124,12 @@ void printRecording(const reashoot::core::ProtocolRecording &recording) {
             << "\tfilename=" << recording.filename
             << "\tbyteCount=" << recording.byteCount
             << "\tdownloadPath=" << recording.downloadPath;
+  if (!recording.createdAt.empty()) {
+    std::cout << "\tcreatedAt=" << recording.createdAt;
+  }
+  if (!recording.thumbnailPath.empty()) {
+    std::cout << "\tthumbnailPath=" << recording.thumbnailPath;
+  }
   if (!recording.checksumSHA256.empty()) {
     std::cout << "\tchecksum=" << recording.checksumSHA256;
   }

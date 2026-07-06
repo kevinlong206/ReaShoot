@@ -92,6 +92,8 @@ RemoteRecordingDescriptor recordingDescriptorFromFields(const FieldMap &fields) 
   }
   descriptor.downloadPath = value("downloadPath");
   descriptor.checksum = value("checksum");
+  descriptor.createdAt = value("createdAt");
+  descriptor.thumbnailPath = value("thumbnailPath");
   return descriptor;
 }
 

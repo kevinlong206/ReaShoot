@@ -1,6 +1,8 @@
 #if os(iOS)
+import AVFoundation
 import Foundation
 import Network
+import UIKit
 #if canImport(ReaShootCore)
 import ReaShootCore
 #endif
@@ -71,8 +73,17 @@ final class HTTPRecordingServer {
         }
 
         let parts = components.path.split(separator: "/")
-        guard parts.count == 2, parts[0] == "recordings",
+        guard parts.count >= 2, parts.count <= 3, parts[0] == "recordings",
               let recording = store.recording(id: String(parts[1])) else {
+            send(status: 404, body: Data("Not found".utf8), contentType: "text/plain", on: connection)
+            return
+        }
+
+        if parts.count == 3, parts[2] == "thumbnail" {
+            sendThumbnail(for: recording.url, on: connection)
+            return
+        }
+        guard parts.count == 2 else {
             send(status: 404, body: Data("Not found".utf8), contentType: "text/plain", on: connection)
             return
         }
@@ -115,7 +126,6 @@ final class HTTPRecordingServer {
             send(status: 404, body: Data("Not found".utf8), contentType: "text/plain", on: connection)
             return
         }
-
         let totalSize = fileSize.uint64Value
         let requestedRange = byteRange(from: rangeHeader, totalSize: totalSize)
         let start = min(requestedRange?.start ?? 0, totalSize)
@@ -150,6 +160,25 @@ final class HTTPRecordingServer {
             }
             self?.sendFileChunk(from: handle, remaining: length, on: connection)
         })
+    }
+
+    private func sendThumbnail(for url: URL, on connection: NWConnection) {
+        let asset = AVURLAsset(url: url)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 240, height: 160)
+        do {
+            let imageRef = try generator.copyCGImage(at: CMTime(seconds: 0.2, preferredTimescale: 600), actualTime: nil)
+            let image = UIImage(cgImage: imageRef)
+            guard let data = image.jpegData(compressionQuality: 0.72) else {
+                send(status: 404, body: Data("Thumbnail unavailable".utf8), contentType: "text/plain", on: connection)
+                return
+            }
+            send(status: 200, body: data, contentType: "image/jpeg", on: connection)
+        } catch {
+            DebugLog.write("thumbnail generation failed file=\(url.lastPathComponent) error=\(error.localizedDescription)")
+            send(status: 404, body: Data("Thumbnail unavailable".utf8), contentType: "text/plain", on: connection)
+        }
     }
 
     private func sendFileChunk(from handle: FileHandle, remaining: UInt64, on connection: NWConnection) {

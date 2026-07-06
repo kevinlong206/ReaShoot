@@ -384,6 +384,8 @@ private final class PreviewFrameStore: NSObject, AVCaptureVideoDataOutputSampleB
     private var minimumFrameInterval: TimeInterval = 1.0 / 12.0
     private var look = "natural"
     private var orientation = "portrait"
+    private var aspectRatio = "9:16"
+    private var lastResolvedOrientation = "portrait"
     private let maximumDimension: CGFloat = 640
 
     func setTargetFPS(_ fps: Double) {
@@ -404,6 +406,12 @@ private final class PreviewFrameStore: NSObject, AVCaptureVideoDataOutputSampleB
         lock.unlock()
     }
 
+    func setAspectRatio(_ aspectRatio: String) {
+        lock.lock()
+        self.aspectRatio = aspectRatio
+        lock.unlock()
+    }
+
     func setSampleBufferConsumer(_ consumer: ((CVPixelBuffer, CMTime, UInt64, String) -> Void)?) {
         lock.lock()
         sampleBufferConsumer = consumer
@@ -416,7 +424,9 @@ private final class PreviewFrameStore: NSObject, AVCaptureVideoDataOutputSampleB
         let interval = minimumFrameInterval
         let consumer = sampleBufferConsumer
         let look = look
-        let orientation = resolvedOrientation(orientation)
+        let orientation = resolvedOrientation(orientation, fallback: lastResolvedOrientation)
+        let aspectRatio = aspectRatio
+        lastResolvedOrientation = orientation
         lock.unlock()
         guard now.timeIntervalSince(lastFrameTime) >= interval else {
             return
@@ -430,7 +440,10 @@ private final class PreviewFrameStore: NSObject, AVCaptureVideoDataOutputSampleB
             return
         }
 
-        let image = normalizedImage(VideoLook.apply(look, to: CIImage(cvPixelBuffer: pixelBuffer)), orientation: orientation)
+        let image = aspectCroppedImage(
+            normalizedImage(VideoLook.apply(look, to: CIImage(cvPixelBuffer: pixelBuffer)), orientation: orientation),
+            aspectRatio: aspectRatio
+        )
         let width = image.extent.width
         let height = image.extent.height
         let scale = min(1.0, maximumDimension / max(width, height))
@@ -472,24 +485,57 @@ private final class PreviewFrameStore: NSObject, AVCaptureVideoDataOutputSampleB
         let propertyOrientation: CGImagePropertyOrientation
         switch orientation.lowercased() {
         case "landscapeleft":
-            propertyOrientation = .up
-        case "landscaperight", "landscape":
             propertyOrientation = .down
+        case "landscaperight", "landscape":
+            propertyOrientation = .up
         case "portraitupsidedown":
-            propertyOrientation = .left
-        default:
             propertyOrientation = .right
+        default:
+            propertyOrientation = .left
         }
         let oriented = image.oriented(propertyOrientation)
         let extent = oriented.extent
         return oriented.transformed(by: CGAffineTransform(translationX: -extent.origin.x, y: -extent.origin.y))
     }
 
-    private func resolvedOrientation(_ orientation: String) -> String {
+    private func aspectCroppedImage(_ image: CIImage, aspectRatio: String) -> CIImage {
+        guard let targetAspect = parsedAspectRatio(aspectRatio), targetAspect > 0 else {
+            return image
+        }
+        let extent = image.extent
+        guard extent.width > 0, extent.height > 0 else {
+            return image
+        }
+        let currentAspect = extent.width / extent.height
+        guard abs(currentAspect - targetAspect) > 0.001 else {
+            return image
+        }
+        var crop = extent
+        if currentAspect > targetAspect {
+            crop.size.width = extent.height * targetAspect
+            crop.origin.x += (extent.width - crop.width) * 0.5
+        } else {
+            crop.size.height = extent.width / targetAspect
+            crop.origin.y += (extent.height - crop.height) * 0.5
+        }
+        let cropped = image.cropped(to: crop)
+        let croppedExtent = cropped.extent
+        return cropped.transformed(by: CGAffineTransform(translationX: -croppedExtent.origin.x, y: -croppedExtent.origin.y))
+    }
+
+    private func parsedAspectRatio(_ aspectRatio: String) -> CGFloat? {
+        let parts = aspectRatio.split(separator: ":", maxSplits: 1).compactMap { Double($0) }
+        guard parts.count == 2, parts[0] > 0, parts[1] > 0 else {
+            return nil
+        }
+        return CGFloat(parts[0] / parts[1])
+    }
+
+    private func resolvedOrientation(_ orientation: String, fallback: String) -> String {
         guard orientation.lowercased() == "auto" else {
             return orientation
         }
-        return PhysicalOrientation.current(fallback: "portrait")
+        return PhysicalOrientation.current(fallback: fallback)
     }
 }
 
@@ -608,6 +654,7 @@ public final class CaptureRecordingEngine: NSObject, ObservableObject {
         normalizedProfile.look = normalizedLook(profile.look)
         previewFrameStore.setLook(normalizedProfile.look)
         previewFrameStore.setOrientation(normalizedProfile.orientation)
+        previewFrameStore.setAspectRatio(normalizedProfile.aspectRatio)
         guard isConfigured else {
             currentProfile = normalizedProfile
             return
