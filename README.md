@@ -15,8 +15,9 @@ The older REAPER extension remains in this repository as a legacy/secondary targ
 - Starts and stops iPhone video capture from the desktop.
 - Lets you choose resolution, FPS, orientation, aspect ratio, lens, zoom, and look.
 - Prompts to download or delete each stopped take.
+- Shows videos still stored on the iPhone in a `Videos on iPhone` window.
 - Downloads verified `.mov` files to `~/Movies/ReaShoot` by default.
-- Keeps failed or canceled transfers pending on the iPhone for later recovery.
+- Keeps failed or canceled transfers stored on the iPhone for later recovery.
 
 ## Requirements
 
@@ -37,7 +38,7 @@ Only iOS devices are supported as cameras today. Keep the iPhone app open in the
 5. Click `Pair` on the Mac, then accept the pairing request shown on the iPhone.
 6. Click `Start Preview` to frame the shot.
 7. Choose capture settings, then click `Start Recording`.
-8. Click `Stop Recording`, then choose `Download` or `Delete`.
+8. Click the same recording button again to stop, then choose `Download` or `Delete`.
 
 ## Pairing your phone
 
@@ -49,11 +50,11 @@ The Mac app makes Bonjour discovery prominent and keeps manual host/IP entry as 
 
 The preview uses an authenticated H.264 WebSocket stream from the iPhone. The desktop app starts preview through the control channel, connects to the returned preview socket, decodes frames on macOS with VideoToolbox, and displays them in the app window.
 
-When recording stops, the desktop app first receives pending recording metadata from the phone, then prompts before doing any download/delete action. Non-natural looks are prepared on the iPhone only after you choose to download.
+When recording stops, the desktop app first receives recording metadata from the phone, then prompts before doing any download/delete action. Non-natural looks are prepared on the iPhone only after you choose to download.
 
 ## Recovering recordings
 
-If a download fails, is canceled, or cannot be acknowledged, the iPhone keeps the recording instead of deleting it. Use `Pending...` in the desktop app to recover a pending clip and either download or delete it.
+If a download fails, is canceled, or cannot be acknowledged, the iPhone keeps the recording instead of deleting it. Use `Videos on iPhone` in the desktop app to review stored phone videos and either download or delete them.
 
 After the desktop app verifies a downloaded movie and acknowledges the transfer, the iPhone app deletes its local copy.
 
@@ -73,6 +74,6 @@ Click `Pair` in the Mac app and accept the request on the iPhone. If the phone r
 
 ### A download failed
 
-Use `Pending...` to recover the recording from the iPhone. Failed or canceled transfers remain pending until the desktop app verifies the movie and acknowledges the transfer.
+Use `Videos on iPhone` to recover the recording from the iPhone. Failed or canceled transfers remain on the phone until the desktop app verifies the movie and acknowledges the transfer.
 
 For build instructions, architecture notes, validation commands, and contribution guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).

@@ -1,5 +1,6 @@
 build/
 build-cmake/
+build-desktop/
 helper/.build/
 iphone/.build/
 iphone/Apps/ReaShoot/GeneratedBuildInfo.swift

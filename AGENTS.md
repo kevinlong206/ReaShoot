@@ -7,7 +7,7 @@ This branch contains ReaShoot as a standalone desktop app plus its companion iPh
 - The macOS desktop app currently uses native Cocoa/Objective-C++; keep it thin over shared C++ workflow code. The preferred modern UI direction is SwiftUI on macOS and WinUI 3 on Windows over the same shared controller/state layer.
 - The iPhone app lives in `iphone/` and records full-quality iPhone video while the desktop app controls it over the local Wi-Fi/Bonjour network.
 - The desktop app controls the iPhone over WebSocket port `8787`, downloads recordings over HTTP port `8788`, and receives preview video over an authenticated H.264 WebSocket stream on port `8789`.
-- Keep desktop workflow logic cross-platform-friendly so future Windows desktop support can reuse protocol, discovery, control, preview transport, download, pending-recording, and capture-profile behavior.
+- Keep desktop workflow logic cross-platform-friendly so future Windows desktop support can reuse protocol, discovery, control, preview transport, download, stored-recording management, and capture-profile behavior.
 - The REAPER extension remains in the repo for legacy users. Keep it buildable where practical, but do not put new standalone desktop behavior behind REAPER APIs, SWELL controls, REAPER transport, track insertion, or audio alignment.
 - `iphone/` is the source of truth for the iPhone app; do not recreate old external development copies.
 
@@ -77,12 +77,12 @@ rm -rf iphone/Package.resolved iphone/.build helper/.build
 
 ## Current desktop behavior
 
-- `ReaShoot.app` provides a native macOS window with live preview, host discovery/manual entry, pairing, capture settings, start/stop recording controls, pending restore, and download destination selection.
+- `ReaShoot.app` provides a native macOS window with live preview, host discovery/manual entry, request-based pairing, capture settings, consolidated start/stop recording control, a `Videos on iPhone` manager, and download destination selection.
 - Discovery should be prominent, with manual host/IP fallback.
 - Pairing is request-based: desktop clients send `pair` with `metadata.clientName`, the iPhone asks `Accept pairing request from <clientName>`, and accepting replaces the single stored paired computer/token.
 - Downloads default to `~/Movies/ReaShoot` and should be user-changeable.
 - Stop flow should remain safe: send `stop-only`, show Download/Delete/Cancel, prepare/download only after Download, and acknowledge transfer only after verifying the downloaded file.
-- Failed/canceled downloads remain pending on the phone because the Mac only sends transfer acknowledgement after verifying the downloaded file.
+- Failed/canceled downloads remain on the phone because the Mac only sends transfer acknowledgement after verifying the downloaded file. Use `Videos on iPhone` to download or delete stored phone videos.
 - The first desktop milestone reveals downloaded files in Finder; a local recordings library/player is deferred.
 - Pairing tokens are credentials. Do not write them into docs or source, and do not commit them.
 
