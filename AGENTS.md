@@ -79,6 +79,7 @@ rm -rf iphone/Package.resolved iphone/.build helper/.build
 
 - `ReaShoot.app` provides a native macOS window with live preview, host discovery/manual entry, pairing, capture settings, start/stop recording controls, pending restore, and download destination selection.
 - Discovery should be prominent, with manual host/IP fallback.
+- Pairing is request-based: desktop clients send `pair` with `metadata.clientName`, the iPhone asks `Accept pairing request from <clientName>`, and accepting replaces the single stored paired computer/token.
 - Downloads default to `~/Movies/ReaShoot` and should be user-changeable.
 - Stop flow should remain safe: send `stop-only`, show Download/Delete/Cancel, prepare/download only after Download, and acknowledge transfer only after verifying the downloaded file.
 - Failed/canceled downloads remain pending on the phone because the Mac only sends transfer acknowledgement after verifying the downloaded file.

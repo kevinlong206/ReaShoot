@@ -16,8 +16,7 @@ struct ContentView: View {
             Form {
                 Section("Status") {
                     LabeledContent("Network", value: service.status)
-                    LabeledContent("Pairing code", value: service.pairingStore.pairingCode)
-                    LabeledContent("Paired", value: service.pairingStore.isPaired ? "Yes" : "No")
+                    LabeledContent("Paired computer", value: service.pairingStore.pairedClientName ?? "None")
                     LabeledContent("Preview", value: service.previewStatus)
                     LabeledContent("Recording", value: recordingStatus)
                     LabeledContent("Profile", value: service.capture.currentProfile.displayName)
@@ -70,6 +69,20 @@ struct ContentView: View {
                     .background(.bar)
             }
             .confirmationDialog(
+                pairingRequestTitle,
+                isPresented: isShowingPairingRequest,
+                titleVisibility: .visible
+            ) {
+                Button("Accept", role: .none) {
+                    service.acceptPairingRequest()
+                }
+                Button("Reject", role: .cancel) {
+                    service.rejectPairingRequest()
+                }
+            } message: {
+                Text("Only one computer can be paired at a time. Accepting this request replaces the current paired computer.")
+            }
+            .confirmationDialog(
                 "Delete pending video?",
                 isPresented: isShowingDeleteConfirmation,
                 titleVisibility: .visible
@@ -87,6 +100,21 @@ struct ContentView: View {
                 Text("This removes the video from the iPhone without downloading it.")
             }
         }
+    }
+
+    private var pairingRequestTitle: String {
+        "Accept pairing request from \(service.pendingPairingRequest?.clientName ?? "Unknown computer")"
+    }
+
+    private var isShowingPairingRequest: Binding<Bool> {
+        Binding(
+            get: { service.pendingPairingRequest != nil },
+            set: { isPresented in
+                if !isPresented {
+                    service.rejectPairingRequest()
+                }
+            }
+        )
     }
 
     private var isShowingDeleteConfirmation: Binding<Bool> {

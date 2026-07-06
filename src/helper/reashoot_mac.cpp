@@ -12,6 +12,12 @@
 #include <thread>
 #include <vector>
 
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
+
 namespace {
 
 class CLIArguments {
@@ -59,7 +65,7 @@ void printHelp() {
   std::cout
       << "reashoot helper commands:\n"
       << "  discover [--timeout 3]\n"
-      << "  pair --host HOST [--port 8787] --code CODE\n"
+      << "  pair --host HOST [--port 8787] [--client-name NAME]\n"
       << "  configure --host HOST [--port 8787] --token TOKEN [--resolution 4K] [--fps 30] [--orientation portrait] [--aspect 9:16] [--lens wide] [--zoom 1.0] [--look natural]\n"
       << "  start --host HOST [--port 8787] --token TOKEN [--session SESSION]\n"
       << "  stop --host HOST [--port 8787] [--http-port 8788] --token TOKEN [--download-dir DIR] [--progress]\n"
@@ -71,6 +77,32 @@ void printHelp() {
       << "  ping --host HOST [--port 8787] [--token TOKEN]\n"
       << "  start-preview --host HOST [--port 8787] --token TOKEN\n"
       << "  stop-preview --host HOST [--port 8787] --token TOKEN\n";
+}
+
+std::string defaultClientName() {
+  const char *environmentName =
+#ifdef _WIN32
+      std::getenv("COMPUTERNAME");
+#else
+      std::getenv("HOSTNAME");
+#endif
+  if (environmentName && environmentName[0]) {
+    return environmentName;
+  }
+#ifdef _WIN32
+  char windowsName[MAX_COMPUTERNAME_LENGTH + 1] = {};
+  DWORD size = sizeof(windowsName);
+  if (GetComputerNameA(windowsName, &size) && windowsName[0]) {
+    return windowsName;
+  }
+  return "Windows PC";
+#else
+  char buffer[256] = {};
+  if (gethostname(buffer, sizeof(buffer) - 1) == 0 && buffer[0]) {
+    return buffer;
+  }
+  return "Mac";
+#endif
 }
 
 void runDiscovery(const CLIArguments &args) {
@@ -195,7 +227,15 @@ reashoot::core::ProtocolCommand commandForArgs(const CLIArguments &args) {
   reashoot::core::ProtocolCommand command;
   if (commandName == "pair") {
     command.type = "pair";
-    command.pairingCode = required(args, "--code");
+    std::string clientName = args.valueAfter("--client-name");
+    if (clientName.empty()) {
+      clientName = defaultClientName();
+    }
+    command.metadata["clientName"] = clientName;
+    const std::string legacyCode = args.valueAfter("--code");
+    if (!legacyCode.empty()) {
+      command.pairingCode = legacyCode;
+    }
   } else if (commandName == "configure") {
     command.type = "configureCapture";
     command.token = required(args, "--token");
@@ -364,7 +404,7 @@ int main(int argc, char **argv) {
     const std::string host = required(args, "--host");
     const int port = args.intAfter("--port", 8787);
     const bool canWaitForEncoding = command == "prepare-recording" || command == "download-recording" || command == "stop";
-    const reashoot::helper::ControlClient client(host, port, canWaitForEncoding ? 900 : 20);
+    const reashoot::helper::ControlClient client(host, port, canWaitForEncoding ? 900 : (command == "pair" ? 120 : 20));
     if (command == "download-recording") {
       runDownloadRecording(args, client, host, required(args, "--token"));
       return 0;

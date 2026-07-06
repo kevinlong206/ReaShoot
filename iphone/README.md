@@ -30,7 +30,7 @@ xcodebuild \
   build
 ```
 
-The bundle identifier is `com.kevinlong.reashoot`. iOS treats this as a separate app from older personal-device installs, so old pairing state and pending recordings will not migrate automatically.
+The bundle identifier is `com.kevinlong.reashoot`. iOS treats this as a separate app from older personal-device installs, so old pairing state and pending recordings will not migrate automatically. The app displays the currently paired computer and only keeps one paired computer at a time.
 
 ## App Store Connect upload
 
@@ -52,23 +52,19 @@ Scripts/app-store-upload.sh --export-only --marketing-version 1.0
 
 ## End-to-end smoke test
 
-Keep the iPhone unlocked with the app in the foreground. Set the current pairing token in your shell without committing it:
-
-```sh
-export REASHOOT_TOKEN='...'
-```
-
-Then run:
+Keep the iPhone unlocked with the app in the foreground, then run:
 
 ```sh
 swift run reashoot-mac ping --host kevin-long-iphone.local --port 8787
+PAIR_OUTPUT="$(swift run reashoot-mac pair --host kevin-long-iphone.local --port 8787 --client-name "My Mac")"
+export REASHOOT_TOKEN="${PAIR_OUTPUT#paired token=}"
 swift run reashoot-mac configure --host kevin-long-iphone.local --port 8787 --token "$REASHOOT_TOKEN" --lens ultrawide --zoom 0.5 --look warmVintage
 swift run reashoot-mac start --host kevin-long-iphone.local --port 8787 --token "$REASHOOT_TOKEN" --session smoke-test
 sleep 3
 swift run reashoot-mac stop --host kevin-long-iphone.local --port 8787 --http-port 8788 --token "$REASHOOT_TOKEN" --download-dir test-downloads
 ```
 
-Expected result: the CLI prints a downloaded `.mov` path in `test-downloads`, then acknowledges transfer so the iPhone deletes its local copy. Add `--progress` to the `stop` command to print transfer progress lines during on-phone look encoding and movie download. The standalone desktop app and legacy REAPER extension use the safer prompted stop flow: `stop-only` returns raw pending recording metadata immediately, while `download-recording` prepares/encodes only after Download is chosen. If a download fails before acknowledgement, the recording remains pending on the phone and can be restored with `list-recordings` plus `download-recording`, deleted through the helper, or deleted directly in the iPhone app's Recordings section.
+Expected result: `pair` shows an iPhone dialog saying `Accept pairing request from My Mac`; after accepting, the CLI prints a token that the example exports as `REASHOOT_TOKEN`. The stop command prints a downloaded `.mov` path in `test-downloads`, then acknowledges transfer so the iPhone deletes its local copy. Add `--progress` to the `stop` command to print transfer progress lines during on-phone look encoding and movie download. The standalone desktop app and legacy REAPER extension use the safer prompted stop flow: `stop-only` returns raw pending recording metadata immediately, while `download-recording` prepares/encodes only after Download is chosen. If a download fails before acknowledgement, the recording remains pending on the phone and can be restored with `list-recordings` plus `download-recording`, deleted through the helper, or deleted directly in the iPhone app's Recordings section.
 
 ## Preview
 

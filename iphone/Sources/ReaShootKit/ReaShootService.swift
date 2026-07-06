@@ -38,12 +38,23 @@ enum DebugLog {
     }
 }
 
+public struct PairingRequest: Identifiable, Equatable, Sendable {
+    public let id: UUID
+    public let clientName: String
+
+    public init(id: UUID = UUID(), clientName: String) {
+        self.id = id
+        self.clientName = clientName
+    }
+}
+
 @MainActor
 public final class ReaShootService: ObservableObject {
     @Published public private(set) var status = "Stopped"
     @Published public private(set) var previewStatus = "Idle"
     @Published public private(set) var lastError: String?
     @Published public private(set) var keepsScreenAwake = false
+    @Published public private(set) var pendingPairingRequest: PairingRequest?
 
     public let store: RecordingStore
     public let pairingStore: PairingStore
@@ -59,6 +70,7 @@ public final class ReaShootService: ObservableObject {
     private var previewClientCount = 0
     private var netService: NetService?
     private var cancellables: Set<AnyCancellable> = []
+    private var pairingApprovalContinuation: CheckedContinuation<Bool, Never>?
 
     public init(controlPort: UInt16 = 8787, httpPort: UInt16 = 8788, previewPort: UInt16 = 8789) throws {
         self.controlPort = controlPort
@@ -231,9 +243,13 @@ public final class ReaShootService: ObservableObject {
     private func dispatchControlCommand(_ command: ControlCommand) async throws -> Data {
         switch command.type {
         case .pair:
-            let token = try pairingStore.pair(code: command.pairingCode ?? "")
+            let clientName = clientName(from: command)
+            guard await requestPairingApproval(from: clientName) else {
+                return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .error, message: "Pairing rejected"))
+            }
+            let token = try pairingStore.pair(clientName: clientName)
             updateBonjourTXTRecord()
-            return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .paired, token: token, message: "Paired"))
+            return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .paired, token: token, message: "Paired with \(clientName)"))
         case .ping:
             return try ProtocolCodec.encodeEvent(ControlEvent(
                 requestID: command.requestID,
@@ -323,6 +339,70 @@ public final class ReaShootService: ObservableObject {
             updatePreviewStatus()
             return try ProtocolCodec.encodeEvent(ControlEvent(requestID: command.requestID, type: .previewStopped, message: "Preview stopped"))
         }
+    }
+
+    private func clientName(from command: ControlCommand) -> String {
+        let candidates = [
+            command.metadata["clientName"],
+            command.metadata["hostName"],
+            command.metadata["hostname"]
+        ]
+        for candidate in candidates {
+            let trimmed = (candidate ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                return String(trimmed.prefix(80))
+            }
+        }
+        return "Unknown computer"
+    }
+
+    private func requestPairingApproval(from clientName: String) async -> Bool {
+        if pendingPairingRequest != nil || pairingApprovalContinuation != nil {
+            DebugLog.write("pairing request rejected because another request is pending")
+            return false
+        }
+        return await withCheckedContinuation { continuation in
+            let request = PairingRequest(clientName: clientName)
+            DebugLog.write("pairing request pending client=\(clientName)")
+            pairingApprovalContinuation = continuation
+            pendingPairingRequest = request
+            Task { [weak self, requestID = request.id] in
+                try? await Task.sleep(nanoseconds: 110_000_000_000)
+                self?.expirePairingRequest(id: requestID)
+            }
+        }
+    }
+
+    public func acceptPairingRequest() {
+        guard let continuation = pairingApprovalContinuation else {
+            pendingPairingRequest = nil
+            return
+        }
+        DebugLog.write("pairing request accepted client=\(pendingPairingRequest?.clientName ?? "unknown")")
+        pairingApprovalContinuation = nil
+        pendingPairingRequest = nil
+        continuation.resume(returning: true)
+    }
+
+    public func rejectPairingRequest() {
+        guard let continuation = pairingApprovalContinuation else {
+            pendingPairingRequest = nil
+            return
+        }
+        DebugLog.write("pairing request rejected client=\(pendingPairingRequest?.clientName ?? "unknown")")
+        pairingApprovalContinuation = nil
+        pendingPairingRequest = nil
+        continuation.resume(returning: false)
+    }
+
+    private func expirePairingRequest(id: UUID) {
+        guard pendingPairingRequest?.id == id, let continuation = pairingApprovalContinuation else {
+            return
+        }
+        DebugLog.write("pairing request expired client=\(pendingPairingRequest?.clientName ?? "unknown")")
+        pairingApprovalContinuation = nil
+        pendingPairingRequest = nil
+        continuation.resume(returning: false)
     }
 
     private func startPreviewStream() throws -> PreviewDescriptor {

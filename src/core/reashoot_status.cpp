@@ -28,7 +28,7 @@ std::string controlConnectionHelp(const std::string &status) {
   std::string message =
       "Could not connect to the iPhone control socket. Make sure the ReaShoot iOS app is open in the foreground, "
       "the iPhone is unlocked, and the phone and this computer are on the same Wi-Fi network. Then try Reconnect. "
-      "If the iPhone shows a new pairing code or you recently reset pairing, pair again from Setup.";
+      "If you recently reset pairing, pair again and accept the request on the iPhone.";
   if (!detail.empty()) {
     message += " Details: " + detail;
   }
@@ -48,13 +48,13 @@ std::string friendlyStatusText(const std::string &status) {
     return controlConnectionHelp(status);
   }
   if (normalized.find("unauthorized") != std::string::npos) {
-    return "iPhone authorization failed: reset pairing on the iPhone, enter the new code in Setup, then Pair again.";
+    return "iPhone authorization failed: reset pairing on the iPhone, then Pair again and accept the request on the iPhone.";
   }
   if (normalized.find("invalid pairing code") != std::string::npos) {
-    return "Invalid pairing code: check the six-digit code on the iPhone and press Pair again.";
+    return "Pairing failed: press Pair again and accept the request on the iPhone.";
   }
   if (normalized.find("connection closed") != std::string::npos) {
-    return "iPhone connection closed. If you reset pairing, enter the current code and Pair again.";
+    return "iPhone connection closed. If you reset pairing, press Pair again and accept the request on the iPhone.";
   }
   return status;
 }

@@ -109,7 +109,7 @@ constexpr int kLookComboHeight = 26;
 #endif
 bool g_usingLivePreview = false;
 bool g_previewPending = false;
-std::string g_previewMessage = "Preview unavailable: discover the iPhone, enter its pairing code, then Pair or Reconnect.";
+std::string g_previewMessage = "Preview unavailable: discover the iPhone, then Pair and accept the request.";
 std::string g_host;
 std::string g_token;
 std::string g_resolution = "4K";
@@ -160,7 +160,7 @@ struct SetupLayout {
   int windowWidth = 0;
 
   SetupLayout() {
-    leftLabelWidth = (std::max)(128, maxTextWidth({"Host", "Pair code", "Resolution", "Orientation"}) + 18);
+    leftLabelWidth = (std::max)(128, maxTextWidth({"Host", "Pairing", "Resolution", "Orientation"}) + 18);
     rightLabelWidth = (std::max)(84, maxTextWidth({"FPS", "Lens"}) + 18);
     leftControlX = margin + leftLabelWidth + labelGap;
     rightLabelX = leftControlX + leftControlWidth + columnGap;
@@ -650,7 +650,7 @@ void showSetupWindow() {
     makeLabel(0, "Host", -1, layout.margin, 194, layout.leftLabelWidth, layout.labelHeight, 0);
     makeEditField(kSetupHostField, layout.leftControlX, 192, fullRowControlWidth, layout.rowHeight, 0);
     makeButton(0, "Discover", kSetupDiscoverButton, layout.leftControlX + fullRowControlWidth + layout.labelGap, 192, discoverWidth, layout.rowHeight, 0);
-    makeLabel(0, "Pair code", -1, layout.margin, 156, layout.leftLabelWidth, layout.labelHeight, 0);
+    makeLabel(0, "Pairing", -1, layout.margin, 156, layout.leftLabelWidth, layout.labelHeight, 0);
     makeEditField(kSetupPairingCodeField, layout.leftControlX, 154, pairCodeWidth, layout.rowHeight, 0);
     makeButton(0, "Pair", kSetupPairButton, layout.leftControlX + pairCodeWidth + layout.labelGap, 154, pairWidth, layout.rowHeight, 0);
     makeButton(0, "Reconnect", kSetupTestButton, layout.leftControlX + pairCodeWidth + layout.labelGap + pairWidth + layout.labelGap, 154, reconnectWidth, layout.rowHeight, 0);

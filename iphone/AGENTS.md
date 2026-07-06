@@ -35,6 +35,8 @@ The app disables the idle timer while ready/listening so foreground preview does
 
 The ReaShoot bundle ID is `com.kevinlong.reashoot`. iOS treats it as a separate app from old personal-device installs that used `older bundle identifiers`; do not assume pairing state or pending recordings migrate automatically.
 
+The iPhone app shows the currently paired computer and keeps only one paired computer at a time. Pairing is request-based: desktop clients send a `pair` command with `metadata.clientName`, and the iPhone UI asks `Accept pairing request from <clientName>` before issuing/replacing the token.
+
 ## Build and test commands
 
 Run package tests:
@@ -116,6 +118,12 @@ Keep the iPhone unlocked with the ReaShoot app open in the foreground, then run:
 
 ```sh
 swift run reashoot-mac ping --host kevin-long-iphone.local --port 8787
+
+PAIR_OUTPUT="$(swift run reashoot-mac pair \
+  --host kevin-long-iphone.local \
+  --port 8787 \
+  --client-name "My Mac")"
+export REASHOOT_TOKEN="${PAIR_OUTPUT#paired token=}"
 
 swift run reashoot-mac configure \
   --host kevin-long-iphone.local \

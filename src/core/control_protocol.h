@@ -3,6 +3,7 @@
 #include "json_value.h"
 
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -50,6 +51,7 @@ struct ProtocolCommand {
   std::string pairingCode;
   std::string sessionID;
   std::string recordingID;
+  std::map<std::string, std::string> metadata;
   bool hasCaptureProfile = false;
   ProtocolCaptureProfile captureProfile;
 };

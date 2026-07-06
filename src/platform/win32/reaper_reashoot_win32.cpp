@@ -343,7 +343,7 @@ void updatePanel() {
   } else if (g_activeTransportRecording) {
     status = "Recording iPhone video";
   } else if (g_iPhoneToken.empty()) {
-    status = "Discover the iPhone, enter the pairing code, then Pair";
+    status = "Discover the iPhone, then Pair and accept the request";
   } else {
     status = "Ready";
   }
@@ -588,14 +588,13 @@ void discoverPhone() {
 
 void pairPhone() {
   readPanelSettings();
-  reashoot::platform::swell::SwellPanelSettings panelSettings = reashoot::platform::swell::swellPanelSettings(g_panel);
-  if (g_iPhoneHost.empty() || panelSettings.pairingCode[0] == '\0') {
-    showError("Enter the iPhone host and pairing code first.");
+  if (g_iPhoneHost.empty()) {
+    showError("Enter or discover the iPhone host first.");
     return;
   }
   reashoot::core::RemoteCameraSettings settings = cameraSettings();
   runHelperOnWorker("pair",
-                    reashoot::core::commandArguments(settings, "pair", {"--code", panelSettings.pairingCode}),
+                    reashoot::core::commandArguments(settings, "pair"),
                     [](reashoot::core::CommandResult result) {
                       if (result.exitCode != 0) {
                         showError(resultError(result, "iPhone pairing failed."));
@@ -822,7 +821,7 @@ void startRemotePreview() {
     return;
   }
   if (g_iPhoneHost.empty() || g_iPhoneToken.empty()) {
-    reashoot::platform::swell::setSwellPanelPreviewPending(g_panel, "Preview unavailable: discover the iPhone, enter its pairing code, then Pair.");
+    reashoot::platform::swell::setSwellPanelPreviewPending(g_panel, "Preview unavailable: discover the iPhone, then Pair and accept the request.");
     return;
   }
   if (g_previewStreamStarting || g_previewStreamActive) {

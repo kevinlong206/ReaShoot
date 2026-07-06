@@ -127,7 +127,7 @@ std::string controlSocketConnectionError(const std::string &detail) {
   std::string message =
       "Could not connect to the iPhone control socket. Make sure the ReaShoot iOS app is open in the foreground, "
       "the iPhone is unlocked, and the phone and this computer are on the same Wi-Fi network. Then try Reconnect. "
-      "If the iPhone shows a new pairing code or you recently reset pairing, pair again from Setup.";
+      "If you recently reset pairing, pair again and accept the request on the iPhone.";
   if (!detail.empty()) {
     message += " Details: " + detail;
   }

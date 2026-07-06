@@ -26,8 +26,8 @@ struct ReaShootMacCLI {
                 print("device\tname=\(device.name)\thost=\(device.host)\tcontrolPort=\(device.controlPort)\thttpPort=\(http)\tpaired=\(device.isPaired)")
             }
         case "pair":
-            let event = try await send(args, type: .pair, tokenRequired: false) {
-                ControlCommand(type: .pair, pairingCode: required(args.value(after: "--code"), "--code"))
+            let event = try await send(args, type: .pair, tokenRequired: false, timeoutSeconds: 120) {
+                ControlCommand(type: .pair, metadata: ["clientName": clientName(args)])
             }
             guard let token = event.token else {
                 throw ControlClientError.unexpectedEvent(event)
@@ -205,7 +205,7 @@ struct ReaShootMacCLI {
         print("""
         reashoot-mac commands:
           discover [--timeout 3]
-          pair --host HOST [--port 8787] --code CODE
+          pair --host HOST [--port 8787] [--client-name NAME]
           configure --host HOST [--port 8787] --token TOKEN [--resolution 4K] [--fps 30] [--orientation portrait] [--aspect 9:16] [--lens wide] [--zoom 1.0] [--look natural]
           start --host HOST [--port 8787] --token TOKEN [--session SESSION]
           stop --host HOST [--port 8787] [--http-port 8788] --token TOKEN [--download-dir DIR] [--progress]
@@ -225,6 +225,16 @@ struct ReaShootMacCLI {
         let percent = total > 0 ? min(100.0, (Double(bytes) / Double(total)) * 100.0) : 0.0
         let line = "progress bytes=\(bytes) total=\(total) percent=\(String(format: "%.1f", percent))\n"
         FileHandle.standardError.write(Data(line.utf8))
+    }
+
+    private static func clientName(_ args: CLIArguments) -> String {
+        if let clientName = args.value(after: "--client-name"), !clientName.isEmpty {
+            return clientName
+        }
+        if !ProcessInfo.processInfo.hostName.isEmpty {
+            return ProcessInfo.processInfo.hostName
+        }
+        return "Mac"
     }
 
     private static func prepareRecording(_ args: CLIArguments, token: String, recordingID: String) async throws -> RecordingDescriptor {

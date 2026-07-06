@@ -17,6 +17,8 @@
 #include <utility>
 #include <vector>
 
+#include <unistd.h>
+
 namespace {
 
 NSString *nsString(const std::string &value) {
@@ -137,6 +139,22 @@ std::string helperExecutablePath() {
   return stdString(sibling);
 }
 
+std::string localComputerName() {
+  NSString *localizedName = NSHost.currentHost.localizedName;
+  if (localizedName.length > 0) {
+    return stdString(localizedName);
+  }
+  NSString *hostName = NSHost.currentHost.name;
+  if (hostName.length > 0) {
+    return stdString(hostName);
+  }
+  char buffer[256] = {};
+  if (gethostname(buffer, sizeof(buffer) - 1) == 0 && buffer[0]) {
+    return buffer;
+  }
+  return "Mac";
+}
+
 NSButton *makeButton(NSString *title, id target, SEL action) {
   NSButton *button = [NSButton buttonWithTitle:title target:target action:action];
   button.bezelStyle = NSBezelStyleRounded;
@@ -252,9 +270,8 @@ NSPopUpButton *makePopup(NSArray<NSString *> *items) {
 @implementation ReaShootAppDelegate {
   NSWindow *_window;
   NSTextField *_hostField;
-  NSTextField *_tokenField;
-  NSTextField *_pairCodeField;
   NSTextField *_downloadField;
+  NSTextField *_pairedStatusLabel;
   NSPopUpButton *_resolutionPopup;
   NSPopUpButton *_fpsPopup;
   NSPopUpButton *_orientationPopup;
@@ -274,6 +291,7 @@ NSPopUpButton *makePopup(NSArray<NSString *> *items) {
   std::unique_ptr<reashoot::core::PreviewRenderer> _previewRenderer;
   reashoot::core::PreviewStreamDescriptor _previewDescriptor;
   std::shared_ptr<reashoot::core::AsyncCommandHandle> _activeCommand;
+  std::string _pairingToken;
   bool _recording;
   bool _previewRunning;
   uint64_t _previewAccessUnitCount;
@@ -360,8 +378,6 @@ NSPopUpButton *makePopup(NSArray<NSString *> *items) {
   [grid.widthAnchor constraintEqualToAnchor:root.widthAnchor constant:-32].active = YES;
 
   _hostField = makeField(@"kevin-long-iphone.local or IP address");
-  _pairCodeField = makeField(@"Pairing code");
-  _tokenField = makeField(@"Pairing token");
   _downloadField = makeField(@"Download folder");
   _zoomField = makeField(@"1.0");
   _resolutionPopup = makePopup(@[@"4K", @"1080p", @"720p"]);
@@ -379,9 +395,10 @@ NSPopUpButton *makePopup(NSArray<NSString *> *items) {
   NSButton *pendingButton = makeButton(@"Pending...", self, @selector(showPending:));
   NSButton *deleteAllButton = makeButton(@"Delete All Pending", self, @selector(deleteAllPending:));
   NSButton *chooseDownloadButton = makeButton(@"Choose...", self, @selector(chooseDownloadFolder:));
+  _pairedStatusLabel = makeLabel(@"Not paired");
 
-  [grid addRowWithViews:@[makeLabel(@"iPhone"), _hostField, discoverButton, makeLabel(@"Pair code"), _pairCodeField, pairButton]];
-  [grid addRowWithViews:@[makeLabel(@"Token"), _tokenField, makeLabel(@""), makeLabel(@"Downloads"), _downloadField, chooseDownloadButton]];
+  [grid addRowWithViews:@[makeLabel(@"iPhone"), _hostField, discoverButton, makeLabel(@"Pairing"), _pairedStatusLabel, pairButton]];
+  [grid addRowWithViews:@[makeLabel(@"Downloads"), _downloadField, chooseDownloadButton, makeLabel(@""), makeLabel(@""), makeLabel(@"")]];
   [grid addRowWithViews:@[makeLabel(@"Resolution"), _resolutionPopup, makeLabel(@"FPS"), _fpsPopup, makeLabel(@"Orientation"), _orientationPopup]];
   [grid addRowWithViews:@[makeLabel(@"Aspect"), _aspectPopup, makeLabel(@"Lens"), _lensPopup, makeLabel(@"Zoom"), _zoomField]];
   [grid addRowWithViews:@[makeLabel(@"Look"), _lookPopup, _previewButton, _startButton, _stopButton, pendingButton]];
@@ -391,8 +408,7 @@ NSPopUpButton *makePopup(NSArray<NSString *> *items) {
     [grid columnAtIndex:index].xPlacement = NSGridCellPlacementFill;
   }
   [_hostField.widthAnchor constraintLessThanOrEqualToConstant:300].active = YES;
-  [_tokenField.widthAnchor constraintLessThanOrEqualToConstant:300].active = YES;
-  [_pairCodeField.widthAnchor constraintLessThanOrEqualToConstant:140].active = YES;
+  [_pairedStatusLabel.widthAnchor constraintLessThanOrEqualToConstant:180].active = YES;
   [_downloadField.widthAnchor constraintLessThanOrEqualToConstant:360].active = YES;
   [_zoomField.widthAnchor constraintLessThanOrEqualToConstant:90].active = YES;
 
@@ -407,10 +423,13 @@ NSPopUpButton *makePopup(NSArray<NSString *> *items) {
   _hostField.stringValue = [defaults stringForKey:@"host"] ?: @"";
   _downloadField.stringValue = [defaults stringForKey:@"downloadDirectory"] ?: nsString(reashoot::desktop::defaultDownloadDirectory());
   _zoomField.stringValue = [defaults stringForKey:@"zoom"] ?: @"1.0";
-  debugLog(@"Loaded defaults host=%@ downloadDir=%@ zoom=%@",
+  _pairingToken = stdString([defaults stringForKey:@"pairingToken"] ?: @"");
+  [self updatePairingStatusLabel];
+  debugLog(@"Loaded defaults host=%@ downloadDir=%@ zoom=%@ token=%@",
            _hostField.stringValue,
            _downloadField.stringValue,
-           _zoomField.stringValue);
+           _zoomField.stringValue,
+           _pairingToken.empty() ? @"empty" : @"present");
 }
 
 - (void)saveDefaults {
@@ -418,16 +437,22 @@ NSPopUpButton *makePopup(NSArray<NSString *> *items) {
   [defaults setObject:_hostField.stringValue forKey:@"host"];
   [defaults setObject:_downloadField.stringValue forKey:@"downloadDirectory"];
   [defaults setObject:_zoomField.stringValue forKey:@"zoom"];
-  debugLog(@"Saved defaults host=%@ downloadDir=%@ zoom=%@",
+  if (_pairingToken.empty()) {
+    [defaults removeObjectForKey:@"pairingToken"];
+  } else {
+    [defaults setObject:nsString(_pairingToken) forKey:@"pairingToken"];
+  }
+  debugLog(@"Saved defaults host=%@ downloadDir=%@ zoom=%@ token=%@",
            _hostField.stringValue,
            _downloadField.stringValue,
-           _zoomField.stringValue);
+           _zoomField.stringValue,
+           _pairingToken.empty() ? @"empty" : @"present");
 }
 
 - (reashoot::core::RemoteCameraSettings)settings {
   reashoot::core::RemoteCameraSettings settings;
   settings.host = stdString(_hostField.stringValue);
-  settings.token = stdString(_tokenField.stringValue);
+  settings.token = _pairingToken;
   settings.resolution = stdString(_resolutionPopup.titleOfSelectedItem);
   settings.fps = stdString(_fpsPopup.titleOfSelectedItem);
   settings.orientation = stdString(_orientationPopup.titleOfSelectedItem);
@@ -436,6 +461,10 @@ NSPopUpButton *makePopup(NSArray<NSString *> *items) {
   settings.zoom = stdString(_zoomField.stringValue);
   settings.look = stdString(_lookPopup.titleOfSelectedItem);
   return settings;
+}
+
+- (void)updatePairingStatusLabel {
+  _pairedStatusLabel.stringValue = _pairingToken.empty() ? @"Not paired" : @"Paired";
 }
 
 - (void)setStatus:(NSString *)status {
@@ -466,9 +495,9 @@ NSPopUpButton *makePopup(NSArray<NSString *> *items) {
     [self setStatus:@"Enter or discover an iPhone host first."];
     return NO;
   }
-  if (_tokenField.stringValue.length == 0) {
+  if (_pairingToken.empty()) {
     debugLog(@"Missing token for authenticated action. host=%@", _hostField.stringValue);
-    [self setStatus:@"Pair with the iPhone or enter a token first."];
+    [self setStatus:@"Pair with the iPhone first."];
     return NO;
   }
   return YES;
@@ -542,16 +571,17 @@ NSPopUpButton *makePopup(NSArray<NSString *> *items) {
 
 - (void)pairPhone:(id)sender {
   (void)sender;
-  debugLog(@"Pair clicked host=%@ codeLength=%lu", _hostField.stringValue, static_cast<unsigned long>(_pairCodeField.stringValue.length));
-  if (_hostField.stringValue.length == 0 || _pairCodeField.stringValue.length == 0) {
-    [self setStatus:@"Enter the iPhone host and pairing code."];
+  if (_hostField.stringValue.length == 0) {
+    [self setStatus:@"Enter or discover an iPhone host first."];
     return;
   }
+  const std::string clientName = localComputerName();
+  debugLog(@"Pair clicked host=%@ clientName=%@", _hostField.stringValue, nsString(clientName));
   reashoot::core::RemoteCameraSettings settings = [self settings];
-  [self runCommand:@"Pairing with iPhone..."
+  [self runCommand:@"Pairing request sent. Accept it on the iPhone."
           settings:settings
            command:"pair"
-         arguments:{"--code", stdString(_pairCodeField.stringValue)}
+         arguments:{"--client-name", clientName}
         completion:^(reashoot::core::CommandResult result) {
     if (result.exitCode != 0) {
       [self setStatusFromResult:result fallback:@"Pairing failed."];
@@ -564,9 +594,10 @@ NSPopUpButton *makePopup(NSArray<NSString *> *items) {
       [self setStatus:@"Pairing response did not include a token."];
       return;
     }
-    _tokenField.stringValue = nsString(token->second);
+    _pairingToken = token->second;
+    [self updatePairingStatusLabel];
     [self saveDefaults];
-    [self setStatus:@"Paired. Token is kept in this session; store it securely if needed."];
+    [self setStatus:@"Paired with iPhone."];
   }];
 }
 
@@ -601,7 +632,7 @@ NSPopUpButton *makePopup(NSArray<NSString *> *items) {
     request.host = stdString(_hostField.stringValue);
     request.port = _previewDescriptor.port;
     request.path = _previewDescriptor.streamPath;
-    request.token = stdString(_tokenField.stringValue);
+    request.token = _pairingToken;
     _previewRenderer->reset();
     _previewAccessUnitCount = 0;
     _previewFrameCount = 0;

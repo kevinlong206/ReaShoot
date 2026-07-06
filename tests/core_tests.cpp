@@ -47,13 +47,13 @@ void testHelperParsing() {
 
 void testFriendlyStatusText() {
   assert(friendlyStatusText("Unauthorized") ==
-         "iPhone authorization failed: reset pairing on the iPhone, enter the new code in Setup, then Pair again.");
+         "iPhone authorization failed: reset pairing on the iPhone, then Pair again and accept the request on the iPhone.");
   assert(friendlyStatusText("error: Invalid pairing code.") ==
-         "Invalid pairing code: check the six-digit code on the iPhone and press Pair again.");
+         "Pairing failed: press Pair again and accept the request on the iPhone.");
   assert(friendlyStatusText("Could not connect to the control socket: connection refused") ==
          "Could not connect to the iPhone control socket. Make sure the ReaShoot iOS app is open in the foreground, "
          "the iPhone is unlocked, and the phone and this computer are on the same Wi-Fi network. Then try Reconnect. "
-         "If the iPhone shows a new pairing code or you recently reset pairing, pair again from Setup. Details: connection refused");
+         "If you recently reset pairing, pair again and accept the request on the iPhone. Details: connection refused");
   assert(friendlyStatusText("ReaShoot live video") == "ReaShoot live video");
   CaptureProfile profile{"", "4K", "30", "auto", "9:16", "wide", "1.0", "natural"};
   assert(previewStateText(false, false) == "preview idle");
@@ -181,6 +181,7 @@ void testControlProtocol() {
   command.requestID = "00000000-0000-0000-0000-000000000001";
   command.type = "configureCapture";
   command.token = "secret";
+  command.metadata["clientName"] = "Test Mac";
   command.hasCaptureProfile = true;
   command.captureProfile.resolution = "1080p";
   command.captureProfile.fps = 30;
@@ -189,7 +190,7 @@ void testControlProtocol() {
   JsonValue encoded = parseJson(commandJson);
   assert(encoded.stringValue("type") == "configureCapture");
   assert(encoded.stringValue("token") == "secret");
-  assert(encoded.find("metadata")->asObject().empty());
+  assert(encoded.find("metadata")->stringValue("clientName") == "Test Mac");
   assert(encoded.find("captureProfile")->stringValue("look") == "warmVintage");
 
   const std::string eventJson = R"({

@@ -9,6 +9,16 @@ void putString(JsonValue::Object &object, const std::string &key, const std::str
   }
 }
 
+JsonValue metadataToJson(const std::map<std::string, std::string> &metadata) {
+  JsonValue::Object object;
+  for (const auto &[key, value] : metadata) {
+    if (!key.empty() && !value.empty()) {
+      object.emplace(key, JsonValue(value));
+    }
+  }
+  return JsonValue(std::move(object));
+}
+
 } // namespace
 
 JsonValue captureProfileToJson(const ProtocolCaptureProfile &profile) {
@@ -69,7 +79,7 @@ std::string encodeCommandJson(const ProtocolCommand &command) {
     object.emplace("captureProfile", captureProfileToJson(command.captureProfile));
   }
   putString(object, "pairingCode", command.pairingCode);
-  object.emplace("metadata", JsonValue(JsonValue::Object{}));
+  object.emplace("metadata", metadataToJson(command.metadata));
   object.emplace("protocolVersion", JsonValue(static_cast<double>(command.protocolVersion)));
   putString(object, "recordingID", command.recordingID);
   putString(object, "requestID", command.requestID);

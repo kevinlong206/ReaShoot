@@ -34,7 +34,7 @@ Only iOS devices are supported as cameras today. Keep the iPhone app open in the
 2. Launch ReaShoot on the iPhone and keep it open.
 3. Launch `ReaShoot.app` on the Mac.
 4. Click `Discover`, or enter the iPhone host/IP manually if discovery fails.
-5. Enter the pairing code shown on the iPhone and click `Pair`.
+5. Click `Pair` on the Mac, then accept the pairing request shown on the iPhone.
 6. Click `Start Preview` to frame the shot.
 7. Choose capture settings, then click `Start Recording`.
 8. Click `Stop Recording`, then choose `Download` or `Delete`.
@@ -43,7 +43,7 @@ Only iOS devices are supported as cameras today. Keep the iPhone app open in the
 
 ReaShoot connects from the Mac to the iPhone over your local network. The phone must be on the same Wi-Fi network as the Mac, or on a network the Mac can reach. The Mac can be wired with Ethernet as long as it can connect to the iPhone.
 
-The Mac app makes Bonjour discovery prominent and keeps manual host/IP entry as a fallback. Pairing tokens are credentials for controlling the phone; do not commit or share them.
+The Mac app makes Bonjour discovery prominent and keeps manual host/IP entry as a fallback. Pairing no longer requires typing a code: the iPhone shows `Accept pairing request from <computer>` and records the paired computer name after you accept. Only one computer can be paired at a time; accepting a new request replaces the previous pairing. Pairing tokens are credentials for controlling the phone; do not commit or share them.
 
 ## Preview and recording
 
@@ -69,7 +69,7 @@ Make sure the iPhone and Mac are on the same local network, the iPhone app is op
 
 ### Pairing fails
 
-Use the current pairing code shown in the iPhone app. If the phone rejects a saved token, pair again from the Mac app.
+Click `Pair` in the Mac app and accept the request on the iPhone. If the phone rejects a saved token, pair again from the Mac app.
 
 ### A download failed
 

@@ -5,27 +5,33 @@ import Security
 public final class PairingStore: ObservableObject {
     @Published public private(set) var pairingCode: String
     @Published public private(set) var token: String?
+    @Published public private(set) var pairedClientName: String?
 
     private let service = "reashoot"
     private let account = "paired-mac-token"
+    private let clientNameAccount = "paired-client-name"
 
     public init() {
         self.pairingCode = String(format: "%06d", Int.random(in: 0...999_999))
         self.token = Self.readToken(service: service, account: account)
+        self.pairedClientName = Self.readToken(service: service, account: clientNameAccount)
     }
 
     public var isPaired: Bool {
         token != nil
     }
 
-    public func pair(code: String) throws -> String {
-        guard code == pairingCode else {
-            throw NSError(domain: "PairingStore", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid pairing code."])
-        }
+    public func pair(clientName: String) throws -> String {
         let newToken = UUID().uuidString.replacingOccurrences(of: "-", with: "")
         try Self.saveToken(newToken, service: service, account: account)
+        try Self.saveToken(clientName, service: service, account: clientNameAccount)
         token = newToken
+        pairedClientName = clientName
         return newToken
+    }
+
+    public func pair(code: String, clientName: String) throws -> String {
+        try pair(clientName: clientName)
     }
 
     public func validate(token candidate: String?) -> Bool {
@@ -37,7 +43,9 @@ public final class PairingStore: ObservableObject {
 
     public func reset() {
         Self.deleteToken(service: service, account: account)
+        Self.deleteToken(service: service, account: clientNameAccount)
         token = nil
+        pairedClientName = nil
         pairingCode = String(format: "%06d", Int.random(in: 0...999_999))
     }
 

@@ -2030,14 +2030,12 @@ void setVideoEnabled(bool enabled);
 - (void)pairIPhone:(id)sender {
   (void)sender;
   [self persistIPhoneSettings];
-  NSString *code = [NSString stringWithUTF8String:reashoot::platform::swell::swellPanelSettings(g_swellPanelPrototype).pairingCode];
-  code = [code stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-  if (g_iPhoneHost.empty() || code.length == 0) {
-    [self setStatus:@"Enter iPhone host and pairing code"];
+  if (g_iPhoneHost.empty()) {
+    [self setStatus:@"Enter or discover iPhone host first"];
     return;
   }
-  [self setStatus:@"Pairing with iPhone"];
-  [self runReaShootCommandAsync:@"pair" extraArguments:@[ @"--code", code ] completion:^(NSString *output, NSError *error) {
+  [self setStatus:@"Pairing request sent; accept it on the iPhone"];
+  [self runReaShootCommandAsync:@"pair" extraArguments:@[] completion:^(NSString *output, NSError *error) {
     if (error) {
       [self setStatus:@"iPhone pairing failed"];
       showError(error.localizedDescription.UTF8String ?: "iPhone pairing failed.");
@@ -2073,7 +2071,7 @@ void setVideoEnabled(bool enabled);
     return;
   }
   if (g_iPhoneToken.empty()) {
-    [self setStatus:@"Pair the iPhone first: enter the code shown on the iPhone and press Pair."];
+    [self setStatus:@"Pair the iPhone first: press Pair and accept the request on the iPhone."];
     return;
   }
   NSArray<NSString *> *arguments = @[];
@@ -2104,7 +2102,7 @@ void setVideoEnabled(bool enabled);
 - (void)showIPhoneSetup:(id)sender {
   (void)sender;
   [self ensureDockView];
-  [self setStatus:@"Use Setup to Discover the iPhone, enter the pairing code, then Pair or Reconnect."];
+  [self setStatus:@"Use Setup to discover the iPhone, then Pair and accept the request on the iPhone."];
 }
 
 - (void)selectRelativeIPhoneLook:(NSInteger)offset {
@@ -2248,7 +2246,7 @@ void setVideoEnabled(bool enabled);
   }
   self.previewStreamFailed = YES;
   self.previewStreamFailureReason = @"iPhone host or pairing is missing";
-  [self setStatus:@"Preview unavailable: discover the iPhone, enter its pairing code, then Pair."];
+  [self setStatus:@"Preview unavailable: discover the iPhone, then Pair and accept the request."];
 }
 
 - (void)stopRemotePreview {
@@ -2273,7 +2271,7 @@ void setVideoEnabled(bool enabled);
   if (g_iPhoneHost.empty() || g_iPhoneToken.empty()) {
     self.previewStreamFailed = YES;
     self.previewStreamFailureReason = @"iPhone host or pairing is missing";
-    [self setStatus:@"Preview unavailable: discover the iPhone, enter its pairing code, then Pair."];
+    [self setStatus:@"Preview unavailable: discover the iPhone, then Pair and accept the request."];
     return;
   }
 
