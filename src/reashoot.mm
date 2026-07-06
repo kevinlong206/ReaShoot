@@ -15,6 +15,7 @@
 #include "core/alignment_math.h"
 #include "core/capture_profile.h"
 #include "core/helper_output_parser.h"
+#include "core/json_value.h"
 #include "core/path_utils.h"
 #include "core/remote_camera.h"
 #include "core/reashoot_controller.h"
@@ -89,6 +90,7 @@ namespace {
 constexpr const char *kExtStateSection = "klong_reashoot";
 constexpr const char *kLegacyExtStateSection = "klong_reaper_video_recorder";
 constexpr const char *kFollowEnabledKey = "follow_enabled";
+constexpr const char *kDesktopApiEnabledKey = "desktop_api_enabled";
 constexpr const char *kPreviewFloatingKey = "preview_floating";
 constexpr const char *kIPhoneHostKey = "iphone_host";
 constexpr const char *kIPhoneControlPortKey = "iphone_control_port";
@@ -121,6 +123,7 @@ NSString *kDebugLogPath = @"/tmp/reashoot_debug.log";
 
 constexpr const char *kExtStateKeys[] = {
     kFollowEnabledKey,
+    kDesktopApiEnabledKey,
     kPreviewFloatingKey,
     kIPhoneHostKey,
     kIPhoneControlPortKey,
@@ -266,12 +269,14 @@ int g_alignSelectedCommand = 0;
 int g_restoreIPhoneCommand = 0;
 int g_deleteAllIPhoneCommand = 0;
 int g_toggleFollowCommand = 0;
+int g_toggleDesktopApiCommand = 0;
 int g_swellPanelPrototypeCommand = 0;
 int g_previousPlayState = 0;
 HWND g_swellPanelPrototype = nullptr;
 bool g_swellPanelPrototypeDocked = false;
 bool g_videoEnabled = false;
 bool g_followEnabled = true;
+bool g_desktopApiEnabled = false;
 reashoot::core::ReaShootController g_extensionController;
 bool g_previewFloating = true;
 bool g_activeTransportRecording = false;
@@ -1202,6 +1207,12 @@ void setFollowEnabled(bool enabled) {
   refreshToolbarState();
 }
 
+void setDesktopApiEnabled(bool enabled) {
+  g_desktopApiEnabled = enabled;
+  reashoot::reaper::setExtState(kExtStateSection, kDesktopApiEnabledKey, enabled ? "1" : "0", true);
+  refreshToolbarState();
+}
+
 void setVideoEnabled(bool enabled);
 
 } // namespace
@@ -1249,6 +1260,10 @@ void setVideoEnabled(bool enabled);
 - (void)restoreIPhoneRecording;
 - (reashoot::core::RemoteCameraSettings)remoteCameraSettings;
 - (NSArray<NSString *> *)iPhoneConfigureArguments;
+- (NSArray<NSString *> *)desktopProfileArguments;
+- (NSString *)desktopStatusMessageFromOutput:(NSString *)output;
+- (void)configureDirectIPhoneProfile;
+- (void)testDirectIPhoneConnection;
 - (void)startRemotePreview;
 - (void)startSwellPreviewPrototype;
 - (void)stopRemotePreview;
@@ -1944,6 +1959,25 @@ void setVideoEnabled(bool enabled);
   }
   [self persistIPhoneSettings];
   [self updateCaptureFormatLabel];
+  if (g_desktopApiEnabled) {
+    self.iPhonePreviewProfileConfiguring = YES;
+    [self setStatus:@"Configuring through ReaShoot Desktop"];
+    [self runReaShootCommandAsync:@"desktop-set-profile" extraArguments:[self desktopProfileArguments] completion:^(NSString *output, NSError *error) {
+      self.iPhonePreviewProfileConfiguring = NO;
+      if (!error) {
+        NSString *message = [self desktopStatusMessageFromOutput:output ?: @""];
+        [self setStatus:message.length > 0 ? message : @"ReaShoot Desktop profile configured"];
+        return;
+      }
+      debugLog(@"Desktop API profile configure failed; falling back to direct iPhone configure: %@", error.localizedDescription ?: @"");
+      [self configureDirectIPhoneProfile];
+    }];
+    return;
+  }
+  [self configureDirectIPhoneProfile];
+}
+
+- (void)configureDirectIPhoneProfile {
   if (g_iPhoneHost.empty() || g_iPhoneToken.empty()) {
     return;
   }
@@ -1983,6 +2017,51 @@ void setVideoEnabled(bool enabled);
 
 - (NSArray<NSString *> *)iPhoneConfigureArguments {
   return stringArrayFromStdVector(reashoot::core::configureArguments([self remoteCameraSettings]));
+}
+
+- (NSArray<NSString *> *)desktopProfileArguments {
+  return @[
+    @"--resolution", stringFromStd(g_iPhoneResolution),
+    @"--fps", stringFromStd(g_iPhoneFPS),
+    @"--orientation", stringFromStd(g_iPhoneOrientation),
+    @"--aspect", stringFromStd(g_iPhoneAspect),
+    @"--lens", stringFromStd(g_iPhoneLens),
+    @"--zoom", stringFromStd(g_iPhoneZoom),
+    @"--look", stringFromStd(g_iPhoneLook),
+  ];
+}
+
+- (NSString *)desktopStatusMessageFromOutput:(NSString *)output {
+  try {
+    reashoot::core::JsonValue root = reashoot::core::parseJson(output.UTF8String ?: "");
+    const reashoot::core::JsonValue *status = root.find("status");
+    if (!status) {
+      return @"ReaShoot Desktop API reachable";
+    }
+    std::string host = status->stringValue("host");
+    std::string message = status->stringValue("message");
+    const reashoot::core::JsonValue *profile = status->find("profile");
+    if (profile) {
+      g_iPhoneResolution = profile->stringValue("resolution", g_iPhoneResolution);
+      g_iPhoneFPS = profile->stringValue("fps", g_iPhoneFPS);
+      g_iPhoneOrientation = profile->stringValue("orientation", g_iPhoneOrientation);
+      g_iPhoneAspect = profile->stringValue("aspect", g_iPhoneAspect);
+      g_iPhoneLens = profile->stringValue("lens", g_iPhoneLens);
+      g_iPhoneZoom = profile->stringValue("zoom", g_iPhoneZoom);
+      g_iPhoneLook = profile->stringValue("look", g_iPhoneLook);
+      [self updateCaptureFormatLabel];
+      [self persistIPhoneSettings];
+    }
+    if (!host.empty() && !message.empty()) {
+      return [NSString stringWithFormat:@"ReaShoot Desktop: %@ - %@", stringFromStd(host), stringFromStd(message)];
+    }
+    if (!host.empty()) {
+      return [NSString stringWithFormat:@"ReaShoot Desktop: %@", stringFromStd(host)];
+    }
+  } catch (const std::exception &error) {
+    debugLog(@"Failed to parse desktop status output: %s", error.what());
+  }
+  return @"ReaShoot Desktop API reachable";
 }
 
 - (BOOL)applyFirstDiscoveredIPhoneFromOutput:(NSString *)output {
@@ -2065,6 +2144,22 @@ void setVideoEnabled(bool enabled);
 
 - (void)testIPhoneConnection:(id)sender {
   (void)sender;
+  if (g_desktopApiEnabled) {
+    [self setStatus:@"Checking ReaShoot Desktop"];
+    [self runReaShootCommandAsync:@"desktop-status" extraArguments:@[] completion:^(NSString *output, NSError *error) {
+      if (!error) {
+        [self setStatus:[self desktopStatusMessageFromOutput:output ?: @""]];
+        return;
+      }
+      debugLog(@"Desktop API status failed; falling back to direct iPhone connection: %@", error.localizedDescription ?: @"");
+      [self testDirectIPhoneConnection];
+    }];
+    return;
+  }
+  [self testDirectIPhoneConnection];
+}
+
+- (void)testDirectIPhoneConnection {
   [self persistIPhoneSettings];
   if (g_iPhoneHost.empty()) {
     [self setStatus:@"Enter iPhone host first"];
@@ -2522,6 +2617,7 @@ void updateFollowStatusText() {
 void refreshToolbarState() {
   reashoot::reaper::refreshToolbar(g_videoEnabledCommand);
   reashoot::reaper::refreshToolbar(g_toggleFollowCommand);
+  reashoot::reaper::refreshToolbar(g_toggleDesktopApiCommand);
 }
 
 void setVideoEnabled(bool enabled) {
@@ -2863,6 +2959,12 @@ bool hookCommand2(KbdSectionInfo *section, int command, int val, int val2, int r
     return true;
   }
 
+  if (command == g_toggleDesktopApiCommand) {
+    setDesktopApiEnabled(!g_desktopApiEnabled);
+    [recorder() setStatus:g_desktopApiEnabled ? @"ReaShoot Desktop integration enabled" : @"ReaShoot Desktop integration disabled"];
+    return true;
+  }
+
   if (command == g_swellPanelPrototypeCommand) {
     return toggleSwellPanelPrototype();
   }
@@ -2876,6 +2978,9 @@ int toggleActionHook(int command) {
   }
   if (command == g_toggleFollowCommand) {
     return g_followEnabled ? 1 : 0;
+  }
+  if (command == g_toggleDesktopApiCommand) {
+    return g_desktopApiEnabled ? 1 : 0;
   }
   if (command == g_floatPreviewCommand) {
     return recorder().floatingPreview ? 1 : 0;
@@ -2933,6 +3038,12 @@ bool registerActions(reaper_plugin_info_t *rec) {
       "ReaShoot: Enable/Disable Transport Follow",
       nullptr,
   };
+  custom_action_register_t toggleDesktopApiAction = {
+      0,
+      "KLONG_REASHOOT_TOGGLE_DESKTOP_API",
+      "ReaShoot: Enable/Disable Desktop App Integration",
+      nullptr,
+  };
   custom_action_register_t swellPanelPrototypeAction = {
       0,
       "KLONG_REASHOOT_SWELL",
@@ -2946,6 +3057,7 @@ bool registerActions(reaper_plugin_info_t *rec) {
   g_restoreIPhoneCommand = rec->Register("custom_action", &restoreIPhoneAction);
   g_deleteAllIPhoneCommand = rec->Register("custom_action", &deleteAllIPhoneAction);
   g_toggleFollowCommand = rec->Register("custom_action", &toggleFollowAction);
+  g_toggleDesktopApiCommand = rec->Register("custom_action", &toggleDesktopApiAction);
   g_swellPanelPrototypeCommand = rec->Register("custom_action", &swellPanelPrototypeAction);
   if (g_swellPanelPrototypeCommand == 0) {
     debugLog(@"Failed to register SWELL panel prototype action");
@@ -2953,7 +3065,7 @@ bool registerActions(reaper_plugin_info_t *rec) {
 
   return g_videoEnabledCommand != 0 && g_floatPreviewCommand != 0 &&
          g_alignSelectedCommand != 0 && g_restoreIPhoneCommand != 0 && g_deleteAllIPhoneCommand != 0 &&
-         g_toggleFollowCommand != 0 &&
+         g_toggleFollowCommand != 0 && g_toggleDesktopApiCommand != 0 &&
          rec->Register("hookcommand2", reinterpret_cast<void *>(hookCommand2)) &&
          rec->Register("toggleaction", reinterpret_cast<void *>(toggleActionHook)) &&
          rec->Register("timer", reinterpret_cast<void *>(timerPoll)) &&
@@ -3016,6 +3128,10 @@ void loadSettings() {
   if (!follow.empty()) {
     g_extensionController.setFollowEnabled(follow != "0");
     syncExtensionStateGlobals();
+  }
+  std::string desktopApi = reashoot::reaper::extState(kExtStateSection, kDesktopApiEnabledKey);
+  if (!desktopApi.empty()) {
+    g_desktopApiEnabled = desktopApi != "0";
   }
   std::string previewFloating = reashoot::reaper::extState(kExtStateSection, kPreviewFloatingKey);
   if (!previewFloating.empty()) {

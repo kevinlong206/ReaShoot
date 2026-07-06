@@ -134,6 +134,7 @@ if(APPLE)
 
   add_executable(reashoot_desktop MACOSX_BUNDLE
     "${REASHOOT_ROOT}/src/app/mac/ReaShootDesktopApp.mm"
+    "${REASHOOT_ROOT}/src/app/mac/ReaShootMacIntegrationServer.mm"
     "${REASHOOT_ROOT}/src/app/mac/ReaShootMacSupport.mm"
     "${REASHOOT_ROOT}/src/app/mac/ReaShootMacUI.mm"
     "${REASHOOT_ROOT}/src/app/mac/ReaShootPreviewView.mm"

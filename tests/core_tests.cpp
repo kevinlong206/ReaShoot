@@ -11,6 +11,7 @@
 #include "../src/core/ui_interfaces.h"
 #include "../src/desktop/desktop_app_controller.h"
 #include "../src/desktop/desktop_app_model.h"
+#include "../src/desktop/desktop_integration_api.h"
 #include "../src/desktop/desktop_workflow.h"
 
 #include <cassert>
@@ -273,6 +274,60 @@ void testDesktopAppController() {
   assert(!controller.retryDecision(transient, 0).shouldRetry);
 }
 
+void testDesktopIntegrationApiModels() {
+  using namespace reashoot::desktop;
+  RemoteCameraSettings settings;
+  settings.host = "iphone.local";
+  settings.httpPort = "8798";
+  settings.token = "phone-token";
+  settings.resolution = "1080p";
+  settings.fps = "60";
+  settings.look = "warmVintage";
+
+  JsonValue profile = profileToJson(settings);
+  assert(profile.stringValue("resolution") == "1080p");
+  assert(profile.stringValue("fps") == "60");
+  assert(profile.stringValue("look") == "warmVintage");
+
+  RemoteCameraSettings updated = settings;
+  applyProfileJson(updated, parseJson(R"({"resolution":"4K","fps":"30","zoom":"2.0"})"));
+  assert(updated.resolution == "4K");
+  assert(updated.fps == "30");
+  assert(updated.zoom == "2.0");
+  assert(updated.look == "warmVintage");
+
+  RemoteRecordingDescriptor recording;
+  recording.id = "clip-2026-07-05T12-34-56Z";
+  recording.filename = "take.mov";
+  recording.byteCount = "42";
+  recording.thumbnailPath = "/recordings/clip/thumbnail";
+  JsonValue recordingJson = recordingToJson(settings, recording);
+  assert(recordingJson.stringValue("filename") == "take.mov");
+  assert(recordingJson.stringValue("timestamp") == "2026-07-05T12:34:56Z");
+  assert(recordingJson.stringValue("thumbnailUrl") == "http://iphone.local:8798/recordings/clip/thumbnail?token=phone-token");
+
+  IntegrationStatus status;
+  status.paired = true;
+  status.previewRunning = true;
+  status.host = "iphone.local";
+  status.message = "Preview streaming.";
+  status.profile = settings;
+  JsonValue statusJson = statusToJson(status);
+  assert(statusJson.stringValue("apiVersion") == "v1");
+  assert(statusJson.boolValue("paired"));
+  assert(statusJson.find("profile")->stringValue("resolution") == "1080p");
+
+  IntegrationHttpRequest request;
+  request.headers["Authorization"] = "Bearer secret";
+  assert(requestHasValidToken(request, "secret"));
+  assert(!requestHasValidToken(request, "other"));
+  request.headers.clear();
+  request.query = "token=secret";
+  assert(requestHasValidToken(request, "secret"));
+  assert(errorResponse(401, "unauthorized", "Nope").status == 401);
+  assert(acceptedResponse("Queued").status == 202);
+}
+
 void testJsonValue() {
   JsonValue value = parseJson(R"({"name":"phone","port":8787,"flags":[true,false],"nested":{"x":"y"}})");
   assert(value.stringValue("name") == "phone");
@@ -359,6 +414,7 @@ int main() {
   testDesktopWorkflowParsing();
   testDesktopAppModel();
   testDesktopAppController();
+  testDesktopIntegrationApiModels();
   testJsonValue();
   testControlProtocol();
   testH264AnnexB();

@@ -1,6 +1,7 @@
 #import "../../platform/mac/mac_h264_preview_renderer.h"
 #import "../../platform/mac/mac_helper_process.h"
 #import "../../platform/mac/mac_preview_stream_client.h"
+#include "ReaShootMacIntegrationServer.h"
 #import "ReaShootMacSupport.h"
 #import "ReaShootMacUI.h"
 #import "ReaShootPreviewView.h"
@@ -14,7 +15,9 @@
 
 #import <Cocoa/Cocoa.h>
 
+#include <algorithm>
 #include <cstdlib>
+#include <exception>
 #include <memory>
 #include <string>
 #include <utility>
@@ -57,10 +60,12 @@ using reashoot::core::redactedText;
   std::unique_ptr<reashoot::core::RemoteCameraController> _camera;
   std::unique_ptr<reashoot::core::PreviewStreamClient> _previewClient;
   std::unique_ptr<reashoot::core::PreviewRenderer> _previewRenderer;
+  std::unique_ptr<reashoot::app::mac::ReaShootMacIntegrationServer> _integrationServer;
   reashoot::core::PreviewStreamDescriptor _previewDescriptor;
   std::shared_ptr<reashoot::core::AsyncCommandHandle> _activeCommand;
   reashoot::desktop::DesktopAppController _desktopController;
   std::string _pairingToken;
+  std::string _integrationApiToken;
   std::vector<reashoot::core::RemoteRecordingDescriptor> _phoneVideos;
   bool _recording;
   bool _recordBlinkOn;
@@ -97,6 +102,7 @@ using reashoot::core::redactedText;
   [self loadDefaults];
   [self updateButtons];
   [self updatePreviewEmptyState];
+  [self startIntegrationServer];
   [self setStatus:@"Ready. Open ReaShoot on your iPhone, then discover or enter its host."];
   [_window makeKeyAndOrderFront:nil];
   debugLog(@"Main window shown frame=%@", NSStringFromRect(_window.frame));
@@ -107,6 +113,14 @@ using reashoot::core::redactedText;
   (void)sender;
   debugLog(@"Application terminating after last window closed.");
   return YES;
+}
+
+- (void)applicationWillTerminate:(NSNotification *)notification {
+  (void)notification;
+  if (_integrationServer) {
+    _integrationServer->stop();
+  }
+  reashoot::app::mac::removeIntegrationRegistration();
 }
 
 - (void)windowWillClose:(NSNotification *)notification {
@@ -503,6 +517,213 @@ using reashoot::core::redactedText;
   });
 }
 
+- (reashoot::desktop::IntegrationStatus)integrationStatus {
+  reashoot::desktop::IntegrationStatus status;
+  status.paired = !_pairingToken.empty();
+  status.previewRunning = _previewRunning;
+  status.previewDesired = _previewDesired;
+  status.recording = _recording;
+  status.host = stdString(_hostField.stringValue);
+  status.message = stdString(_statusLabel.stringValue);
+  status.profile = [self settings];
+  return status;
+}
+
+- (std::string)integrationStatusJson {
+  return reashoot::desktop::statusToJson([self integrationStatus]).serialize();
+}
+
+- (void)applyIntegrationProfile:(const reashoot::core::RemoteCameraSettings &)settings {
+  selectPopupRepresentedValue(_resolutionPopup, nsString(settings.resolution), nsString(reashoot::desktop::defaultResolution()));
+  selectPopupRepresentedValue(_fpsPopup, nsString(settings.fps), nsString(reashoot::desktop::defaultFps()));
+  selectPopupRepresentedValue(_orientationPopup, nsString(settings.orientation), nsString(reashoot::desktop::defaultOrientation()));
+  selectPopupRepresentedValue(_aspectPopup, nsString(settings.aspect), nsString(reashoot::desktop::defaultAspect()));
+  selectPopupRepresentedValue(_lensPopup, nsString(settings.lens), nsString(reashoot::desktop::defaultLens()));
+  selectPopupRepresentedValue(_lookPopup, nsString(settings.look), nsString(reashoot::desktop::defaultLook()));
+  _zoomField.stringValue = nsString(settings.zoom.empty() ? reashoot::desktop::defaultZoom() : settings.zoom);
+  [self saveDefaults];
+}
+
+- (reashoot::desktop::IntegrationHttpResponse)handleIntegrationRequestOnMain:(const reashoot::desktop::IntegrationHttpRequest &)request {
+  namespace desktop = reashoot::desktop;
+  namespace core = reashoot::core;
+  if (!desktop::requestHasValidToken(request, _integrationApiToken)) {
+    return desktop::errorResponse(401, "unauthorized", "Invalid ReaShoot desktop API token.");
+  }
+
+  const auto busy = [self]() -> bool {
+    return _activeCommand && _activeCommand->isRunning();
+  };
+  const auto accepted = [](const std::string &message) {
+    return desktop::acceptedResponse(message);
+  };
+
+  if (request.method == "GET" && request.path == "/v1/status") {
+    core::JsonValue::Object object;
+    object.emplace("status", desktop::statusToJson([self integrationStatus]));
+    return desktop::okResponse(std::move(object));
+  }
+  if (request.method == "GET" && request.path == "/v1/profile") {
+    core::JsonValue::Object object;
+    object.emplace("profile", desktop::profileToJson([self settings]));
+    return desktop::okResponse(std::move(object));
+  }
+  if (request.method == "PUT" && request.path == "/v1/profile") {
+    if (busy()) {
+      return desktop::errorResponse(409, "busy", "ReaShoot is busy with another operation.");
+    }
+    try {
+      core::RemoteCameraSettings settings = [self settings];
+      desktop::applyProfileJson(settings, core::parseJson(request.body));
+      [self applyIntegrationProfile:settings];
+      if (_previewRunning) {
+        [self profileSelectionChanged:nil];
+      }
+      core::JsonValue::Object object;
+      object.emplace("profile", desktop::profileToJson([self settings]));
+      return desktop::okResponse(std::move(object));
+    } catch (const std::exception &error) {
+      return desktop::errorResponse(400, "invalid_json", error.what());
+    }
+  }
+  if (request.method == "POST" && request.path == "/v1/phone/discover") {
+    if (busy()) {
+      return desktop::errorResponse(409, "busy", "ReaShoot is busy with another operation.");
+    }
+    [self discoverPhone:nil];
+    return accepted("Discovery started.");
+  }
+  if (request.method == "POST" && request.path == "/v1/phone/pair") {
+    if (busy()) {
+      return desktop::errorResponse(409, "busy", "ReaShoot is busy with another operation.");
+    }
+    [self pairPhone:nil];
+    return accepted("Pairing request started.");
+  }
+  if (request.method == "POST" && request.path == "/v1/preview/start") {
+    if (busy()) {
+      return desktop::errorResponse(409, "busy", "ReaShoot is busy with another operation.");
+    }
+    _previewDesired = true;
+    [self startPreview];
+    return accepted("Preview start requested.");
+  }
+  if (request.method == "POST" && request.path == "/v1/preview/stop") {
+    [self stopPreview];
+    return accepted("Preview stop requested.");
+  }
+  if (request.method == "POST" && request.path == "/v1/recording/start") {
+    if (busy() || _recording) {
+      return desktop::errorResponse(409, "busy", "Recording is already active or ReaShoot is busy.");
+    }
+    [self startRecording:nil];
+    return accepted("Recording start requested.");
+  }
+  if (request.method == "POST" && request.path == "/v1/recording/stop") {
+    if (!_recording) {
+      return desktop::errorResponse(409, "not_recording", "No recording is active.");
+    }
+    if (busy()) {
+      return desktop::errorResponse(409, "busy", "ReaShoot is busy with another operation.");
+    }
+    [self stopRecordingForIntegration];
+    return accepted("Recording stop requested.");
+  }
+  if (request.method == "GET" && request.path == "/v1/recordings") {
+    core::JsonValue::Object object;
+    object.emplace("recordings", desktop::recordingsToJson([self settings], _phoneVideos));
+    return desktop::okResponse(std::move(object));
+  }
+  if (request.method == "POST" && request.path == "/v1/recordings/refresh") {
+    if (busy()) {
+      return desktop::errorResponse(409, "busy", "ReaShoot is busy with another operation.");
+    }
+    [self refreshPhoneVideos:nil];
+    return accepted("Recording refresh requested.");
+  }
+
+  const std::string recordingsPrefix = "/v1/recordings/";
+  if (request.path.rfind(recordingsPrefix, 0) == 0) {
+    std::string remainder = request.path.substr(recordingsPrefix.size());
+    std::string action;
+    const size_t slash = remainder.find('/');
+    if (slash != std::string::npos) {
+      action = remainder.substr(slash + 1);
+      remainder = remainder.substr(0, slash);
+    }
+    if (remainder.empty()) {
+      return desktop::errorResponse(404, "not_found", "Recording ID is missing.");
+    }
+    if (request.method == "DELETE" || (request.method == "POST" && action == "download")) {
+      if (busy()) {
+        return desktop::errorResponse(409, "busy", "ReaShoot is busy with another operation.");
+      }
+    }
+    auto found = std::find_if(_phoneVideos.begin(), _phoneVideos.end(), [&](const auto &recording) {
+      return recording.id == remainder;
+    });
+    if (request.method == "DELETE" && action.empty()) {
+      [self deleteRecording:remainder];
+      return accepted("Recording delete requested.");
+    }
+    if (request.method == "POST" && action == "download") {
+      if (found == _phoneVideos.end()) {
+        return desktop::errorResponse(404, "not_found", "Recording is not in the current phone video list. Refresh recordings first.");
+      }
+      std::string downloadDirectory;
+      if (!request.body.empty()) {
+        try {
+          downloadDirectory = core::parseJson(request.body).stringValue("downloadDirectory");
+        } catch (const std::exception &error) {
+          return desktop::errorResponse(400, "invalid_json", error.what());
+        }
+      }
+      [self downloadRecording:*found directory:downloadDirectory revealDownloadedFile:NO];
+      return accepted("Recording download requested.");
+    }
+  }
+
+  return desktop::errorResponse(404, "not_found", "Unknown ReaShoot desktop API endpoint.");
+}
+
+- (reashoot::desktop::IntegrationHttpResponse)handleIntegrationRequest:(const reashoot::desktop::IntegrationHttpRequest &)request {
+  if (NSThread.isMainThread) {
+    return [self handleIntegrationRequestOnMain:request];
+  }
+  __block reashoot::desktop::IntegrationHttpResponse response;
+  dispatch_sync(dispatch_get_main_queue(), ^{
+    response = [self handleIntegrationRequestOnMain:request];
+  });
+  return response;
+}
+
+- (void)startIntegrationServer {
+  _integrationApiToken = reashoot::app::mac::loadOrCreateIntegrationToken();
+  _integrationServer = std::make_unique<reashoot::app::mac::ReaShootMacIntegrationServer>();
+  std::string error;
+  const bool started = _integrationServer->start(_integrationApiToken,
+                                                 [self](const reashoot::desktop::IntegrationHttpRequest &request) {
+                                                   return [self handleIntegrationRequest:request];
+                                                 },
+                                                 [self]() {
+                                                   if (NSThread.isMainThread) {
+                                                     return [self integrationStatusJson];
+                                                   }
+                                                   __block std::string snapshot;
+                                                   dispatch_sync(dispatch_get_main_queue(), ^{
+                                                     snapshot = [self integrationStatusJson];
+                                                   });
+                                                   return snapshot;
+                                                 },
+                                                 &error);
+  if (!started) {
+    debugLog(@"Desktop integration API failed to start: %@", nsString(error));
+    return;
+  }
+  reashoot::app::mac::writeIntegrationRegistration(_integrationServer->port(), _integrationApiToken);
+  debugLog(@"Desktop integration API listening on 127.0.0.1:%d", _integrationServer->port());
+}
+
 - (void)discoverPhone:(id)sender {
   (void)sender;
   reashoot::core::RemoteCameraSettings settings = [self settings];
@@ -784,6 +1005,36 @@ using reashoot::core::redactedText;
   });
 }
 
+- (void)stopRecordingForIntegration {
+  debugLog(@"Integration stop recording requested.");
+  if (![self requireHostAndToken]) {
+    return;
+  }
+  reashoot::core::RemoteCameraSettings settings = [self settings];
+  debugLog(@"Stopping recording for integration settings=%s", redactedSettingsSummary(settings).c_str());
+  [self setStatus:@"Stopping iPhone recording..."];
+  _activeCommand = _camera->stop(settings, [self](reashoot::core::CommandResult result) {
+    debugLog(@"Integration stop completed exit=%d output=%@ error=%@",
+             result.exitCode,
+             nsString(redactedText(result.output)),
+             nsString(redactedText(result.errorMessage)));
+    _recording = false;
+    [self updateButtons];
+    if (result.exitCode != 0) {
+      [self setStatusFromResult:result fallback:@"Stop failed."];
+      return;
+    }
+    auto recordings = reashoot::desktop::parseRecordingDescriptors(result.output);
+    if (!recordings.empty()) {
+      _phoneVideos.insert(_phoneVideos.begin(), recordings.front());
+      [self renderPhoneVideos];
+      [self setStatus:@"Recording stopped. Use Videos on iPhone or the API to download or delete it."];
+      return;
+    }
+    [self setStatus:@"Recording stopped, but no recording descriptor was returned."];
+  });
+}
+
 - (void)promptForRecording:(const reashoot::core::RemoteRecordingDescriptor &)recording {
   debugLog(@"Prompting for recording id=%s filename=%s bytes=%s path=%s checksumPresent=%d",
            recording.id.c_str(),
@@ -808,22 +1059,20 @@ using reashoot::core::redactedText;
   }
 }
 
-- (void)downloadRecording:(const reashoot::core::RemoteRecordingDescriptor &)recording {
+- (void)downloadRecording:(const reashoot::core::RemoteRecordingDescriptor &)recording
+                directory:(const std::string &)downloadDirectory
+       revealDownloadedFile:(BOOL)revealDownloadedFile {
   reashoot::core::RemoteCameraSettings settings = [self settings];
-  std::string downloadDirectory = stdString(_downloadField.stringValue);
-  if (downloadDirectory.empty()) {
-    downloadDirectory = reashoot::desktop::defaultDownloadDirectory();
-    _downloadField.stringValue = nsString(downloadDirectory);
-  }
+  std::string resolvedDirectory = downloadDirectory.empty() ? reashoot::desktop::defaultDownloadDirectory() : downloadDirectory;
   debugLog(@"Downloading recording id=%s filename=%s directory=%s settings=%s",
            recording.id.c_str(),
            recording.filename.c_str(),
-           downloadDirectory.c_str(),
+           resolvedDirectory.c_str(),
            redactedSettingsSummary(settings).c_str());
   [self setStatus:@"Downloading iPhone video..."];
   _activeCommand = _camera->downloadRecording(settings,
                                               recording,
-                                              downloadDirectory,
+                                              resolvedDirectory,
                                               [self](const std::string &line) {
                                                 debugLog(@"Download progress line=%@", nsString(redactedText(line)));
                                                 std::string status = reashoot::core::progressStatusText(line);
@@ -831,7 +1080,7 @@ using reashoot::core::redactedText;
                                                   [self setStatus:nsString(status)];
                                                 }
                                               },
-                                              [self](reashoot::core::CommandResult result) {
+                                              [self, revealDownloadedFile](reashoot::core::CommandResult result) {
                                                 debugLog(@"Download completed exit=%d output=%@ error=%@",
                                                          result.exitCode,
                                                          nsString(redactedText(result.output)),
@@ -845,9 +1094,20 @@ using reashoot::core::redactedText;
                                                   [self setStatus:@"Download completed."];
                                                   return;
                                                 }
-                                                [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[[NSURL fileURLWithPath:nsString(path)]]];
+                                                if (revealDownloadedFile) {
+                                                  [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[[NSURL fileURLWithPath:nsString(path)]]];
+                                                }
                                                 [self setStatus:[NSString stringWithFormat:@"Downloaded %@", nsString(path)]];
                                               });
+}
+
+- (void)downloadRecording:(const reashoot::core::RemoteRecordingDescriptor &)recording {
+  std::string downloadDirectory = stdString(_downloadField.stringValue);
+  if (downloadDirectory.empty()) {
+    downloadDirectory = reashoot::desktop::defaultDownloadDirectory();
+    _downloadField.stringValue = nsString(downloadDirectory);
+  }
+  [self downloadRecording:recording directory:downloadDirectory revealDownloadedFile:YES];
 }
 
 - (void)deleteRecording:(const std::string &)recordingID {
