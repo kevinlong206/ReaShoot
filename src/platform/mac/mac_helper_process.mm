@@ -1,8 +1,8 @@
 #import <Foundation/Foundation.h>
 
 #include "mac_helper_process.h"
+#include "../../core/log_sanitization.h"
 
-#include <sstream>
 #include <utility>
 
 namespace reashoot::platform::mac {
@@ -22,26 +22,6 @@ NSArray<NSString *> *argumentsArray(const std::vector<std::string> &arguments) {
     [array addObject:stringFromStd(argument)];
   }
   return array;
-}
-
-std::string redactedArguments(const std::vector<std::string> &arguments) {
-  std::ostringstream stream;
-  bool redactNext = false;
-  for (size_t index = 0; index < arguments.size(); ++index) {
-    if (index > 0) {
-      stream << ' ';
-    }
-    if (redactNext) {
-      stream << "REDACTED";
-      redactNext = false;
-    } else {
-      stream << arguments[index];
-      if (arguments[index] == "--token" || arguments[index] == "--code") {
-        redactNext = true;
-      }
-    }
-  }
-  return stream.str();
 }
 
 std::string outputString(NSData *data) {
@@ -140,7 +120,7 @@ public:
     }
 
     std::vector<std::string> allArguments = commandArguments(commandCopy, arguments);
-    log("helper async start command=" + commandCopy + " args=" + redactedArguments(allArguments));
+    log("helper async start command=" + commandCopy + " args=" + core::redactedArguments(allArguments));
 
     NSTask *task = [[NSTask alloc] init];
     task.executableURL = [NSURL fileURLWithPath:stringFromStd(executablePath_)];

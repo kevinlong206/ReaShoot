@@ -1,397 +1,32 @@
 #import "../../platform/mac/mac_h264_preview_renderer.h"
 #import "../../platform/mac/mac_helper_process.h"
 #import "../../platform/mac/mac_preview_stream_client.h"
+#import "ReaShootMacSupport.h"
+#import "ReaShootMacUI.h"
+#import "ReaShootPreviewView.h"
 
 #include "../../core/helper_output_parser.h"
+#include "../../core/log_sanitization.h"
 #include "../../core/remote_camera.h"
+#include "../../desktop/desktop_app_controller.h"
+#include "../../desktop/desktop_app_model.h"
 #include "../../desktop/desktop_workflow.h"
 
 #import <Cocoa/Cocoa.h>
 
-#include <algorithm>
-#include <cstdarg>
 #include <cstdlib>
 #include <memory>
-#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include <unistd.h>
-
 namespace {
 
-NSString *nsString(const std::string &value) {
-  return [NSString stringWithUTF8String:value.c_str()] ?: @"";
-}
-
-std::string stdString(NSString *value) {
-  return value.UTF8String ? value.UTF8String : "";
-}
-
-bool gDebugLogging = false;
-NSFileHandle *gDebugLogFile = nil;
-
-std::string redactedText(std::string value) {
-  const std::vector<std::string> prefixes = {"token=", "code=", "pairingCode="};
-  for (const std::string &prefix : prefixes) {
-    std::string::size_type position = 0;
-    while ((position = value.find(prefix, position)) != std::string::npos) {
-      const std::string::size_type valueStart = position + prefix.size();
-      std::string::size_type valueEnd = value.find_first_of(" \t\r\n", valueStart);
-      if (valueEnd == std::string::npos) {
-        valueEnd = value.size();
-      }
-      value.replace(valueStart, valueEnd - valueStart, "REDACTED");
-      position = valueStart + 8;
-    }
-  }
-  return value;
-}
-
-std::string redactedArguments(const std::vector<std::string> &arguments) {
-  std::ostringstream stream;
-  bool redactNext = false;
-  for (size_t index = 0; index < arguments.size(); ++index) {
-    if (index > 0) {
-      stream << ' ';
-    }
-    if (redactNext) {
-      stream << "REDACTED";
-      redactNext = false;
-      continue;
-    }
-    stream << redactedText(arguments[index]);
-    if (arguments[index] == "--token" || arguments[index] == "--code") {
-      redactNext = true;
-    }
-  }
-  return stream.str();
-}
-
-std::string redactedSettingsSummary(const reashoot::core::RemoteCameraSettings &settings) {
-  std::ostringstream stream;
-  stream << "host=" << settings.host
-         << " controlPort=" << settings.controlPort
-         << " httpPort=" << settings.httpPort
-         << " token=" << (settings.token.empty() ? "empty" : "present")
-         << " profile=" << settings.resolution << "/" << settings.fps
-         << " orientation=" << settings.orientation
-         << " aspect=" << settings.aspect
-         << " lens=" << settings.lens
-         << " zoom=" << settings.zoom
-         << " look=" << settings.look;
-  return stream.str();
-}
-
-void debugLog(NSString *format, ...) {
-  if (!gDebugLogging) {
-    return;
-  }
-  va_list args;
-  va_start(args, format);
-  NSString *message = [[NSString alloc] initWithFormat:format arguments:args];
-  va_end(args);
-  NSString *timestamp = [NSDateFormatter localizedStringFromDate:[NSDate date]
-                                                       dateStyle:NSDateFormatterNoStyle
-                                                       timeStyle:NSDateFormatterMediumStyle];
-  NSString *line = [NSString stringWithFormat:@"[%@] %@\n", timestamp, message ?: @""];
-  fputs(line.UTF8String ?: "", stderr);
-  if (gDebugLogFile) {
-    [gDebugLogFile writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
-  }
-}
-
-NSString *debugLogPath() {
-  NSURL *logsURL = [NSFileManager.defaultManager URLsForDirectory:NSLibraryDirectory inDomains:NSUserDomainMask].firstObject;
-  logsURL = [[logsURL URLByAppendingPathComponent:@"Logs" isDirectory:YES] URLByAppendingPathComponent:@"ReaShoot" isDirectory:YES];
-  [NSFileManager.defaultManager createDirectoryAtURL:logsURL withIntermediateDirectories:YES attributes:nil error:nil];
-  return [[logsURL URLByAppendingPathComponent:@"ReaShoot-debug.log"] path];
-}
-
-void initializeDebugLogging(int argc, const char *argv[]) {
-  for (int index = 1; index < argc; ++index) {
-    const std::string argument = argv[index] ? argv[index] : "";
-    if (argument == "-debug" || argument == "--debug") {
-      gDebugLogging = true;
-      break;
-    }
-  }
-  if (!gDebugLogging) {
-    return;
-  }
-  NSString *path = debugLogPath();
-  if (![NSFileManager.defaultManager fileExistsAtPath:path]) {
-    [NSFileManager.defaultManager createFileAtPath:path contents:nil attributes:nil];
-  }
-  gDebugLogFile = [NSFileHandle fileHandleForWritingAtPath:path];
-  [gDebugLogFile seekToEndOfFile];
-  debugLog(@"Debug logging enabled. path=%@ pid=%d", path, getpid());
-}
-
-std::string helperExecutablePath() {
-  NSString *resourcePath = [[NSBundle mainBundle] pathForResource:@"reashoot-mac" ofType:nil];
-  if (resourcePath.length > 0) {
-    return stdString(resourcePath);
-  }
-  NSString *executableDir = [NSBundle mainBundle].executablePath.stringByDeletingLastPathComponent;
-  NSString *sibling = [executableDir stringByAppendingPathComponent:@"reashoot-mac"];
-  return stdString(sibling);
-}
-
-std::string localComputerName() {
-  NSString *localizedName = NSHost.currentHost.localizedName;
-  if (localizedName.length > 0) {
-    return stdString(localizedName);
-  }
-  NSString *hostName = NSHost.currentHost.name;
-  if (hostName.length > 0) {
-    return stdString(hostName);
-  }
-  char buffer[256] = {};
-  if (gethostname(buffer, sizeof(buffer) - 1) == 0 && buffer[0]) {
-    return buffer;
-  }
-  return "Mac";
-}
-
-NSButton *makeButton(NSString *title, id target, SEL action) {
-  NSButton *button = [NSButton buttonWithTitle:title target:target action:action];
-  button.bezelStyle = NSBezelStyleRounded;
-  return button;
-}
-
-NSAttributedString *buttonTitle(NSString *title, NSColor *foreground, BOOL bold) {
-  NSFont *font = bold ? [NSFont boldSystemFontOfSize:NSFont.systemFontSize] : [NSFont systemFontOfSize:NSFont.systemFontSize];
-  return [[NSAttributedString alloc] initWithString:title ?: @""
-                                        attributes:@{
-                                          NSForegroundColorAttributeName: foreground ?: NSColor.controlTextColor,
-                                          NSFontAttributeName: font,
-                                        }];
-}
-
-void applyRecordButtonAppearance(NSButton *button, bool recording, bool blinkOn) {
-  NSString *title = recording ? @"Stop Recording" : @"Start Recording";
-  button.title = title;
-  button.wantsLayer = YES;
-  button.layer.cornerRadius = 6.0;
-  if (recording) {
-    NSColor *red = blinkOn ? NSColor.systemRedColor : [NSColor colorWithCalibratedRed:0.58 green:0.0 blue:0.0 alpha:1.0];
-    button.bordered = NO;
-    button.layer.backgroundColor = red.CGColor;
-    button.attributedTitle = buttonTitle(title, NSColor.whiteColor, YES);
-    return;
-  }
-  button.bordered = YES;
-  button.layer.backgroundColor = NSColor.clearColor.CGColor;
-  button.attributedTitle = buttonTitle(title, NSColor.controlTextColor, NO);
-}
-
-NSTextField *makeLabel(NSString *text) {
-  NSTextField *label = [NSTextField labelWithString:text];
-  label.lineBreakMode = NSLineBreakByTruncatingTail;
-  [label setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
-  return label;
-}
-
-NSTextField *makeField(NSString *placeholder) {
-  NSTextField *field = [[NSTextField alloc] initWithFrame:NSZeroRect];
-  field.placeholderString = placeholder;
-  field.lineBreakMode = NSLineBreakByTruncatingMiddle;
-  [field setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
-  [field setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
-  return field;
-}
-
-NSPopUpButton *makePopup(NSArray<NSString *> *items) {
-  NSPopUpButton *popup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
-  [popup addItemsWithTitles:items];
-  return popup;
-}
-
-NSPopUpButton *makeLookPopup() {
-  NSPopUpButton *popup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
-  NSArray<NSArray<NSString *> *> *looks = @[
-    @[@"Natural", @"natural"],
-    @[@"Warm Vintage", @"warmVintage"],
-    @[@"Cool Blue", @"coolBlue"],
-    @[@"High Contrast B&W", @"highContrastBW"],
-    @[@"Faded Film", @"fadedFilm"],
-    @[@"Dream Glow", @"dreamGlow"],
-    @[@"Noir", @"noir"],
-    @[@"Saturated Pop", @"saturatedPop"],
-    @[@"Bleach Bypass", @"bleachBypass"],
-    @[@"Sepia", @"sepia"],
-    @[@"Instant Photo", @"instantPhoto"],
-    @[@"Chrome", @"chrome"],
-    @[@"Tonal", @"tonal"],
-    @[@"Silvertone", @"silvertone"],
-    @[@"Dramatic Warm", @"dramaticWarm"],
-    @[@"Dramatic Cool", @"dramaticCool"],
-    @[@"Soft Matte", @"softMatte"],
-    @[@"Comic Book", @"comicBook"],
-    @[@"VHS", @"vhs"],
-    @[@"Music Video Pop", @"musicVideoPop"],
-  ];
-  for (NSArray<NSString *> *look in looks) {
-    [popup addItemWithTitle:look[0]];
-    popup.lastItem.representedObject = look[1];
-  }
-  return popup;
-}
-
-void selectPopupItem(NSPopUpButton *popup, NSString *title, NSString *fallback) {
-  NSString *candidate = title.length > 0 ? title : fallback;
-  if (candidate.length == 0) {
-    return;
-  }
-  if ([popup itemWithTitle:candidate]) {
-    [popup selectItemWithTitle:candidate];
-  } else if (fallback.length > 0 && [popup itemWithTitle:fallback]) {
-    [popup selectItemWithTitle:fallback];
-  }
-}
-
-void selectPopupRepresentedValue(NSPopUpButton *popup, NSString *value, NSString *fallback) {
-  NSString *candidate = value.length > 0 ? value : fallback;
-  for (NSMenuItem *item in popup.itemArray) {
-    NSString *represented = [item.representedObject isKindOfClass:NSString.class] ? item.representedObject : nil;
-    if ((represented.length > 0 && [represented isEqualToString:candidate]) || [item.title isEqualToString:candidate]) {
-      [popup selectItem:item];
-      return;
-    }
-  }
-  selectPopupItem(popup, candidate, fallback);
-}
-
-NSString *selectedPopupValue(NSPopUpButton *popup, NSString *fallback) {
-  id represented = popup.selectedItem.representedObject;
-  if ([represented isKindOfClass:NSString.class] && [represented length] > 0) {
-    return represented;
-  }
-  return popup.titleOfSelectedItem ?: fallback;
-}
-
-bool isTransientConnectionFailure(const reashoot::core::CommandResult &result) {
-  std::string message = result.errorMessage.empty() ? result.output : result.errorMessage;
-  std::transform(message.begin(), message.end(), message.begin(), [](unsigned char ch) {
-    return static_cast<char>(std::tolower(ch));
-  });
-  return message.find("could not connect") != std::string::npos ||
-         message.find("no route to host") != std::string::npos ||
-         message.find("network is unreachable") != std::string::npos ||
-         message.find("connection reset") != std::string::npos ||
-         message.find("connection refused") != std::string::npos ||
-         message.find("timed out") != std::string::npos;
-}
+using reashoot::core::redactedArguments;
+using reashoot::core::redactedSettingsSummary;
+using reashoot::core::redactedText;
 
 } // namespace
-
-@interface ReaShootPreviewView : NSView
-- (void)setFramePixels:(std::vector<uint8_t>)pixels width:(int)width height:(int)height stride:(int)stride;
-- (void)clearFrameWithMessage:(NSString *)message;
-- (void)setEmptyMessage:(NSString *)message;
-@end
-
-@implementation ReaShootPreviewView {
-  std::vector<uint8_t> _pixels;
-  int _frameWidth;
-  int _frameHeight;
-  int _frameStride;
-  NSString *_emptyMessage;
-}
-
-- (instancetype)initWithFrame:(NSRect)frame {
-  self = [super initWithFrame:frame];
-  if (self) {
-    self.wantsLayer = YES;
-    self.layer.backgroundColor = NSColor.blackColor.CGColor;
-    _emptyMessage = @"No paired iPhone.";
-  }
-  return self;
-}
-
-- (void)setFramePixels:(std::vector<uint8_t>)pixels width:(int)width height:(int)height stride:(int)stride {
-  _pixels = std::move(pixels);
-  _frameWidth = width;
-  _frameHeight = height;
-  _frameStride = stride;
-  [self setNeedsDisplay:YES];
-}
-
-- (void)clearFrameWithMessage:(NSString *)message {
-  _pixels.clear();
-  _frameWidth = 0;
-  _frameHeight = 0;
-  _frameStride = 0;
-  _emptyMessage = [message copy] ?: @"No preview stream.";
-  [self setNeedsDisplay:YES];
-}
-
-- (void)setEmptyMessage:(NSString *)message {
-  _emptyMessage = [message copy] ?: @"No preview stream.";
-  if (_pixels.empty()) {
-    [self setNeedsDisplay:YES];
-  }
-}
-
-- (void)drawRect:(NSRect)dirtyRect {
-  [NSColor.blackColor setFill];
-  NSRectFill(dirtyRect);
-  if (_pixels.empty() || _frameWidth <= 0 || _frameHeight <= 0 || _frameStride <= 0) {
-    NSString *message = _emptyMessage.length > 0 ? _emptyMessage : @"No preview stream.";
-    NSDictionary *attributes = @{
-      NSForegroundColorAttributeName : NSColor.secondaryLabelColor,
-      NSFontAttributeName : [NSFont systemFontOfSize:18 weight:NSFontWeightMedium],
-    };
-    NSSize textSize = [message sizeWithAttributes:attributes];
-    NSPoint point = NSMakePoint(std::max<CGFloat>(18, (self.bounds.size.width - textSize.width) * 0.5),
-                               std::max<CGFloat>(18, (self.bounds.size.height - textSize.height) * 0.5));
-    [message drawAtPoint:point withAttributes:attributes];
-    return;
-  }
-
-  CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
-  CGDataProviderRef provider = CGDataProviderCreateWithData(nullptr, _pixels.data(), _pixels.size(), nullptr);
-  CGImageRef image = CGImageCreate(_frameWidth,
-                                   _frameHeight,
-                                   8,
-                                   32,
-                                   _frameStride,
-                                   colorSpace,
-                                   kCGBitmapByteOrder32Little | kCGImageAlphaPremultipliedFirst,
-                                   provider,
-                                   nullptr,
-                                   false,
-                                   kCGRenderingIntentDefault);
-  CGDataProviderRelease(provider);
-  CGColorSpaceRelease(colorSpace);
-  if (!image) {
-    return;
-  }
-
-  NSRect bounds = self.bounds;
-  const CGFloat imageAspect = static_cast<CGFloat>(_frameWidth) / static_cast<CGFloat>(_frameHeight);
-  const CGFloat viewAspect = bounds.size.width / std::max<CGFloat>(bounds.size.height, 1.0);
-  NSRect drawRect = bounds;
-  if (imageAspect > viewAspect) {
-    drawRect.size.height = bounds.size.width / imageAspect;
-    drawRect.origin.y += (bounds.size.height - drawRect.size.height) * 0.5;
-  } else {
-    drawRect.size.width = bounds.size.height * imageAspect;
-    drawRect.origin.x += (bounds.size.width - drawRect.size.width) * 0.5;
-  }
-  CGContextRef context = NSGraphicsContext.currentContext.CGContext;
-  CGContextSaveGState(context);
-  CGContextTranslateCTM(context, 0, bounds.size.height);
-  CGContextScaleCTM(context, 1, -1);
-  CGRect flipped = CGRectMake(drawRect.origin.x, bounds.size.height - NSMaxY(drawRect), drawRect.size.width, drawRect.size.height);
-  CGContextDrawImage(context, flipped, image);
-  CGContextRestoreGState(context);
-  CGImageRelease(image);
-}
-
-@end
 
 @interface ReaShootAppDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate, NSTextFieldDelegate>
 @end
@@ -424,6 +59,7 @@ bool isTransientConnectionFailure(const reashoot::core::CommandResult &result) {
   std::unique_ptr<reashoot::core::PreviewRenderer> _previewRenderer;
   reashoot::core::PreviewStreamDescriptor _previewDescriptor;
   std::shared_ptr<reashoot::core::AsyncCommandHandle> _activeCommand;
+  reashoot::desktop::DesktopAppController _desktopController;
   std::string _pairingToken;
   std::vector<reashoot::core::RemoteRecordingDescriptor> _phoneVideos;
   bool _recording;
@@ -599,12 +235,12 @@ bool isTransientConnectionFailure(const reashoot::core::CommandResult &result) {
   _hostField = makeField(@"kevin-long-iphone.local or IP address");
   _downloadField = makeField(@"Download folder");
   _zoomField = makeField(@"1.0");
-  _resolutionPopup = makePopup(@[@"4K", @"1080p", @"720p"]);
-  _fpsPopup = makePopup(@[@"30", @"24", @"60"]);
-  _orientationPopup = makePopup(@[@"auto", @"portrait", @"landscape"]);
-  _aspectPopup = makePopup(@[@"9:16", @"16:9", @"4:3", @"1:1"]);
-  _lensPopup = makePopup(@[@"wide", @"ultrawide", @"telephoto"]);
-  _lookPopup = makeLookPopup();
+  _resolutionPopup = makePopupFromChoices(reashoot::desktop::resolutionChoices());
+  _fpsPopup = makePopupFromChoices(reashoot::desktop::fpsChoices());
+  _orientationPopup = makePopupFromChoices(reashoot::desktop::orientationChoices());
+  _aspectPopup = makePopupFromChoices(reashoot::desktop::aspectChoices());
+  _lensPopup = makePopupFromChoices(reashoot::desktop::lensChoices());
+  _lookPopup = makePopupFromChoices(reashoot::desktop::lookChoices());
   for (NSControl *control in @[_resolutionPopup, _fpsPopup, _orientationPopup, _aspectPopup, _lensPopup, _zoomField, _lookPopup]) {
     control.target = self;
     control.action = @selector(profileSelectionChanged:);
@@ -635,13 +271,13 @@ bool isTransientConnectionFailure(const reashoot::core::CommandResult &result) {
   NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
   _hostField.stringValue = [defaults stringForKey:@"host"] ?: @"";
   _downloadField.stringValue = [defaults stringForKey:@"downloadDirectory"] ?: nsString(reashoot::desktop::defaultDownloadDirectory());
-  _zoomField.stringValue = [defaults stringForKey:@"zoom"] ?: @"1.0";
-  selectPopupItem(_resolutionPopup, [defaults stringForKey:@"resolution"], @"4K");
-  selectPopupItem(_fpsPopup, [defaults stringForKey:@"fps"], @"30");
-  selectPopupItem(_orientationPopup, [defaults stringForKey:@"orientation"], @"auto");
-  selectPopupItem(_aspectPopup, [defaults stringForKey:@"aspect"], @"9:16");
-  selectPopupItem(_lensPopup, [defaults stringForKey:@"lens"], @"wide");
-  selectPopupRepresentedValue(_lookPopup, [defaults stringForKey:@"look"], @"natural");
+  _zoomField.stringValue = [defaults stringForKey:@"zoom"] ?: nsString(reashoot::desktop::defaultZoom());
+  selectPopupRepresentedValue(_resolutionPopup, [defaults stringForKey:@"resolution"], nsString(reashoot::desktop::defaultResolution()));
+  selectPopupRepresentedValue(_fpsPopup, [defaults stringForKey:@"fps"], nsString(reashoot::desktop::defaultFps()));
+  selectPopupRepresentedValue(_orientationPopup, [defaults stringForKey:@"orientation"], nsString(reashoot::desktop::defaultOrientation()));
+  selectPopupRepresentedValue(_aspectPopup, [defaults stringForKey:@"aspect"], nsString(reashoot::desktop::defaultAspect()));
+  selectPopupRepresentedValue(_lensPopup, [defaults stringForKey:@"lens"], nsString(reashoot::desktop::defaultLens()));
+  selectPopupRepresentedValue(_lookPopup, [defaults stringForKey:@"look"], nsString(reashoot::desktop::defaultLook()));
   _pairingToken = stdString([defaults stringForKey:@"pairingToken"] ?: @"");
   [self updateConnectionStatusLabels];
   debugLog(@"Loaded defaults host=%@ downloadDir=%@ zoom=%@ orientation=%@ token=%@",
@@ -657,12 +293,12 @@ bool isTransientConnectionFailure(const reashoot::core::CommandResult &result) {
   [defaults setObject:_hostField.stringValue forKey:@"host"];
   [defaults setObject:_downloadField.stringValue forKey:@"downloadDirectory"];
   [defaults setObject:_zoomField.stringValue forKey:@"zoom"];
-  [defaults setObject:_resolutionPopup.titleOfSelectedItem ?: @"4K" forKey:@"resolution"];
-  [defaults setObject:_fpsPopup.titleOfSelectedItem ?: @"30" forKey:@"fps"];
-  [defaults setObject:_orientationPopup.titleOfSelectedItem ?: @"auto" forKey:@"orientation"];
-  [defaults setObject:_aspectPopup.titleOfSelectedItem ?: @"9:16" forKey:@"aspect"];
-  [defaults setObject:_lensPopup.titleOfSelectedItem ?: @"wide" forKey:@"lens"];
-  [defaults setObject:selectedPopupValue(_lookPopup, @"natural") forKey:@"look"];
+  [defaults setObject:selectedPopupValue(_resolutionPopup, nsString(reashoot::desktop::defaultResolution())) forKey:@"resolution"];
+  [defaults setObject:selectedPopupValue(_fpsPopup, nsString(reashoot::desktop::defaultFps())) forKey:@"fps"];
+  [defaults setObject:selectedPopupValue(_orientationPopup, nsString(reashoot::desktop::defaultOrientation())) forKey:@"orientation"];
+  [defaults setObject:selectedPopupValue(_aspectPopup, nsString(reashoot::desktop::defaultAspect())) forKey:@"aspect"];
+  [defaults setObject:selectedPopupValue(_lensPopup, nsString(reashoot::desktop::defaultLens())) forKey:@"lens"];
+  [defaults setObject:selectedPopupValue(_lookPopup, nsString(reashoot::desktop::defaultLook())) forKey:@"look"];
   if (_pairingToken.empty()) {
     [defaults removeObjectForKey:@"pairingToken"];
   } else {
@@ -681,21 +317,20 @@ bool isTransientConnectionFailure(const reashoot::core::CommandResult &result) {
   reashoot::core::RemoteCameraSettings settings;
   settings.host = stdString(_hostField.stringValue);
   settings.token = _pairingToken;
-  settings.resolution = stdString(_resolutionPopup.titleOfSelectedItem);
-  settings.fps = stdString(_fpsPopup.titleOfSelectedItem);
-  settings.orientation = stdString(_orientationPopup.titleOfSelectedItem);
-  settings.aspect = stdString(_aspectPopup.titleOfSelectedItem);
-  settings.lens = stdString(_lensPopup.titleOfSelectedItem);
+  settings.resolution = stdString(selectedPopupValue(_resolutionPopup, nsString(reashoot::desktop::defaultResolution())));
+  settings.fps = stdString(selectedPopupValue(_fpsPopup, nsString(reashoot::desktop::defaultFps())));
+  settings.orientation = stdString(selectedPopupValue(_orientationPopup, nsString(reashoot::desktop::defaultOrientation())));
+  settings.aspect = stdString(selectedPopupValue(_aspectPopup, nsString(reashoot::desktop::defaultAspect())));
+  settings.lens = stdString(selectedPopupValue(_lensPopup, nsString(reashoot::desktop::defaultLens())));
   settings.zoom = stdString(_zoomField.stringValue);
-  settings.look = stdString(selectedPopupValue(_lookPopup, @"natural"));
+  settings.look = stdString(selectedPopupValue(_lookPopup, nsString(reashoot::desktop::defaultLook())));
   return settings;
 }
 
 - (void)updateConnectionStatusLabels {
-  _pairedStatusLabel.stringValue = _pairingToken.empty() ? @"Not paired" : @"Paired";
-  NSString *host = _hostField.stringValue.length > 0 ? _hostField.stringValue : @"No iPhone selected";
-  NSString *pairing = _pairingToken.empty() ? @"Not paired" : @"Paired";
-  _connectionStatusLabel.stringValue = [NSString stringWithFormat:@"iPhone: %@ - %@", host, pairing];
+  [self syncDesktopControllerState];
+  _pairedStatusLabel.stringValue = _desktopController.hasToken() ? @"Paired" : @"Not paired";
+  _connectionStatusLabel.stringValue = nsString(_desktopController.connectionStatusText());
   [self updatePreviewEmptyState];
 }
 
@@ -705,13 +340,8 @@ bool isTransientConnectionFailure(const reashoot::core::CommandResult &result) {
 }
 
 - (void)updatePreviewEmptyState {
-  if (_previewRunning) {
-    [_previewView setEmptyMessage:@"Waiting for video from iPhone..."];
-  } else if (_hostField.stringValue.length == 0 || _pairingToken.empty()) {
-    [_previewView setEmptyMessage:@"No paired iPhone."];
-  } else {
-    [_previewView setEmptyMessage:@"Preview stopped."];
-  }
+  [self syncDesktopControllerState];
+  [_previewView setEmptyMessage:nsString(_desktopController.previewEmptyMessage())];
 }
 
 - (void)setStatusFromResult:(const reashoot::core::CommandResult &)result fallback:(NSString *)fallback {
@@ -748,8 +378,10 @@ bool isTransientConnectionFailure(const reashoot::core::CommandResult &result) {
 }
 
 - (void)updateButtons {
-  _recordButton.enabled = YES;
-  _previewButton.title = _previewRunning ? @"Stop Preview" : @"Start Preview";
+  [self syncDesktopControllerState];
+  const reashoot::desktop::DesktopButtonState state = _desktopController.buttonState();
+  _recordButton.enabled = state.recordEnabled;
+  _previewButton.title = nsString(state.previewTitle);
   if (_recording && !_recordBlinkTimer) {
     _recordBlinkOn = true;
     _recordBlinkTimer = [NSTimer timerWithTimeInterval:2.5
@@ -769,6 +401,14 @@ bool isTransientConnectionFailure(const reashoot::core::CommandResult &result) {
            _previewRunning,
            _recordButton.enabled,
            _previewButton.title);
+}
+
+- (void)syncDesktopControllerState {
+  _desktopController.setHost(stdString(_hostField.stringValue));
+  _desktopController.setToken(_pairingToken);
+  _desktopController.setRecording(_recording);
+  _desktopController.setPreviewRunning(_previewRunning);
+  _desktopController.setPreviewDesired(_previewDesired);
 }
 
 - (void)recordBlinkTimerFired:(NSTimer *)timer {
@@ -816,20 +456,22 @@ bool isTransientConnectionFailure(const reashoot::core::CommandResult &result) {
                                  attempt:(NSInteger)attempt
                                automatic:(BOOL)automatic
                                 fallback:(NSString *)fallback {
-  if (!_previewDesired || !isTransientConnectionFailure(result) || attempt >= 5) {
+  [self syncDesktopControllerState];
+  const reashoot::desktop::PreviewRetryDecision retry = _desktopController.retryDecision(result, static_cast<int>(attempt));
+  if (!retry.shouldRetry) {
     NSString *message = result.errorMessage.empty() ? nsString(result.output) : nsString(result.errorMessage);
     [_previewView clearFrameWithMessage:message.length > 0 ? message : fallback];
     [self setStatusFromResult:result fallback:fallback];
     return;
   }
-  const NSInteger nextAttempt = attempt + 1;
-  const double delaySeconds = std::min<double>(10.0, 1.5 * static_cast<double>(nextAttempt));
+  const NSInteger nextAttempt = retry.nextAttempt;
+  const double delaySeconds = retry.delaySeconds;
   debugLog(@"Preview connection failed transiently; retrying attempt=%ld next=%ld delay=%.1fs automatic=%d",
            static_cast<long>(attempt),
            static_cast<long>(nextAttempt),
            delaySeconds,
            automatic);
-  NSString *retryStatus = [NSString stringWithFormat:@"No stream from phone. Retrying in %.0f seconds...", delaySeconds];
+  NSString *retryStatus = nsString(retry.statusText);
   [_previewView clearFrameWithMessage:retryStatus];
   [self setStatus:retryStatus];
   dispatch_after(dispatch_time(DISPATCH_TIME_NOW, static_cast<int64_t>(delaySeconds * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
@@ -1234,13 +876,7 @@ bool isTransientConnectionFailure(const reashoot::core::CommandResult &result) {
     }
     return createdAt;
   }
-  NSString *identifier = nsString(recording.id);
-  NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:@"([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}-[0-9]{2}-[0-9]{2}Z)" options:0 error:nil];
-  NSTextCheckingResult *match = [regex firstMatchInString:identifier options:0 range:NSMakeRange(0, identifier.length)];
-  if (match && match.numberOfRanges > 1) {
-    return [[identifier substringWithRange:[match rangeAtIndex:1]] stringByReplacingOccurrencesOfString:@"-" withString:@":" options:0 range:NSMakeRange(11, 8)];
-  }
-  return @"Unknown time";
+  return nsString(reashoot::desktop::recordingTimestampFallback(recording));
 }
 
 - (NSString *)byteCountTextForRecording:(const reashoot::core::RemoteRecordingDescriptor &)recording {
@@ -1249,16 +885,11 @@ bool isTransientConnectionFailure(const reashoot::core::CommandResult &result) {
 }
 
 - (NSURL *)thumbnailURLForRecording:(const reashoot::core::RemoteRecordingDescriptor &)recording {
-  if (recording.thumbnailPath.empty() || _hostField.stringValue.length == 0 || _pairingToken.empty()) {
+  const std::string url = reashoot::desktop::recordingThumbnailURL([self settings], recording);
+  if (url.empty()) {
     return nil;
   }
-  NSURLComponents *components = [[NSURLComponents alloc] init];
-  components.scheme = @"http";
-  components.host = _hostField.stringValue;
-  components.port = @8788;
-  components.path = nsString(recording.thumbnailPath);
-  components.queryItems = @[[NSURLQueryItem queryItemWithName:@"token" value:nsString(_pairingToken)]];
-  return components.URL;
+  return [NSURL URLWithString:nsString(url)];
 }
 
 - (void)loadThumbnailForRecording:(const reashoot::core::RemoteRecordingDescriptor &)recording imageView:(NSImageView *)imageView {

@@ -3,11 +3,14 @@
 #include "../src/core/control_protocol.h"
 #include "../src/core/h264_annex_b.h"
 #include "../src/core/helper_output_parser.h"
+#include "../src/core/log_sanitization.h"
 #include "../src/core/path_utils.h"
 #include "../src/core/remote_camera.h"
 #include "../src/core/reashoot_controller.h"
 #include "../src/core/reashoot_status.h"
 #include "../src/core/ui_interfaces.h"
+#include "../src/desktop/desktop_app_controller.h"
+#include "../src/desktop/desktop_app_model.h"
 #include "../src/desktop/desktop_workflow.h"
 
 #include <cassert>
@@ -136,6 +139,26 @@ void testRemoteCameraArguments() {
   assert(invalidPreview.port == 8789);
 }
 
+void testLogSanitization() {
+  assert(redactedText("paired token=secret\n") == "paired token=REDACTED\n");
+  assert(redactedText("pairingCode=123456 code=abcdef token=secret") == "pairingCode=REDACTED code=REDACTED token=REDACTED");
+  std::vector<std::string> args = {"configure", "--token", "secret", "--look", "natural"};
+  assert(redactedArguments(args) == "configure --token REDACTED --look natural");
+  RemoteCameraSettings settings;
+  settings.host = "iphone.local";
+  settings.token = "secret";
+  settings.resolution = "4K";
+  settings.fps = "30";
+  settings.orientation = "auto";
+  settings.aspect = "9:16";
+  settings.lens = "wide";
+  settings.zoom = "1.0";
+  settings.look = "natural";
+  const std::string summary = redactedSettingsSummary(settings);
+  assert(summary.find("token=present") != std::string::npos);
+  assert(summary.find("secret") == std::string::npos);
+}
+
 void testDesktopWorkflowParsing() {
   const auto cameras = reashoot::desktop::parseDiscoveredCameras(
       "noise\n"
@@ -165,6 +188,89 @@ void testDesktopWorkflowParsing() {
 
   assert(!reashoot::desktop::makeSessionID().empty());
   assert(reashoot::desktop::defaultDownloadDirectory().find("ReaShoot") != std::string::npos);
+}
+
+void testDesktopAppModel() {
+  using namespace reashoot::desktop;
+  assert(defaultResolution() == "4K");
+  assert(defaultFps() == "30");
+  assert(defaultOrientation() == "auto");
+  assert(defaultAspect() == "9:16");
+  assert(defaultLens() == "wide");
+  assert(defaultZoom() == "1.0");
+  assert(defaultLook() == "natural");
+  assert(resolutionChoices().size() == 3);
+  assert(lookChoices().size() >= 20);
+  assert(lookChoices().front().title == "Natural");
+  assert(lookChoices().front().value == "natural");
+  assert(recordButtonTitle(false) == "Start Recording");
+  assert(recordButtonTitle(true) == "Stop Recording");
+  assert(previewButtonTitle(false) == "Start Preview");
+  assert(previewButtonTitle(true) == "Stop Preview");
+  assert(previewEmptyMessage(false, false, false) == "No iPhone selected.");
+  assert(previewEmptyMessage(false, true, false) == "No paired iPhone.");
+  assert(previewEmptyMessage(false, true, true) == "Preview stopped.");
+  assert(previewEmptyMessage(true, true, true) == "Waiting for video from iPhone...");
+  assert(isTransientConnectionFailure("Details: Connection reset by peer"));
+  assert(isTransientConnectionFailure("No route to host"));
+  assert(!isTransientConnectionFailure("Unauthorized"));
+  CommandResult result;
+  result.exitCode = 1;
+  result.errorMessage = "connection refused";
+  assert(isTransientConnectionFailure(result));
+
+  RemoteCameraSettings settings;
+  settings.host = "iphone.local";
+  settings.httpPort = "8798";
+  settings.token = "secret";
+  RemoteRecordingDescriptor recording;
+  recording.id = "clip-2026-07-05T12-34-56Z";
+  recording.thumbnailPath = "/recordings/abc/thumbnail";
+  assert(recordingTimestampFallback(recording) == "2026-07-05T12:34:56Z");
+  assert(recordingThumbnailURL(settings, recording) == "http://iphone.local:8798/recordings/abc/thumbnail?token=secret");
+  recording.createdAt = "2026-07-05T19:22:00Z";
+  assert(recordingTimestampFallback(recording) == "2026-07-05T19:22:00Z");
+  settings.token.clear();
+  assert(recordingThumbnailURL(settings, recording).empty());
+}
+
+void testDesktopAppController() {
+  reashoot::desktop::DesktopAppController controller;
+  assert(controller.connectionStatusText() == "iPhone: No iPhone selected - Not paired");
+  assert(controller.previewEmptyMessage() == "No iPhone selected.");
+  assert(controller.buttonState().recordTitle == "Start Recording");
+  assert(controller.buttonState().previewTitle == "Start Preview");
+
+  controller.setHost("iphone.local");
+  assert(controller.connectionStatusText() == "iPhone: iphone.local - Not paired");
+  assert(controller.previewEmptyMessage() == "No paired iPhone.");
+  controller.setToken("secret");
+  assert(controller.canUsePhone());
+  assert(controller.connectionStatusText() == "iPhone: iphone.local - Paired");
+  assert(controller.previewEmptyMessage() == "Preview stopped.");
+
+  controller.setPreviewDesired(true);
+  controller.setPreviewRunning(true);
+  controller.setRecording(true);
+  assert(controller.previewEmptyMessage() == "Waiting for video from iPhone...");
+  assert(controller.buttonState().recordTitle == "Stop Recording");
+  assert(controller.buttonState().previewTitle == "Stop Preview");
+
+  CommandResult transient;
+  transient.exitCode = 1;
+  transient.errorMessage = "No route to host";
+  reashoot::desktop::PreviewRetryDecision retry = controller.retryDecision(transient, 0);
+  assert(retry.shouldRetry);
+  assert(retry.nextAttempt == 1);
+  assert(retry.delaySeconds > 1.0);
+  assert(retry.statusText.find("Retrying") != std::string::npos);
+
+  CommandResult authFailure;
+  authFailure.exitCode = 1;
+  authFailure.errorMessage = "Unauthorized";
+  assert(!controller.retryDecision(authFailure, 0).shouldRetry);
+  controller.setPreviewDesired(false);
+  assert(!controller.retryDecision(transient, 0).shouldRetry);
 }
 
 void testJsonValue() {
@@ -249,7 +355,10 @@ int main() {
   testReaShootControllerState();
   testCaptureProfileArguments();
   testRemoteCameraArguments();
+  testLogSanitization();
   testDesktopWorkflowParsing();
+  testDesktopAppModel();
+  testDesktopAppController();
   testJsonValue();
   testControlProtocol();
   testH264AnnexB();

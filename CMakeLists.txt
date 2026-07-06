@@ -134,6 +134,9 @@ if(APPLE)
 
   add_executable(reashoot_desktop MACOSX_BUNDLE
     "${REASHOOT_ROOT}/src/app/mac/ReaShootDesktopApp.mm"
+    "${REASHOOT_ROOT}/src/app/mac/ReaShootMacSupport.mm"
+    "${REASHOOT_ROOT}/src/app/mac/ReaShootMacUI.mm"
+    "${REASHOOT_ROOT}/src/app/mac/ReaShootPreviewView.mm"
     "${REASHOOT_ROOT}/src/platform/mac/mac_helper_process.mm"
     "${REASHOOT_ROOT}/src/platform/mac/mac_preview_stream_client.mm"
     "${REASHOOT_ROOT}/src/platform/mac/mac_h264_preview_renderer.mm"
@@ -164,6 +167,7 @@ if(APPLE)
 endif()
 
 if(WIN32)
+  option(REASHOOT_BUILD_DESKTOP_WIN32 "Build experimental standalone Windows desktop app scaffold" OFF)
   option(REASHOOT_WITH_FFMPEG_DECODER "Use shared FFmpeg for Windows live and playback preview decoding" ON)
   file(GLOB REASHOOT_WIN32_SOURCES CONFIGURE_DEPENDS "${REASHOOT_ROOT}/src/platform/win32/*.cpp")
   file(GLOB REASHOOT_SWELL_CPP_SOURCES CONFIGURE_DEPENDS "${REASHOOT_ROOT}/src/platform/swell/*.cpp")
@@ -216,4 +220,18 @@ if(WIN32)
   install(TARGETS reaper_reashoot reashoot_helper
           RUNTIME DESTINATION "${REAPER_WINDOWS_USERPLUGINS_DIR}"
           LIBRARY DESTINATION "${REAPER_WINDOWS_USERPLUGINS_DIR}")
+
+  if(REASHOOT_BUILD_DESKTOP_WIN32)
+    add_executable(reashoot_desktop_win32 WIN32
+      "${REASHOOT_ROOT}/src/app/win32/ReaShootDesktopWin32.cpp"
+    )
+    target_link_libraries(reashoot_desktop_win32 PRIVATE reashoot_desktop_core user32)
+    target_include_directories(reashoot_desktop_win32 PRIVATE "${REASHOOT_ROOT}/src")
+    target_compile_options(reashoot_desktop_win32 PRIVATE ${REASHOOT_WARNING_FLAGS})
+    target_compile_definitions(reashoot_desktop_win32 PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    add_dependencies(reashoot_desktop_win32 reashoot_helper)
+    add_custom_command(TARGET reashoot_desktop_win32 POST_BUILD
+      COMMAND "${CMAKE_COMMAND}" -E copy "$<TARGET_FILE:reashoot_helper>" "$<TARGET_FILE_DIR:reashoot_desktop_win32>/reashoot-win.exe"
+    )
+  endif()
 endif()

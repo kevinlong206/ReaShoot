@@ -1,4 +1,5 @@
 #include "win32_helper_process.h"
+#include "../../core/log_sanitization.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -53,42 +54,6 @@ std::string commandLineFor(const std::string &executablePath, const std::vector<
     commandLine += quoteArgument(argument);
   }
   return commandLine;
-}
-
-std::string redactedArguments(const std::vector<std::string> &arguments) {
-  std::ostringstream stream;
-  bool redactNext = false;
-  for (size_t index = 0; index < arguments.size(); ++index) {
-    if (index > 0) {
-      stream << ' ';
-    }
-    if (redactNext) {
-      stream << "REDACTED";
-      redactNext = false;
-    } else {
-      stream << arguments[index];
-      if (arguments[index] == "--token") {
-        redactNext = true;
-      }
-    }
-  }
-  return stream.str();
-}
-
-std::string redactedOutput(std::string output) {
-  constexpr const char *prefix = "token=";
-  size_t position = 0;
-  while ((position = output.find(prefix, position)) != std::string::npos) {
-    const size_t valueStart = position + std::char_traits<char>::length(prefix);
-    size_t valueEnd = valueStart;
-    while (valueEnd < output.size() && output[valueEnd] != ' ' && output[valueEnd] != '\t' &&
-           output[valueEnd] != '\r' && output[valueEnd] != '\n') {
-      ++valueEnd;
-    }
-    output.replace(valueStart, valueEnd - valueStart, "REDACTED");
-    position = valueStart + std::char_traits<char>::length("REDACTED");
-  }
-  return output;
 }
 
 std::vector<std::string> commandArguments(const std::string &command, const std::vector<std::string> &arguments) {
@@ -178,7 +143,7 @@ private:
     }
 
     std::vector<std::string> allArguments = commandArguments(command, arguments);
-    log("helper start command=" + command + " args=" + redactedArguments(allArguments));
+    log("helper start command=" + command + " args=" + core::redactedArguments(allArguments));
 
     SECURITY_ATTRIBUTES security = {};
     security.nLength = sizeof(security);
@@ -258,7 +223,7 @@ private:
     if (result.exitCode != 0 && result.output.empty()) {
       result.errorMessage = "reashoot-win failed.";
     }
-    log("helper finish command=" + command + " status=" + std::to_string(result.exitCode) + " output=" + redactedOutput(result.output));
+    log("helper finish command=" + command + " status=" + std::to_string(result.exitCode) + " output=" + core::redactedText(result.output));
 
     if (asyncState) {
       std::lock_guard<std::mutex> lock(asyncState->mutex);

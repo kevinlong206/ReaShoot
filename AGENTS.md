@@ -4,7 +4,7 @@
 
 This branch contains ReaShoot as a standalone desktop app plus its companion iPhone camera app. The product direction is no longer REAPER-first: `ReaShoot.app` is the primary macOS target, and the existing native REAPER extension is legacy/secondary.
 
-- The macOS desktop app is implemented as native Cocoa/Objective-C++ with a thin UI over shared C++ workflow code.
+- The macOS desktop app currently uses native Cocoa/Objective-C++; keep it thin over shared C++ workflow code. The preferred modern UI direction is SwiftUI on macOS and WinUI 3 on Windows over the same shared controller/state layer.
 - The iPhone app lives in `iphone/` and records full-quality iPhone video while the desktop app controls it over the local Wi-Fi/Bonjour network.
 - The desktop app controls the iPhone over WebSocket port `8787`, downloads recordings over HTTP port `8788`, and receives preview video over an authenticated H.264 WebSocket stream on port `8789`.
 - Keep desktop workflow logic cross-platform-friendly so future Windows desktop support can reuse protocol, discovery, control, preview transport, download, pending-recording, and capture-profile behavior.
@@ -13,8 +13,8 @@ This branch contains ReaShoot as a standalone desktop app plus its companion iPh
 
 ## Important files
 
-- `src/app/mac/` - Standalone macOS desktop app bundle sources.
-- `src/desktop/` - Desktop workflow helpers shared by standalone app frontends.
+- `src/app/mac/` - Standalone macOS desktop app bundle sources. Keep AppKit/SwiftUI files focused on native controls, layout, windows, menus, and rendering.
+- `src/desktop/` - Desktop workflow/state/view-model helpers shared by standalone app frontends. Cross-platform desktop behavior belongs here unless it is protocol-level core code.
 - `src/core/control_protocol.*` and `iphone/Sources/ReaShootCore/ControlProtocol.swift` - Protocol definitions; keep these compatible when adding commands/events.
 - `src/core/` - Shared C++ protocol, parsing, capture-profile, H.264, status, and controller code.
 - `src/helper/` - C++ helper executable. Builds `reashoot-mac` on macOS and `reashoot-win.exe` on Windows for iPhone discovery/control/download. The macOS desktop app bundles this helper.
@@ -100,6 +100,8 @@ rm -rf iphone/Package.resolved iphone/.build helper/.build
 
 - Keep the implementation native; do not move iPhone control, preview, media insertion, or downloads into JSFX, VST3, Lua, or a web wrapper.
 - Prefer shared code for behavior that should be consistent across macOS and future Windows desktop support. Add platform-specific code only when host APIs, OS services, UI toolkits, or build constraints make sharing impractical.
+- Keep desktop app orchestration out of native UI files. Pairing, discovery retry policy, configure-on-profile-change, preview start/stop state, stale-frame empty states, recording start/stop, and iPhone video list/download/delete workflows should live in `src/desktop/` or `src/core/`.
+- Native UI/platform files may own layout, colors, menus, alerts, file dialogs, settings storage adapters, main-thread dispatch/timers, thumbnail/image display, and preview renderer/client factories.
 - Keep preview transport dependency-light and same-LAN oriented; prefer simple H.264 streaming over heavyweight realtime SDKs unless requirements change.
 - Keep routine status in the desktop app UI. Use modal alerts for real decisions and errors.
 - Do not commit iPhone pairing tokens, downloaded `.mov` files, `test-downloads`, DerivedData, `.DS_Store`, or Xcode `xcuserdata`.

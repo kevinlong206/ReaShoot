@@ -4,14 +4,14 @@ Pull requests are welcome and will be reviewed as time permits. Bug reports, cra
 
 ## Project direction
 
-This branch pivots ReaShoot toward a standalone desktop app for controlling the companion iPhone camera app. The first desktop target is a native macOS app bundle, `ReaShoot.app`; future Windows support should reuse the same cross-platform-friendly core.
+This branch pivots ReaShoot toward a standalone desktop app for controlling the companion iPhone camera app. The first desktop target is a native macOS app bundle, `ReaShoot.app`; future Windows support should reuse the same cross-platform-friendly core. The preferred modern UI direction is native-modern per platform: SwiftUI on macOS and WinUI 3 on Windows over a shared C++ controller/state layer.
 
 The existing REAPER extension remains in the repository as a legacy/secondary target. Keep it buildable where practical, but do not let new desktop-app workflow code depend on REAPER APIs, SWELL UI, REAPER transport, track insertion, or audio-alignment behavior.
 
 ## Project layout
 
-- `src/app/mac/` - Native Cocoa/Objective-C++ macOS desktop app entry point and UI.
-- `src/desktop/` - Desktop workflow helpers shared by the standalone app and future platform frontends.
+- `src/app/mac/` - Native macOS desktop app entry point and UI. Keep these files focused on native controls, layout, windows, menus, alerts, and rendering.
+- `src/desktop/` - Desktop workflow, state, view-model, and UI-facing constants shared by the standalone app and future platform frontends.
 - `src/core/` - Shared protocol, parsing, capture profile, H.264 Annex B, status, and controller code.
 - `src/helper/` - C++ helper executable used by the desktop app bundle and legacy REAPER extension for discovery, iPhone control, transfer, and download.
 - `src/platform/mac/` - macOS adapters for helper execution, preview WebSocket transport, H.264 preview decode, prompts, media reading, and legacy extension support.
@@ -28,6 +28,8 @@ Keep protocol definitions aligned between `src/core/control_protocol.*` and `iph
 - Keep standalone app workflow state in `src/desktop/` or `src/core/`; keep Cocoa/Objective-C++ UI thin.
 - Prefer shared C++ for behavior that should be consistent between macOS and future Windows desktop support.
 - Add platform-specific code only for OS APIs, host integration, UI toolkits, decode backends, or build constraints.
+- Do not put desktop orchestration back into AppKit/SwiftUI/WinUI code. Pairing, discovery retry policy, configure-on-profile-change, preview start/stop state, stale-frame empty states, recording start/stop, and iPhone video list/download/delete workflows should be shared C++.
+- Native UI/platform adapters may own layout, colors, menus, alerts, file dialogs, settings storage adapters, main-thread dispatch/timers, thumbnail/image display, and preview renderer/client factories.
 - Preserve the iPhone single-file recording model: one downloaded `.mov` with embedded camera audio.
 - Keep routine status in the desktop app UI. Use modal alerts for user decisions and real errors.
 - Do not commit pairing tokens, downloaded `.mov` files, `test-downloads`, DerivedData, `.DS_Store`, Xcode `xcuserdata`, or generated local SwiftPM build output.
