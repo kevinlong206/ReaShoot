@@ -4,7 +4,7 @@ Guidance for future agents working in this project.
 
 ## Project status
 
-This is the consolidated companion iPhone app for ReaShoot. It records iPhone video controlled from REAPER over the local Wi-Fi/Bonjour network.
+This is the consolidated companion iPhone app for ReaShoot. It records iPhone video controlled by the standalone ReaShoot desktop app over the local Wi-Fi/Bonjour network. The legacy REAPER extension uses the same iPhone app and protocol, but the desktop app is the primary product direction on this branch.
 
 This directory is the source of truth for the iPhone app. Do not use or recreate old external development copies.
 
@@ -13,7 +13,7 @@ The current implementation has been installed and tested on a physical iPhone in
 1. iPhone app advertises `_reashoot._tcp` with Bonjour.
 2. Mac reaches the device over the local Wi-Fi network using the Bonjour-advertised host.
 3. Mac sends WebSocket control commands on port `8787`.
-4. REAPER uses an authenticated local H.264 WebSocket stream for preview; the iPhone renders the selected look before sending preview frames.
+4. The desktop app uses an authenticated local H.264 WebSocket stream for preview; the iPhone renders the selected look before sending preview frames.
 5. iPhone records video with AVFoundation.
 6. Mac sends stop, receives a recording descriptor, downloads the `.mov` over HTTP on port `8788`, verifies checksum, and acknowledges transfer.
 
@@ -29,7 +29,7 @@ The app disables the idle timer while ready/listening so foreground preview does
 - `Sources/ReaShootKit`: iOS recording engine, pairing, WebSocket server, HTTP server, and orchestration service.
 - `Sources/ReaShootKit/PreviewH264Encoder.swift`: VideoToolbox H.264 encoder for low-resolution dock preview.
 - `Sources/ReaShootKit/PreviewStreamServer.swift`: authenticated binary WebSocket server for preview frames.
-- `Sources/reashoot-mac`: Legacy SwiftPM Mac command-line tool target for iPhone-package development. The REAPER-side bundled helper lives in `../src/helper/`.
+- `Sources/reashoot-mac`: Legacy SwiftPM Mac command-line tool target for iPhone-package development. The standalone desktop app and legacy REAPER extension bundle the C++ helper from `../src/helper/`.
 - `Tests/ReaShootCoreTests`: shared protocol and state-machine tests.
 - `test-downloads`: local output directory for downloaded recordings; do not commit it.
 
@@ -145,20 +145,20 @@ Expected result: a `.mov` appears in `test-downloads`, and the CLI prints `downl
 
 Add `--progress` to `swift run reashoot-mac stop ...` when testing progress. It emits `encode percent=...` during on-phone look preparation and `progress bytes=... total=... percent=...` lines during the HTTP download.
 
-For the REAPER prompted stop flow, use `stop-only` to get raw pending recording metadata immediately, then either `download-recording --progress` or `delete-recording`. `download-recording` prepares/encodes non-natural looks only after Download is chosen. If a download fails before acknowledgement, the recording remains pending on the phone; use `list-recordings` plus `download-recording --progress` to restore it, `delete-recording` to remove it, or delete it from the iPhone app's Recordings section.
+For the standalone desktop app and legacy REAPER prompted stop flow, use `stop-only` to get raw pending recording metadata immediately, then either `download-recording --progress` or `delete-recording`. `download-recording` prepares/encodes non-natural looks only after Download is chosen. If a download fails before acknowledgement, the recording remains pending on the phone; use `list-recordings` plus `download-recording --progress` to restore it, `delete-recording` to remove it, or delete it from the iPhone app's Recordings section.
 
 ## H.264 preview notes
 
-- REAPER sends `startPreview` over the control WebSocket.
+- The desktop app sends `startPreview` over the control WebSocket.
 - The iPhone returns a `PreviewDescriptor` for an authenticated preview WebSocket on port `8789`.
 - The preview server sends an initial JSON descriptor text frame, then binary H.264 Annex B access units.
-- SPS/PPS must be sent before keyframes so REAPER can rebuild its decoder format description after reconnects.
-- The iPhone app status UI exposes a `Preview` row. It should report `Streaming` only when a preview WebSocket client is actually connected; after `startPreview` but before REAPER connects, it reports waiting.
+- SPS/PPS must be sent before keyframes so desktop clients can rebuild decoder format descriptions after reconnects.
+- The iPhone app status UI exposes a `Preview` row. It should report `Streaming` only when a preview WebSocket client is actually connected; after `startPreview` but before the desktop app connects, it reports waiting.
 - HTTP is used for recording downloads, not live preview.
-- The app starts control/HTTP listeners before camera preparation so REAPER can reconnect quickly after app launch.
+- The app starts control/HTTP listeners before camera preparation so the desktop app can reconnect quickly after app launch.
 - The helper validates complete WebSocket handshake headers, including `Sec-WebSocket-Accept`; keep `LocalWebSocketServer.handshakeResponse` terminated with `\r\n\r\n`.
 - Lens selection uses AVFoundation rear camera discovery. Not every iPhone exposes `ultrawide` or `telephoto`; unavailable lens requests should fail clearly instead of silently pretending they worked.
-- Looks include custom names plus a curated raw Core Image subset accepted as `ci:<filterName>`. Keep `VideoLook.rawFilterIDs` aligned with the REAPER dropdown list in `../src/reashoot.mm`.
+- Looks include custom names plus a curated raw Core Image subset accepted as `ci:<filterName>`. Keep `VideoLook.rawFilterIDs` aligned with desktop/legacy dropdown lists.
 
 ## Known issues and next work
 

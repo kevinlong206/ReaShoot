@@ -19,6 +19,8 @@ endif()
 
 file(GLOB REASHOOT_CORE_SOURCES CONFIGURE_DEPENDS "${REASHOOT_ROOT}/src/core/*.cpp")
 file(GLOB REASHOOT_CORE_HEADERS CONFIGURE_DEPENDS "${REASHOOT_ROOT}/src/core/*.h")
+file(GLOB REASHOOT_DESKTOP_SOURCES CONFIGURE_DEPENDS "${REASHOOT_ROOT}/src/desktop/*.cpp")
+file(GLOB REASHOOT_DESKTOP_HEADERS CONFIGURE_DEPENDS "${REASHOOT_ROOT}/src/desktop/*.h")
 file(GLOB REASHOOT_FFMPEG_SOURCES CONFIGURE_DEPENDS "${REASHOOT_ROOT}/src/platform/ffmpeg/*.cpp")
 file(GLOB REASHOOT_FFMPEG_HEADERS CONFIGURE_DEPENDS "${REASHOOT_ROOT}/src/platform/ffmpeg/*.h")
 
@@ -31,8 +33,14 @@ target_include_directories(reashoot_core
 target_compile_options(reashoot_core PRIVATE ${REASHOOT_WARNING_FLAGS})
 set_target_properties(reashoot_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
+add_library(reashoot_desktop_core STATIC ${REASHOOT_DESKTOP_SOURCES} ${REASHOOT_DESKTOP_HEADERS})
+target_link_libraries(reashoot_desktop_core PUBLIC reashoot_core)
+target_include_directories(reashoot_desktop_core PUBLIC "${REASHOOT_ROOT}/src")
+target_compile_options(reashoot_desktop_core PRIVATE ${REASHOOT_WARNING_FLAGS})
+set_target_properties(reashoot_desktop_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 add_executable(reashoot_core_tests "${REASHOOT_ROOT}/tests/core_tests.cpp")
-target_link_libraries(reashoot_core_tests PRIVATE reashoot_core)
+target_link_libraries(reashoot_core_tests PRIVATE reashoot_core reashoot_desktop_core)
 target_compile_options(reashoot_core_tests PRIVATE ${REASHOOT_WARNING_FLAGS})
 
 enable_testing()
@@ -123,6 +131,36 @@ if(APPLE)
   install(CODE
     "execute_process(COMMAND /usr/bin/codesign --force --sign - \"${REAPER_USERPLUGINS_DIR}/reashoot-mac\" COMMAND_ERROR_IS_FATAL ANY)
      execute_process(COMMAND /usr/bin/codesign --force --sign - \"${REAPER_USERPLUGINS_DIR}/reaper_reashoot.dylib\" COMMAND_ERROR_IS_FATAL ANY)")
+
+  add_executable(reashoot_desktop MACOSX_BUNDLE
+    "${REASHOOT_ROOT}/src/app/mac/ReaShootDesktopApp.mm"
+    "${REASHOOT_ROOT}/src/platform/mac/mac_helper_process.mm"
+    "${REASHOOT_ROOT}/src/platform/mac/mac_preview_stream_client.mm"
+    "${REASHOOT_ROOT}/src/platform/mac/mac_h264_preview_renderer.mm"
+  )
+  target_link_libraries(reashoot_desktop
+    PRIVATE
+      reashoot_desktop_core
+      "-framework Cocoa"
+      "-framework Foundation"
+      "-framework CoreMedia"
+      "-framework QuartzCore"
+      "-framework VideoToolbox"
+  )
+  target_include_directories(reashoot_desktop PRIVATE "${REASHOOT_ROOT}/src")
+  target_compile_options(reashoot_desktop PRIVATE
+    ${REASHOOT_WARNING_FLAGS}
+    $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>
+  )
+  set_target_properties(reashoot_desktop PROPERTIES
+    OUTPUT_NAME "ReaShoot"
+    MACOSX_BUNDLE_INFO_PLIST "${REASHOOT_ROOT}/src/app/mac/Info.plist"
+  )
+  add_dependencies(reashoot_desktop reashoot_helper)
+  add_custom_command(TARGET reashoot_desktop POST_BUILD
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_BUNDLE_CONTENT_DIR:reashoot_desktop>/Resources"
+    COMMAND "${CMAKE_COMMAND}" -E copy "$<TARGET_FILE:reashoot_helper>" "$<TARGET_BUNDLE_CONTENT_DIR:reashoot_desktop>/Resources/reashoot-mac"
+  )
 endif()
 
 if(WIN32)

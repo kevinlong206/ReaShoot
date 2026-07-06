@@ -1,102 +1,78 @@
 # ReaShoot
 
-ReaShoot lets you record video on your iPhone while recording audio in REAPER. Press record once in REAPER: your iPhone captures full-quality video, REAPER captures your session audio, and ReaShoot brings the finished movie back into the project in sync.
+ReaShoot is a standalone desktop app for recording high-quality iPhone video from your Mac. Open ReaShoot on the iPhone, pair it with the Mac app over your local network, use the live preview to frame the shot, then start and stop recording from the desktop.
 
-It replaces the awkward camera-app workflow: no starting two recordings by hand, no AirDrop/file transfer step, and less manual syncing afterward.
+The iPhone records the full-quality `.mov` with embedded camera audio. When you stop, ReaShoot lets you download or delete the take; downloaded files default to `~/Movies/ReaShoot` and can be revealed in Finder. Interrupted transfers stay recoverable on the iPhone until the desktop app verifies and acknowledges the download.
+
+The older REAPER extension remains in this repository as a legacy/secondary target, but this branch is focused on the general-purpose desktop app.
 
 **Need help or want to contribute?** Open a [GitHub issue](https://github.com/kevinlong206/ReaShoot/issues) for bugs, crashes, confusing behavior, or feature requests. Technical build and contribution notes live in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## What ReaShoot does
 
-- Controls the companion iPhone app from REAPER over local Wi-Fi.
-- Starts and stops iPhone video capture with REAPER recording.
-- Shows a live iPhone preview inside REAPER.
-- Downloads the finished `.mov` automatically.
-- Inserts the movie on a `ReaShoot` track at the original record position.
-- Uses the iPhone's embedded camera audio as a sync reference and tries to align the video to your REAPER audio.
-- Keeps interrupted transfers recoverable on the iPhone.
+- Controls the companion iPhone app over local Wi-Fi/Bonjour.
+- Shows a live iPhone preview in a macOS desktop window.
+- Starts and stops iPhone video capture from the desktop.
+- Lets you choose resolution, FPS, orientation, aspect ratio, lens, zoom, and look.
+- Prompts to download or delete each stopped take.
+- Downloads verified `.mov` files to `~/Movies/ReaShoot` by default.
+- Keeps failed or canceled transfers pending on the iPhone for later recovery.
 
 ## Requirements
 
-- REAPER on macOS or Windows. Linux support is TBD.
-- The ReaShoot iPhone app from this repository.
+- macOS 14 or newer for the first desktop app target.
+- The ReaShoot iPhone app from this repository, bundle ID `com.kevinlong.reashoot`.
 - An iPhone or other supported iOS device for the camera.
-- iOS device and computer on the same reachable local network.
+- iPhone and Mac on the same reachable local network.
 - Local-network permission enabled for the iPhone app.
 
-Only iOS devices are supported as cameras today. Keep the iOS app open in the foreground while using ReaShoot. The app keeps the phone awake during capture, so plugging the phone into a charger is recommended.
+Only iOS devices are supported as cameras today. Keep the iPhone app open in the foreground while using ReaShoot. The app keeps the phone awake during capture, so plugging the phone into a charger is recommended.
 
 ## Quick start
 
-1. Install the REAPER extension and the iPhone app.
-2. Restart REAPER.
-3. In REAPER, open the Action List and run `ReaShoot: Enable ReaShoot`.
-4. Open the ReaShoot preview window.
-5. Launch ReaShoot on the iPhone.
-6. In the preview window, click `Setup`, then `Discover`.
-7. Enter the pairing code shown on the iPhone and click `Pair`.
-8. Record in REAPER as usual. ReaShoot starts and stops the iPhone video with you.
-9. When you stop, choose whether to download or delete the iPhone take.
+1. Build or install `ReaShoot.app` on the Mac and the ReaShoot app on the iPhone.
+2. Launch ReaShoot on the iPhone and keep it open.
+3. Launch `ReaShoot.app` on the Mac.
+4. Click `Discover`, or enter the iPhone host/IP manually if discovery fails.
+5. Enter the pairing code shown on the iPhone and click `Pair`.
+6. Click `Start Preview` to frame the shot.
+7. Choose capture settings, then click `Start Recording`.
+8. Click `Stop Recording`, then choose `Download` or `Delete`.
 
 ## Pairing your phone
 
-ReaShoot connects from REAPER to the iOS device over your local network. The phone must be on the same Wi-Fi network as the computer, or on a network the computer can reach. The computer itself can be wired with Ethernet as long as it can connect to the iOS device.
+ReaShoot connects from the Mac to the iPhone over your local network. The phone must be on the same Wi-Fi network as the Mac, or on a network the Mac can reach. The Mac can be wired with Ethernet as long as it can connect to the iPhone.
 
-To pair:
+The Mac app makes Bonjour discovery prominent and keeps manual host/IP entry as a fallback. Pairing tokens are credentials for controlling the phone; do not commit or share them.
 
-1. Open ReaShoot on the iOS device.
-2. Open the ReaShoot preview window in REAPER.
-3. Click `Setup`, then `Discover`.
-4. Select the phone, enter the pairing code shown on the iOS device, and click `Pair`.
+## Preview and recording
 
-On Windows, automatic discovery may not always find the phone. If that happens, enter the phone's IP address manually in the setup fields, then pair with the code shown on the device.
+The preview uses an authenticated H.264 WebSocket stream from the iPhone. The desktop app starts preview through the control channel, connects to the returned preview socket, decodes frames on macOS with VideoToolbox, and displays them in the app window.
 
-## Preview window
-
-The preview window is the main control surface. Use it to pair the iPhone, watch the live camera feed, choose capture settings, see recording/download progress, and recover pending recordings.
-
-## Recording workflow
-
-Enable ReaShoot before recording. When REAPER enters record, the iPhone starts recording video. When REAPER leaves record, ReaShoot asks what to do with the iPhone take.
-
-If you choose **Download**, the phone prepares the movie, the helper downloads it, and REAPER inserts it on the `ReaShoot` track at the original record-start position. If you choose **Delete**, the phone deletes the take after confirmation.
-
-The `ReaShoot` track is intentionally kept record-disabled. REAPER remains responsible for production audio recording; iPhone audio stays inside the movie so ReaShoot can use it for sync and alignment.
-
-## Capture settings
-
-Use the preview window to choose resolution, FPS, orientation, aspect ratio, lens, zoom, and look. Lens and zoom options depend on the iPhone hardware.
-
-Non-natural looks are applied on the iPhone after you choose to download a take. Encoding and download progress are shown in the preview window.
+When recording stops, the desktop app first receives pending recording metadata from the phone, then prompts before doing any download/delete action. Non-natural looks are prepared on the iPhone only after you choose to download.
 
 ## Recovering recordings
 
-If a download fails, is canceled, or cannot be acknowledged, the iPhone keeps the recording instead of deleting it. Use `Pending...` in the preview window, or run `ReaShoot: Restore Pending iPhone Recording`, to choose a pending clip and either download it into the project or delete it.
+If a download fails, is canceled, or cannot be acknowledged, the iPhone keeps the recording instead of deleting it. Use `Pending...` in the desktop app to recover a pending clip and either download or delete it.
 
-Use `Delete All` in the preview window, or run `ReaShoot: Delete All Pending iPhone Recordings`, to remove all pending clips after confirmation.
+After the desktop app verifies a downloaded movie and acknowledges the transfer, the iPhone app deletes its local copy.
 
-After REAPER verifies a downloaded movie and acknowledges the transfer, the iPhone app deletes its local copy.
+## Legacy REAPER extension
+
+The repository still contains the original native REAPER extension for macOS and Windows. It uses the same iPhone app, protocol, helper, and preview transport, but it is no longer the primary product direction on this branch. See [CONTRIBUTING.md](CONTRIBUTING.md) for build details and legacy target notes.
 
 ## Troubleshooting
 
-### REAPER does not see ReaShoot
-
-Restart REAPER after installing the extension. REAPER loads native extensions only at process startup.
-
 ### The iPhone is not discovered
 
-Make sure the iPhone and computer are on the same local Wi-Fi network, the iPhone app is open, and local-network permission is enabled for ReaShoot on iOS.
+Make sure the iPhone and Mac are on the same local network, the iPhone app is open in the foreground, and local-network permission is enabled for ReaShoot on iOS. If Bonjour discovery still fails, enter the iPhone host or IP address manually.
 
 ### Pairing fails
 
-Use the current pairing code shown in the iPhone app. If the phone rejects a saved token, pair again from `Setup`.
-
-### Preview works but playback looks different
-
-The docked preview is optimized for responsiveness and smooth editing. Playback audio comes from REAPER, not the internal preview renderer. The downloaded `.mov` is the source of truth for final media quality.
+Use the current pairing code shown in the iPhone app. If the phone rejects a saved token, pair again from the Mac app.
 
 ### A download failed
 
-Use `Pending...` to recover the recording from the iPhone. Failed or canceled transfers remain pending until REAPER verifies the movie and acknowledges the transfer.
+Use `Pending...` to recover the recording from the iPhone. Failed or canceled transfers remain pending until the desktop app verifies the movie and acknowledges the transfer.
 
 For build instructions, architecture notes, validation commands, and contribution guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).

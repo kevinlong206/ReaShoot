@@ -1,81 +1,95 @@
 # Contributing to ReaShoot
 
-Pull requests are welcome and will be reviewed as time permits. Bug reports, crashes, confusing workflows, and feature requests should be filed as [GitHub issues](https://github.com/kevinlong206/ReaPhoneVideo/issues).
+Pull requests are welcome and will be reviewed as time permits. Bug reports, crashes, confusing workflows, and feature requests should be filed as [GitHub issues](https://github.com/kevinlong206/ReaShoot/issues).
+
+## Project direction
+
+This branch pivots ReaShoot toward a standalone desktop app for controlling the companion iPhone camera app. The first desktop target is a native macOS app bundle, `ReaShoot.app`; future Windows support should reuse the same cross-platform-friendly core.
+
+The existing REAPER extension remains in the repository as a legacy/secondary target. Keep it buildable where practical, but do not let new desktop-app workflow code depend on REAPER APIs, SWELL UI, REAPER transport, track insertion, or audio-alignment behavior.
 
 ## Project layout
 
-- `src/reashoot.mm` - Main macOS REAPER extension implementation.
-- `src/helper/` - Helper executable used by REAPER for iPhone control, discovery, transfer, and download.
-- `src/core/` - Shared protocol, parsing, alignment, status, and controller code.
-- `src/platform/swell/swell_panel_probe.cpp` - Shared preview/setup/status panel UI.
-- `src/platform/ffmpeg/` - Shared FFmpeg recorded-file playback preview.
-- `src/platform/mac/` - macOS platform adapters.
-- `src/platform/win32/` - Windows platform adapters.
-- `iphone/` - Companion iPhone app and Swift package. This is the source of truth for the iPhone app.
+- `src/app/mac/` - Native Cocoa/Objective-C++ macOS desktop app entry point and UI.
+- `src/desktop/` - Desktop workflow helpers shared by the standalone app and future platform frontends.
+- `src/core/` - Shared protocol, parsing, capture profile, H.264 Annex B, status, and controller code.
+- `src/helper/` - C++ helper executable used by the desktop app bundle and legacy REAPER extension for discovery, iPhone control, transfer, and download.
+- `src/platform/mac/` - macOS adapters for helper execution, preview WebSocket transport, H.264 preview decode, prompts, media reading, and legacy extension support.
+- `src/platform/win32/` - Windows adapters. Keep future desktop logic reusable here.
+- `src/platform/ffmpeg/` - Shared FFmpeg recorded-file playback preview used by legacy preview/playback surfaces.
+- `src/reashoot.mm`, `src/reaper/`, `src/platform/swell/` - Legacy REAPER extension and shared SWELL panel.
+- `iphone/` - Companion iPhone app and Swift package. This remains the source of truth for the iPhone app.
 
 Keep protocol definitions aligned between `src/core/control_protocol.*` and `iphone/Sources/ReaShootCore/ControlProtocol.swift`.
 
 ## Development principles
 
-- Keep the implementation native. Do not move iPhone control, preview, media insertion, or playback into JSFX, VST3, or Lua.
-- Keep preview/setup/status controls in the shared SWELL panel instead of adding parallel Cocoa or Win32 control trees.
-- Preserve the single-item model: one downloaded `.mov` item with embedded camera audio.
-- Do not enable REAPER audio recording on the `ReaShoot` track.
-- Keep routine status in the preview UI; use REAPER message boxes only for real errors or confirmations.
-- Keep macOS and Windows preview/playback logic shared where practical, while avoiding platform-specific workarounds unless they are justified on that platform.
+- Keep the implementation native. Do not move iPhone control, preview, download, or media workflows into JSFX, VST3, Lua, or web wrappers.
+- Keep standalone app workflow state in `src/desktop/` or `src/core/`; keep Cocoa/Objective-C++ UI thin.
+- Prefer shared C++ for behavior that should be consistent between macOS and future Windows desktop support.
+- Add platform-specific code only for OS APIs, host integration, UI toolkits, decode backends, or build constraints.
+- Preserve the iPhone single-file recording model: one downloaded `.mov` with embedded camera audio.
+- Keep routine status in the desktop app UI. Use modal alerts for user decisions and real errors.
 - Do not commit pairing tokens, downloaded `.mov` files, `test-downloads`, DerivedData, `.DS_Store`, Xcode `xcuserdata`, or generated local SwiftPM build output.
+- Keep the iPhone app and desktop/helper protocol definitions compatible.
 
-## macOS build
+## macOS desktop app build
 
-macOS playback preview requires FFmpeg headers and dylibs. Install FFmpeg with Homebrew or set `FFMPEG_ROOT` / `REASHOOT_FFMPEG_ROOT` to a prefix containing `include/` and `lib/`:
+macOS recorded-file playback support for legacy targets requires FFmpeg headers and dylibs. Install FFmpeg with Homebrew or set `REASHOOT_FFMPEG_ROOT` to a prefix containing `include/` and `lib/`:
 
 ```sh
 brew install ffmpeg
 ```
 
-Build with:
+Build the standalone macOS app with CMake:
+
+```sh
+cmake -S . -B build-desktop -DCMAKE_BUILD_TYPE=Debug
+cmake --build build-desktop --target reashoot_desktop --parallel
+open build-desktop/ReaShoot.app
+```
+
+The app bundle copies the C++ helper into `ReaShoot.app/Contents/Resources/reashoot-mac`.
+For pairing, discovery, preview, and window-layout debugging, launch with:
+
+```sh
+open build-desktop/ReaShoot.app --args -debug
+```
+
+Debug output goes to stderr and `~/Library/Logs/ReaShoot/ReaShoot-debug.log`; pairing tokens and codes should be redacted.
+
+## CMake build
+
+macOS full build:
+
+```sh
+cmake -S . -B build-cmake -DCMAKE_BUILD_TYPE=Debug
+cmake --build build-cmake --parallel
+ctest --test-dir build-cmake --output-on-failure
+```
+
+Windows legacy extension build:
+
+```powershell
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+cmake --build build --config Release --parallel
+ctest --test-dir build -C Release --output-on-failure
+```
+
+The Windows REAPER extension DLL filename must start with `reaper_`; REAPER silently ignores extension DLLs that do not follow that convention.
+
+## Legacy REAPER build and install
+
+The Makefile remains available for the legacy macOS REAPER extension:
 
 ```sh
 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=all make
-```
-
-Install into REAPER with:
-
-```sh
 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=all make install
 codesign --verify "$HOME/Library/Application Support/REAPER/UserPlugins/reashoot-mac"
 codesign --verify "$HOME/Library/Application Support/REAPER/UserPlugins/reaper_reashoot.dylib"
 ```
 
 Restart REAPER after every install. Native extensions are loaded at process startup.
-
-By default, the Makefile builds for the current Mac architecture. Universal builds require a universal FFmpeg prefix; the default Apple Silicon Homebrew FFmpeg dylibs are arm64-only.
-
-```sh
-make ARCH_FLAGS="-arch arm64 -arch x86_64"
-```
-
-## CMake build
-
-macOS:
-
-```sh
-cmake -S . -B build-cmake -DCMAKE_BUILD_TYPE=Debug
-cmake --build build-cmake --parallel
-ctest --test-dir build-cmake --output-on-failure
-cmake --install build-cmake
-```
-
-Windows:
-
-```powershell
-cmake -S . -B build -G "Visual Studio 17 2022" -A x64
-cmake --build build --config Release --parallel
-ctest --test-dir build -C Release --output-on-failure
-cmake --install build --config Release
-```
-
-The Windows DLL filename must start with `reaper_`; REAPER silently ignores extension DLLs that do not follow that convention.
 
 ## iPhone app build
 
@@ -102,24 +116,7 @@ GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=all \
   build
 ```
 
-To upload a Release build to App Store Connect, create an App Store Connect API key and keep the `.p8` file outside the repository:
-
-```sh
-cd iphone
-export APP_STORE_CONNECT_API_KEY_ID='ABC123DEFG'
-export APP_STORE_CONNECT_API_ISSUER_ID='00000000-0000-0000-0000-000000000000'
-export APP_STORE_CONNECT_API_KEY_PATH="$HOME/private_keys/AuthKey_ABC123DEFG.p8"
-
-Scripts/app-store-upload.sh --marketing-version 1.0
-```
-
-Use `Scripts/app-store-upload.sh --export-only --marketing-version 1.0` to create a local App Store export without uploading. The script defaults to team `6QTJXLJJ62`, bundle ID `com.kevinlong.reashoot`, automatic signing, and a UTC timestamp build number; override those with `--team-id`, `REASHOOT_BUNDLE_ID`, or `--build-number` when needed.
-
-After Xcode or SwiftPM builds, remove generated local artifacts unless they are intentional:
-
-```sh
-rm -rf iphone/Package.resolved iphone/.build helper/.build
-```
+The iPhone bundle ID remains `com.kevinlong.reashoot`.
 
 ## Validation
 
@@ -129,18 +126,15 @@ Run the lightweight validation suite before committing C++, Swift, protocol, hel
 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=all make check
 ```
 
-This builds the C++ helper, checks shared panel drift, and runs the iPhone Swift tests.
-
-For WebSocket/control startup changes, also smoke-test the installed helper against a paired phone:
+For desktop-app changes, also build the app target:
 
 ```sh
-TOKEN="$(awk -F= '/^iphone_token=/{print $2}' "$HOME/Library/Application Support/REAPER/reaper-extstate.ini" | tail -1)"
-"$HOME/Library/Application Support/REAPER/UserPlugins/reashoot-mac" \
-  ping --host kevin-long-iphone.local --port 8787 --token "$TOKEN"
+cmake -S . -B build-desktop -DCMAKE_BUILD_TYPE=Debug
+cmake --build build-desktop --target reashoot_desktop --parallel
 ```
 
-Expected output is `OK`.
+For WebSocket/control startup changes, smoke-test against a paired iPhone with the helper or the desktop app. Keep the iPhone unlocked with ReaShoot open in the foreground.
 
 ## Documentation
 
-Keep `README.md` user-facing. Put build commands, architecture notes, and contributor workflow details here in `CONTRIBUTING.md`.
+Keep `README.md` user-facing for the standalone desktop app. Put build commands, architecture notes, legacy REAPER details, and contributor workflow details here in `CONTRIBUTING.md`.

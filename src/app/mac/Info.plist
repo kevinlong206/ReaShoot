@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleExecutable</key>
+  <string>ReaShoot</string>
+  <key>CFBundleIdentifier</key>
+  <string>com.kevinlong.reashoot.mac</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundleName</key>
+  <string>ReaShoot</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.1</string>
+  <key>CFBundleVersion</key>
+  <string>1</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>14.0</string>
+  <key>NSBonjourServices</key>
+  <array>
+    <string>_reashoot._tcp</string>
+  </array>
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>ReaShoot connects to your iPhone on the local network for camera control, preview, and video transfer.</string>
+</dict>
+</plist>

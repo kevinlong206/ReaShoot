@@ -8,6 +8,7 @@
 #include "../src/core/reashoot_controller.h"
 #include "../src/core/reashoot_status.h"
 #include "../src/core/ui_interfaces.h"
+#include "../src/desktop/desktop_workflow.h"
 
 #include <cassert>
 #include <cmath>
@@ -135,6 +136,37 @@ void testRemoteCameraArguments() {
   assert(invalidPreview.port == 8789);
 }
 
+void testDesktopWorkflowParsing() {
+  const auto cameras = reashoot::desktop::parseDiscoveredCameras(
+      "noise\n"
+      "device\tname=Kevin iPhone\thost=phone.local\tcontrolPort=8787\thttpPort=8788\tpaired=true\n"
+      "device\tname=No Host\n");
+  assert(cameras.size() == 1);
+  assert(cameras[0].name == "Kevin iPhone");
+  assert(cameras[0].host == "phone.local");
+  assert(cameras[0].controlPort == "8787");
+  assert(cameras[0].httpPort == "8788");
+  assert(cameras[0].paired);
+
+  const auto recordings = reashoot::desktop::parseRecordingDescriptors(
+      "recording\tid=one\tfilename=take.mov\tbyteCount=42\tdownloadPath=/recordings/one\tchecksum=abc\n"
+      "recording\tfilename=missing-id.mov\n");
+  assert(recordings.size() == 1);
+  assert(recordings[0].id == "one");
+  assert(recordings[0].filename == "take.mov");
+  assert(recordings[0].byteCount == "42");
+  assert(recordings[0].downloadPath == "/recordings/one");
+  assert(recordings[0].checksum == "abc");
+
+  const PreviewStreamDescriptor preview = reashoot::desktop::parsePreviewDescriptor(
+      "preview\tcodec=h264\ttransport=websocket\tstreamPath=/custom-preview\tport=8799\n");
+  assert(preview.streamPath == "/custom-preview");
+  assert(preview.port == 8799);
+
+  assert(!reashoot::desktop::makeSessionID().empty());
+  assert(reashoot::desktop::defaultDownloadDirectory().find("ReaShoot") != std::string::npos);
+}
+
 void testJsonValue() {
   JsonValue value = parseJson(R"({"name":"phone","port":8787,"flags":[true,false],"nested":{"x":"y"}})");
   assert(value.stringValue("name") == "phone");
@@ -216,6 +248,7 @@ int main() {
   testReaShootControllerState();
   testCaptureProfileArguments();
   testRemoteCameraArguments();
+  testDesktopWorkflowParsing();
   testJsonValue();
   testControlProtocol();
   testH264AnnexB();

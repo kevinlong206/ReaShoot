@@ -36,7 +36,7 @@ std::string redactedArguments(const std::vector<std::string> &arguments) {
       redactNext = false;
     } else {
       stream << arguments[index];
-      if (arguments[index] == "--token") {
+      if (arguments[index] == "--token" || arguments[index] == "--code") {
         redactNext = true;
       }
     }
