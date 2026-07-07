@@ -96,6 +96,7 @@ rm -rf iphone/Package.resolved iphone/.build helper/.build
 - The iPhone app advertises `_reashoot._tcp` with Bonjour.
 - The iPhone app records a single `.mov` with video and camera audio embedded.
 - The current preview implementation uses a dedicated authenticated binary WebSocket carrying H.264 Annex B access units.
+- Live preview rotation is intentionally separate from recorded-file rotation in `iphone/Sources/ReaShootKit/CaptureRecordingEngine.swift`. Keep `PreviewFrameStore.normalizedImage` mapping as `landscapeLeft -> .down` and `landscapeRight/landscape -> .up`; do not "fix" it to match `rotationAngle(for:)`, or landscape live preview becomes upside down.
 - The helper validates complete WebSocket handshake headers, including `Sec-WebSocket-Accept`; keep the iPhone server response terminated with `\r\n\r\n`.
 - The iPhone capture profile includes resolution, FPS, orientation, aspect, lens, zoom, and look. Lens availability is hardware-dependent; zoom is clamped by AVFoundation and is not guaranteed optical for every value.
 - Keep the curated raw look lists aligned between legacy desktop UI surfaces and `iphone/Sources/ReaShootKit/CaptureRecordingEngine.swift`; saved removed `ci:` looks should fall back to `natural`.
@@ -129,6 +130,7 @@ rm -rf iphone/Package.resolved iphone/.build helper/.build
 ## Validation
 
 - Run `make check` before committing Swift/protocol/helper changes; it checks mirrored Swift files, runs iPhone Swift tests, and builds the helper.
+- `make check` includes a source-level guard for the iPhone live-preview landscape rotation mapping because that regression is easy to reintroduce.
 - Build the desktop app with `cmake --build build-desktop --target reashoot_desktop --parallel` after macOS app changes.
 - Use helper `ping`, `configure`, start/stop/download, and preview smoke tests after changing WebSocket/control startup behavior.
 

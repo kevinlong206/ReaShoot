@@ -16,10 +16,20 @@
 
 #include <cassert>
 #include <cmath>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 
 using namespace reashoot::core;
+
+std::string readTextFile(const std::string &path) {
+  std::ifstream input(path);
+  assert(input.good());
+  std::ostringstream buffer;
+  buffer << input.rdbuf();
+  return buffer.str();
+}
 
 void testPathUtils() {
   assert(hasPathExtension("Take.MOV", ".mov"));
@@ -421,6 +431,32 @@ void testAlignmentMath() {
   assert(peaks.front().index == 1);
 }
 
+void testLivePreviewRotationGuard() {
+  const std::string source = readTextFile("iphone/Sources/ReaShootKit/CaptureRecordingEngine.swift");
+  const std::string livePreviewMapping =
+      R"(private func normalizedImage(_ image: CIImage, orientation: String) -> CIImage {
+        let propertyOrientation: CGImagePropertyOrientation
+        switch orientation.lowercased() {
+        case "landscapeleft":
+            propertyOrientation = .down
+        case "landscaperight", "landscape":
+            propertyOrientation = .up
+        case "portraitupsidedown":
+            propertyOrientation = .right
+        default:
+            propertyOrientation = .left
+        })";
+  const std::string recordedFileMapping =
+      R"(private func rotationAngle(for orientation: String) -> CGFloat {
+        switch orientation.lowercased() {
+        case "landscapeleft":
+            return 0
+        case "landscaperight", "landscape":
+            return 180)";
+  assert(source.find(livePreviewMapping) != std::string::npos);
+  assert(source.find(recordedFileMapping) != std::string::npos);
+}
+
 int main() {
   testPathUtils();
   testHelperParsing();
@@ -437,5 +473,6 @@ int main() {
   testControlProtocol();
   testH264AnnexB();
   testAlignmentMath();
+  testLivePreviewRotationGuard();
   return 0;
 }

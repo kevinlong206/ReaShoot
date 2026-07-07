@@ -51,6 +51,8 @@ The Mac app makes Bonjour discovery prominent and keeps manual host/IP entry as 
 
 The preview uses an authenticated H.264 WebSocket stream from the iPhone. The desktop app starts preview through the control channel, connects to the returned preview socket, decodes frames on macOS with VideoToolbox, and displays them in the app window.
 
+Use `Orientation: auto` if you want the live preview to follow phone rotation. The live preview has its own orientation path separate from the recorded `.mov`, so preview rotation fixes should be validated independently from recorded-file playback.
+
 When recording stops, the desktop app first receives recording metadata from the phone, then prompts before doing any download/delete action. Non-natural looks are prepared on the iPhone only after you choose to download.
 
 ## Recovering recordings
