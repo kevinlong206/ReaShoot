@@ -515,9 +515,9 @@ private final class PreviewFrameStore: NSObject, AVCaptureVideoDataOutputSampleB
         let propertyOrientation: CGImagePropertyOrientation
         switch orientation.lowercased() {
         case "landscapeleft":
-            propertyOrientation = .up
-        case "landscaperight", "landscape":
             propertyOrientation = .down
+        case "landscaperight", "landscape":
+            propertyOrientation = .up
         case "portraitupsidedown":
             propertyOrientation = .right
         default:
