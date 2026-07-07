@@ -27,6 +27,7 @@
 
 #include "ReaShootWin32Support.h"
 
+#include "../../core/control_protocol.h"
 #include "../../core/helper_output_parser.h"
 #include "../../core/log_sanitization.h"
 #include "../../core/remote_camera.h"
@@ -204,6 +205,19 @@ public:
     requestRepaint();
   }
 
+  // Display dimensions describe the iPhone's intended aspect ratio for the
+  // current orientation. The encoded H.264 frame may be padded (encoders round
+  // up to macroblock multiples), so letterboxing uses these when available to
+  // avoid stretching. Falls back to the decoded frame size when unset.
+  void setDisplaySize(int width, int height) {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      displayWidth_ = width;
+      displayHeight_ = height;
+    }
+    requestRepaint();
+  }
+
   void setEmptyMessage(const std::wstring &message) {
     bool empty = false;
     {
@@ -243,7 +257,9 @@ public:
       SetTextColor(hdc, kTextSecondary);
       DrawTextW(hdc, message.c_str(), -1, &local, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_WORD_ELLIPSIS);
     } else {
-      const double imageAspect = static_cast<double>(width_) / static_cast<double>(height_);
+      const int displayWidth = displayWidth_ > 0 ? displayWidth_ : width_;
+      const int displayHeight = displayHeight_ > 0 ? displayHeight_ : height_;
+      const double imageAspect = static_cast<double>(displayWidth) / static_cast<double>(std::max(displayHeight, 1));
       const double viewAspect = static_cast<double>(clientWidth) / std::max(clientHeight, 1);
       int drawWidth = clientWidth;
       int drawHeight = clientHeight;
@@ -288,6 +304,8 @@ private:
   int width_ = 0;
   int height_ = 0;
   int stride_ = 0;
+  int displayWidth_ = 0;
+  int displayHeight_ = 0;
   std::wstring emptyMessage_ = L"No paired iPhone.";
   std::atomic<bool> repaintPending_{false};
 };
@@ -1324,6 +1342,42 @@ void ReaShootApp::startPreviewWithRetry(int attempt, bool automatic) {
                                              " bytes=" + std::to_string(data.size()));
                                   }
                                   previewRenderer_->renderAnnexBAccessUnit(data.data(), data.size());
+                                },
+                                [this](const std::string &descriptorJson) {
+                                  reashoot::core::ProtocolPreview preview;
+                                  try {
+                                    preview = reashoot::core::previewFromJson(
+                                        reashoot::core::parseJson(descriptorJson));
+                                  } catch (const std::exception &error) {
+                                    debugLog(std::string("Preview descriptor parse failed: ") + error.what());
+                                    return;
+                                  }
+                                  postToMain([this, preview]() {
+                                    const bool dimensionsChanged =
+                                        preview.width != previewDescriptor_.width ||
+                                        preview.height != previewDescriptor_.height ||
+                                        preview.displayWidth != previewDescriptor_.displayWidth ||
+                                        preview.displayHeight != previewDescriptor_.displayHeight ||
+                                        preview.resolvedOrientation != previewDescriptor_.resolvedOrientation;
+                                    previewDescriptor_.width = preview.width;
+                                    previewDescriptor_.height = preview.height;
+                                    previewDescriptor_.fps = preview.fps;
+                                    previewDescriptor_.orientation = preview.orientation;
+                                    previewDescriptor_.resolvedOrientation = preview.resolvedOrientation;
+                                    previewDescriptor_.displayWidth = preview.displayWidth;
+                                    previewDescriptor_.displayHeight = preview.displayHeight;
+                                    previewDescriptor_.displayAspectRatio = preview.displayAspectRatio;
+                                    previewDescriptor_.metadataVersion = preview.metadataVersion;
+                                    preview_.setDisplaySize(preview.displayWidth, preview.displayHeight);
+                                    debugLog("Preview descriptor update width=" + std::to_string(preview.width) +
+                                             " height=" + std::to_string(preview.height) +
+                                             " orientation=" + preview.orientation +
+                                             " resolved=" + preview.resolvedOrientation +
+                                             " aspect=" + preview.displayAspectRatio);
+                                    if (dimensionsChanged) {
+                                      preview_.clear(L"Updating preview orientation...");
+                                    }
+                                  });
                                 },
                                 [this]() {
                                   postToMain([this]() {

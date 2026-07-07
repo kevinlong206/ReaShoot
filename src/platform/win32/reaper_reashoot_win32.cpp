@@ -363,6 +363,8 @@ void updatePanel() {
   }
 }
 
+bool isVolatilePreviewStatus(const std::string &status);
+
 void setPanelStatus(const std::string &status) {
   if (!g_panel) {
     return;
