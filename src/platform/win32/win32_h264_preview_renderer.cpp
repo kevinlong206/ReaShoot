@@ -279,8 +279,15 @@ PreviewDiagnosticMetadata parseDiagnosticSEI(const uint8_t *bytes, size_t length
     std::vector<uint8_t> unescapedPayload;
     unescapedPayload.reserve(static_cast<size_t>(payloadSize));
     int zeroCount = 0;
-    for (int i = 0; i < payloadSize; ++i) {
-      const uint8_t value = nalu[offset + static_cast<size_t>(i)];
+    // payloadSize counts UNESCAPED bytes, but the NAL stores the payload with
+    // emulation-prevention (0x03) bytes inserted after 00 00 runs (the sequence
+    // and timestamp fields contain zero runs). Keep reading raw NAL bytes,
+    // bounded by the NAL size, until payloadSize unescaped bytes are recovered.
+    // Reading only payloadSize raw bytes truncated the payload and dropped the
+    // trailing orientation byte, marking the diagnostic SEI invalid.
+    size_t cursor = offset;
+    while (cursor < unit.size && unescapedPayload.size() < static_cast<size_t>(payloadSize)) {
+      const uint8_t value = nalu[cursor++];
       if (zeroCount == 2 && value == 0x03) {
         zeroCount = 0;
         continue;
@@ -782,19 +789,8 @@ public:
     if (decodeWorker_.joinable()) {
       decodeWorker_.join();
     }
-    reset();
-  }
-
-  bool ready() const { return ready_; }
-
-  void reset() override {
-    {
-      std::lock_guard<std::mutex> queueLock(queueMutex_);
-      pendingAccessUnits_.clear();
-      requireQueuedKeyframe_ = true;
-    }
     std::lock_guard<std::mutex> lock(decoderMutex_);
-    previewDebugLog("ffmpeg renderer reset");
+    previewDebugLog("ffmpeg renderer teardown");
     if (packet_) {
       api_->av_packet_free(&packet_);
     }
@@ -804,9 +800,32 @@ public:
     if (codecContext_) {
       api_->avcodec_free_context(&codecContext_);
     }
+    ready_ = false;
+  }
+
+  bool ready() const { return ready_; }
+
+  // Resets decode state between preview sessions WITHOUT tearing down the
+  // renderer. This must stay non-destructive: freeing the decoder / clearing
+  // ready_ here would permanently disable the renderer, because ready_ is only
+  // set in the constructor. (That bug caused renderAnnexBAccessUnit to silently
+  // drop every access unit after the app called reset() before a new stream.)
+  void reset() override {
+    {
+      std::lock_guard<std::mutex> queueLock(queueMutex_);
+      pendingAccessUnits_.clear();
+      requireQueuedKeyframe_ = true;
+    }
+    std::lock_guard<std::mutex> lock(decoderMutex_);
+    if (!ready_) {
+      return;
+    }
+    previewDebugLog("ffmpeg renderer reset (flush)");
+    // Reopen the codec context to drop partially-decoded state; the next
+    // keyframe's SPS/PPS reconfigures it. Keeps ready_/packet_/frame_ intact.
+    recreateCodecContextLocked();
     activeCodedWidth_ = 0;
     activeCodedHeight_ = 0;
-    ready_ = false;
     waitingForKeyframe_ = true;
     lastFrameEmit_ = {};
   }
@@ -991,25 +1010,11 @@ private:
       return;
     }
     convertYUV420PToBGRA(frame_, output);
-    const int rotationDegrees = frameRotationDegrees();
-    if (rotationDegrees != 0) {
-      output = rotateBGRAFrame(output, rotationDegrees);
-    }
-    output = orientPreviewFrameFromMetadata(output, diagnostic.orientationCode);
+    // The iPhone renders preview frames already oriented upright (the macOS
+    // client likewise applies no rotation), so display the decoded frame as-is.
+    // Rotating here based on the orientation code only turned the already-upright
+    // content sideways.
     ++emittedFrames_;
-    const auto now = std::chrono::steady_clock::now();
-    if (lastLog_.time_since_epoch().count() == 0 || now - lastLog_ >= std::chrono::seconds(1)) {
-      lastLog_ = now;
-      std::ostringstream stream;
-      stream << "ffmpeg preview stats sent=" << sentPackets_
-             << " decoded=" << receivedFrames_
-             << " emitted=" << emittedFrames_
-             << " pixfmt=" << frame_->format
-             << " rotation=" << rotationDegrees
-             << " orient=" << static_cast<int>(diagnostic.orientationCode)
-             << " size=" << width << "x" << height;
-      previewDebugLog(stream.str());
-    }
 
     output.previewSequence = diagnostic.valid ? diagnostic.sequence : ++emittedFrameSequence_;
     output.previewAccessUnitNalTypes = diagnostic.nalTypes;
@@ -1046,7 +1051,12 @@ private:
       const uint8_t *yRow = frame->data[0] + static_cast<size_t>(y) * static_cast<size_t>(frame->linesize[0]);
       const uint8_t *uRow = frame->data[1] + static_cast<size_t>(y / 2) * static_cast<size_t>(frame->linesize[1]);
       const uint8_t *vRow = frame->data[2] + static_cast<size_t>(y / 2) * static_cast<size_t>(frame->linesize[2]);
-      uint8_t *dst = output.pixels.data() + static_cast<size_t>(y) * static_cast<size_t>(output.strideBytes);
+      // The iPhone renders preview frames bottom-up (CIImage bottom-left origin),
+      // so flip vertically here to produce a top-down, upright frame. Doing the
+      // flip at the source (rather than at display time) keeps rotateBGRAFrame's
+      // orientation convention valid for landscape rotations.
+      uint8_t *dst =
+          output.pixels.data() + static_cast<size_t>(output.height - 1 - y) * static_cast<size_t>(output.strideBytes);
       for (int x = 0; x < output.width; ++x) {
         const int yy = static_cast<int>(yRow[x]) - 16;
         const int u = static_cast<int>(uRow[x / 2]) - 128;

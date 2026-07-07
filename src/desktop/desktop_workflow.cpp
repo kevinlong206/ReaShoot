@@ -17,11 +17,19 @@ std::string fieldOrDefault(const core::FieldMap &fields, const std::string &key,
 } // namespace
 
 std::string defaultDownloadDirectory() {
+#if defined(_WIN32)
+  const char *profile = std::getenv("USERPROFILE");
+  if (!profile || !profile[0]) {
+    return "ReaShoot";
+  }
+  return std::string(profile) + "\\Videos\\ReaShoot";
+#else
   const char *home = std::getenv("HOME");
   if (!home || !home[0]) {
     return "ReaShoot";
   }
   return std::string(home) + "/Movies/ReaShoot";
+#endif
 }
 
 std::string makeSessionID() {
@@ -63,6 +71,17 @@ std::vector<core::RemoteRecordingDescriptor> parseRecordingDescriptors(const std
     }
   }
   return recordings;
+}
+
+std::string discoveredCameraLabel(const DiscoveredCamera &camera) {
+  std::string label = camera.name.empty() ? "iPhone" : camera.name;
+  if (!camera.host.empty()) {
+    label += " - " + camera.host;
+  }
+  if (camera.paired) {
+    label += " (paired)";
+  }
+  return label;
 }
 
 core::PreviewStreamDescriptor parsePreviewDescriptor(const std::string &output) {

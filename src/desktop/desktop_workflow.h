@@ -18,6 +18,7 @@ struct DiscoveredCamera {
 std::string defaultDownloadDirectory();
 std::string makeSessionID();
 std::vector<DiscoveredCamera> parseDiscoveredCameras(const std::string &output);
+std::string discoveredCameraLabel(const DiscoveredCamera &camera);
 std::vector<core::RemoteRecordingDescriptor> parseRecordingDescriptors(const std::string &output);
 core::PreviewStreamDescriptor parsePreviewDescriptor(const std::string &output);
 

@@ -1,8 +1,8 @@
 # ReaShoot
 
-ReaShoot is a standalone desktop app for recording high-quality iPhone video from your Mac. Open ReaShoot on the iPhone, pair it with the Mac app over your local network, use the live preview to frame the shot, then start and stop recording from the desktop.
+ReaShoot is a standalone desktop app for recording high-quality iPhone video from your Mac or Windows PC. Open ReaShoot on the iPhone, pair it with the desktop app over your local network, use the live preview to frame the shot, then start and stop recording from the desktop.
 
-The iPhone records the full-quality `.mov` with embedded camera audio. When you stop, ReaShoot lets you download or delete the take; downloaded files default to `~/Movies/ReaShoot` and can be revealed in Finder. Interrupted transfers stay recoverable on the iPhone until the desktop app verifies and acknowledges the download.
+The iPhone records the full-quality `.mov` with embedded camera audio. When you stop, ReaShoot lets you download or delete the take; downloaded files default to `~/Movies/ReaShoot` on macOS or `%USERPROFILE%\Videos\ReaShoot` on Windows, and can be revealed in Finder / File Explorer. Interrupted transfers stay recoverable on the iPhone until the desktop app verifies and acknowledges the download.
 
 The older REAPER extension remains in this repository as a legacy/secondary target, but this branch is focused on the general-purpose desktop app.
 
@@ -11,20 +11,20 @@ The older REAPER extension remains in this repository as a legacy/secondary targ
 ## What ReaShoot does
 
 - Controls the companion iPhone app over local Wi-Fi/Bonjour.
-- Shows a live iPhone preview in a macOS desktop window.
+- Shows a live iPhone preview in a desktop window (macOS and Windows).
 - Starts and stops iPhone video capture from the desktop.
 - Lets you choose resolution, FPS, orientation, aspect ratio, lens, zoom, and look.
 - Prompts to download or delete each stopped take.
 - Shows videos still stored on the iPhone in a `Videos on iPhone` window.
-- Downloads verified `.mov` files to `~/Movies/ReaShoot` by default.
+- Downloads verified `.mov` files to `~/Movies/ReaShoot` (macOS) or `%USERPROFILE%\Videos\ReaShoot` (Windows) by default.
 - Keeps failed or canceled transfers stored on the iPhone for later recovery.
 
 ## Requirements
 
-- macOS 14 or newer for the first desktop app target.
+- macOS 14 or newer, or Windows 10 (version 1809+) / Windows 11, for the desktop app.
 - The ReaShoot iPhone app from this repository, bundle ID `com.kevinlong.reashoot`.
 - An iPhone or other supported iOS device for the camera.
-- iPhone and Mac on the same reachable local network.
+- iPhone and desktop computer on the same reachable local network.
 - Local-network permission enabled for the iPhone app.
 
 Only iOS devices are supported as cameras today. Keep the iPhone app open in the foreground while using ReaShoot. The app keeps the phone awake during capture, so plugging the phone into a charger is recommended.
@@ -48,7 +48,7 @@ The Mac app makes Bonjour discovery prominent and keeps manual host/IP entry as 
 
 ## Preview and recording
 
-The preview uses an authenticated H.264 WebSocket stream from the iPhone. The desktop app starts preview through the control channel, connects to the returned preview socket, decodes frames on macOS with VideoToolbox, and displays them in the app window.
+The preview uses an authenticated H.264 WebSocket stream from the iPhone. The desktop app starts preview through the control channel, connects to the returned preview socket, decodes frames (VideoToolbox on macOS, FFmpeg on Windows), and displays them in the app window.
 
 When recording stops, the desktop app first receives recording metadata from the phone, then prompts before doing any download/delete action. Non-natural looks are prepared on the iPhone only after you choose to download.
 

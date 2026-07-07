@@ -522,20 +522,54 @@ using reashoot::core::redactedText;
       [self setStatus:@"No iPhone found. Enter the host or IP address manually."];
       return;
     }
-    const auto &camera = cameras.front();
-    debugLog(@"Using discovered camera name=%@ host=%s controlPort=%s httpPort=%s paired=%d",
-             nsString(camera.name),
-             camera.host.c_str(),
-             camera.controlPort.c_str(),
-             camera.httpPort.c_str(),
-             camera.paired);
-    _hostField.stringValue = nsString(camera.host);
-    [self saveDefaults];
-    [self setStatus:[NSString stringWithFormat:@"Found %@ at %@", nsString(camera.name), nsString(camera.host)]];
-    if (_previewDesired && !_pairingToken.empty() && !_previewRunning) {
-      [self startPreviewWithRetryAttempt:0 automatic:YES];
+    if (cameras.size() == 1) {
+      [self applyDiscoveredCamera:cameras.front()];
+      return;
     }
+    const NSInteger index = [self promptToSelectCameraFrom:cameras];
+    if (index < 0) {
+      [self setStatus:@"Discovery canceled. No iPhone selected."];
+      return;
+    }
+    [self applyDiscoveredCamera:cameras[static_cast<size_t>(index)]];
   }];
+}
+
+- (void)applyDiscoveredCamera:(const reashoot::desktop::DiscoveredCamera &)camera {
+  debugLog(@"Using discovered camera name=%@ host=%s controlPort=%s httpPort=%s paired=%d",
+           nsString(camera.name),
+           camera.host.c_str(),
+           camera.controlPort.c_str(),
+           camera.httpPort.c_str(),
+           camera.paired);
+  _hostField.stringValue = nsString(camera.host);
+  [self saveDefaults];
+  [self setStatus:[NSString stringWithFormat:@"Selected %@ at %@", nsString(camera.name), nsString(camera.host)]];
+  if (_previewDesired && !_pairingToken.empty() && !_previewRunning) {
+    [self startPreviewWithRetryAttempt:0 automatic:YES];
+  }
+}
+
+- (NSInteger)promptToSelectCameraFrom:(const std::vector<reashoot::desktop::DiscoveredCamera> &)cameras {
+  NSAlert *alert = [[NSAlert alloc] init];
+  alert.messageText = @"Select iPhone";
+  alert.informativeText = @"Multiple iPhones were found. Choose one to use.";
+  [alert addButtonWithTitle:@"Select"];
+  [alert addButtonWithTitle:@"Cancel"];
+  NSPopUpButton *popup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 320, 25) pullsDown:NO];
+  for (const auto &camera : cameras) {
+    [popup addItemWithTitle:nsString(reashoot::desktop::discoveredCameraLabel(camera))];
+  }
+  if (popup.numberOfItems > 0) {
+    [popup selectItemAtIndex:0];
+  }
+  alert.accessoryView = popup;
+  debugLog(@"Prompting to select among %zu discovered iPhone(s).", cameras.size());
+  const NSModalResponse response = [alert runModal];
+  if (response != NSAlertFirstButtonReturn) {
+    return -1;
+  }
+  return popup.indexOfSelectedItem;
 }
 
 - (void)pairPhone:(id)sender {

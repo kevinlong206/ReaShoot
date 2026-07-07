@@ -4,7 +4,7 @@
 
 This branch contains ReaShoot as a standalone desktop app plus its companion iPhone camera app. The product direction is no longer REAPER-first: `ReaShoot.app` is the primary macOS target, and the existing native REAPER extension is legacy/secondary.
 
-- The macOS desktop app currently uses native Cocoa/Objective-C++; keep it thin over shared C++ workflow code. The preferred modern UI direction is SwiftUI on macOS and WinUI 3 on Windows over the same shared controller/state layer.
+- The macOS desktop app currently uses native Cocoa/Objective-C++; the Windows desktop app uses native Win32 (Windows SDK). Keep both thin over shared C++ workflow code. Native Win32 (not WinUI 3/Qt/.NET) is the Windows UI direction: it links the shared C++ core directly and needs no external runtime, maximizing compatibility. Both frontends sit over the same shared controller/state layer.
 - The iPhone app lives in `iphone/` and records full-quality iPhone video while the desktop app controls it over the local Wi-Fi/Bonjour network.
 - The desktop app controls the iPhone over WebSocket port `8787`, downloads recordings over HTTP port `8788`, and receives preview video over an authenticated H.264 WebSocket stream on port `8789`.
 - Keep desktop workflow logic cross-platform-friendly so future Windows desktop support can reuse protocol, discovery, control, preview transport, download, stored-recording management, and capture-profile behavior.
@@ -14,12 +14,13 @@ This branch contains ReaShoot as a standalone desktop app plus its companion iPh
 ## Important files
 
 - `src/app/mac/` - Standalone macOS desktop app bundle sources. Keep AppKit/SwiftUI files focused on native controls, layout, windows, menus, and rendering.
+- `src/app/win32/` - Standalone Windows desktop app (`ReaShoot.exe`, native Win32). `ReaShootDesktopWin32.cpp` is the app/UI + main-thread dispatch; `ReaShootWin32Support.*` holds registry settings, folder picker, reveal-in-Explorer, and string helpers. Keep it thin over `src/desktop`/`src/core`.
 - `src/desktop/` - Desktop workflow/state/view-model helpers shared by standalone app frontends. Cross-platform desktop behavior belongs here unless it is protocol-level core code.
 - `src/core/control_protocol.*` and `iphone/Sources/ReaShootCore/ControlProtocol.swift` - Protocol definitions; keep these compatible when adding commands/events.
 - `src/core/` - Shared C++ protocol, parsing, capture-profile, H.264, status, and controller code.
 - `src/helper/` - C++ helper executable. Builds `reashoot-mac` on macOS and `reashoot-win.exe` on Windows for iPhone discovery/control/download. The macOS desktop app bundles this helper.
 - `src/platform/mac/` - macOS adapters for helper execution, preview stream transport, H.264 preview decode, prompts, media reading, and legacy extension support.
-- `src/platform/win32/` - Windows adapters; keep future desktop support in mind.
+- `src/platform/win32/` - Windows adapters (helper process, preview stream client, FFmpeg H.264 live-preview decoder) shared by the standalone Windows app and the legacy Windows REAPER extension. Prefer FFmpeg for live preview; do not switch back to Media Foundation.
 - `src/platform/ffmpeg/` - Shared FFmpeg recorded-file playback preview used by legacy playback surfaces.
 - `src/reashoot.mm`, `src/reaper/`, `src/platform/swell/` - Legacy REAPER extension and shared SWELL panel.
 - `iphone/` - Consolidated iPhone app project and Swift package.
@@ -45,6 +46,18 @@ open build-desktop/ReaShoot.app --args -debug
 ```
 
 Debug logs are written to stderr and `~/Library/Logs/ReaShoot/ReaShoot-debug.log`; pairing tokens and codes should be redacted in logs.
+
+## Windows desktop app build
+
+The standalone Windows app is native Win32 (`ReaShoot.exe`, target `reashoot_desktop_win32`, enabled by default). Live preview needs the Gyan shared FFmpeg build (`winget install Gyan.FFmpeg.Shared`, auto-detected) or `REASHOOT_FFMPEG_ROOT`.
+
+```powershell
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+cmake --build build --config Release --target reashoot_desktop_win32
+.\build\Release\ReaShoot.exe
+```
+
+`reashoot-win.exe` and the FFmpeg DLLs are staged next to `ReaShoot.exe`. Settings live in `HKCU\Software\ReaShoot`; `-debug` logs to `%LOCALAPPDATA%\ReaShoot\ReaShoot-debug.log` (tokens redacted). Windows discovery fans the mDNS query out every up interface (`GetAdaptersAddresses` + `IP_MULTICAST_IF`); keep that, since a single default-NIC send fails on multi-homed machines.
 
 ## iPhone app build, install, and launch
 

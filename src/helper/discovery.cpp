@@ -15,6 +15,8 @@
 #ifdef _WIN32
 #include "socket_utils.h"
 
+#include <iphlpapi.h>
+
 #include <cstdint>
 #include <vector>
 #else
@@ -140,6 +142,40 @@ std::vector<uint8_t> makePtrQuery() {
   return packet;
 }
 
+// Enumerates the IPv4 address of every up, non-loopback adapter so the mDNS
+// query can be sent out each interface explicitly. On multi-homed Windows
+// machines (Hyper-V/WSL/VPN/virtual adapters) the default multicast interface
+// is often not the Wi-Fi/LAN the iPhone is on, so relying on the routing
+// table alone can silently send the query out the wrong NIC.
+std::vector<in_addr> localIPv4Interfaces() {
+  std::vector<in_addr> addresses;
+  ULONG size = 15 * 1024;
+  std::vector<uint8_t> buffer(size);
+  const ULONG flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER;
+  ULONG result = GetAdaptersAddresses(AF_INET, flags, nullptr,
+                                      reinterpret_cast<IP_ADAPTER_ADDRESSES *>(buffer.data()), &size);
+  if (result == ERROR_BUFFER_OVERFLOW) {
+    buffer.resize(size);
+    result = GetAdaptersAddresses(AF_INET, flags, nullptr,
+                                  reinterpret_cast<IP_ADAPTER_ADDRESSES *>(buffer.data()), &size);
+  }
+  if (result != NO_ERROR) {
+    return addresses;
+  }
+  for (auto *adapter = reinterpret_cast<IP_ADAPTER_ADDRESSES *>(buffer.data()); adapter; adapter = adapter->Next) {
+    if (adapter->OperStatus != IfOperStatusUp || adapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK) {
+      continue;
+    }
+    for (auto *unicast = adapter->FirstUnicastAddress; unicast; unicast = unicast->Next) {
+      const sockaddr *address = unicast->Address.lpSockaddr;
+      if (address && address->sa_family == AF_INET) {
+        addresses.push_back(reinterpret_cast<const sockaddr_in *>(address)->sin_addr);
+      }
+    }
+  }
+  return addresses;
+}
+
 std::vector<MdnsRecord> parseRecords(const std::vector<uint8_t> &packet) {
   if (packet.size() < 12) {
     return {};
@@ -234,17 +270,36 @@ std::vector<DiscoveredPhone> discoverPhonesWithMdns(int timeoutSeconds) {
   destination.sin_port = htons(5353);
   InetPtonA(AF_INET, "224.0.0.251", &destination.sin_addr);
   const std::vector<uint8_t> query = makePtrQuery();
-  sendto(socketFd,
-         reinterpret_cast<const char *>(query.data()),
-         static_cast<int>(query.size()),
-         0,
-         reinterpret_cast<const sockaddr *>(&destination),
-         sizeof(destination));
+  const std::vector<in_addr> interfaces = localIPv4Interfaces();
+
+  // Send the query out every interface (falling back to the OS default when
+  // enumeration yields nothing) so a wrong default multicast NIC can't hide
+  // the phone.
+  auto sendQuery = [&]() {
+    if (interfaces.empty()) {
+      sendto(socketFd, reinterpret_cast<const char *>(query.data()), static_cast<int>(query.size()), 0,
+             reinterpret_cast<const sockaddr *>(&destination), sizeof(destination));
+      return;
+    }
+    for (const in_addr &interfaceAddress : interfaces) {
+      setsockopt(socketFd, IPPROTO_IP, IP_MULTICAST_IF, reinterpret_cast<const char *>(&interfaceAddress),
+                 sizeof(interfaceAddress));
+      sendto(socketFd, reinterpret_cast<const char *>(query.data()), static_cast<int>(query.size()), 0,
+             reinterpret_cast<const sockaddr *>(&destination), sizeof(destination));
+    }
+  };
+  sendQuery();
+  auto lastSend = std::chrono::steady_clock::now();
 
   std::map<std::string, ServiceDetails> services;
   std::map<std::string, std::string> targetAddresses;
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(std::max(1, timeoutSeconds));
   while (std::chrono::steady_clock::now() < deadline) {
+    // Re-send roughly once per second to tolerate dropped multicast packets.
+    if (std::chrono::steady_clock::now() - lastSend >= std::chrono::seconds(1)) {
+      sendQuery();
+      lastSend = std::chrono::steady_clock::now();
+    }
     std::vector<uint8_t> packet(9000);
     const int count = recv(socketFd, reinterpret_cast<char *>(packet.data()), static_cast<int>(packet.size()), 0);
     if (count <= 0) {

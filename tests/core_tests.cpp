@@ -171,6 +171,13 @@ void testDesktopWorkflowParsing() {
   assert(cameras[0].httpPort == "8788");
   assert(cameras[0].paired);
 
+  const auto multiple = reashoot::desktop::parseDiscoveredCameras(
+      "device\tname=Kevin iPhone\thost=phone-a.local\tcontrolPort=8787\thttpPort=8788\tpaired=true\n"
+      "device\tname=Studio iPhone\thost=10.0.0.42\tcontrolPort=8787\thttpPort=8788\tpaired=false\n");
+  assert(multiple.size() == 2);
+  assert(reashoot::desktop::discoveredCameraLabel(multiple[0]) == "Kevin iPhone - phone-a.local (paired)");
+  assert(reashoot::desktop::discoveredCameraLabel(multiple[1]) == "Studio iPhone - 10.0.0.42");
+
   const auto recordings = reashoot::desktop::parseRecordingDescriptors(
       "recording\tid=one\tfilename=take.mov\tbyteCount=42\tdownloadPath=/recordings/one\tchecksum=abc\n"
       "recording\tfilename=missing-id.mov\n");

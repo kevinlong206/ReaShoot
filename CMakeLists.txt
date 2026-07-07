@@ -53,7 +53,7 @@ add_executable(reashoot_helper ${REASHOOT_HELPER_SOURCES})
 target_link_libraries(reashoot_helper PRIVATE reashoot_core)
 target_compile_options(reashoot_helper PRIVATE ${REASHOOT_WARNING_FLAGS})
 if(WIN32)
-  target_link_libraries(reashoot_helper PRIVATE ws2_32)
+  target_link_libraries(reashoot_helper PRIVATE ws2_32 iphlpapi)
   set_target_properties(reashoot_helper PROPERTIES OUTPUT_NAME "reashoot-win")
 elseif(APPLE)
   set_target_properties(reashoot_helper PROPERTIES OUTPUT_NAME "reashoot-mac")
@@ -167,7 +167,7 @@ if(APPLE)
 endif()
 
 if(WIN32)
-  option(REASHOOT_BUILD_DESKTOP_WIN32 "Build experimental standalone Windows desktop app scaffold" OFF)
+  option(REASHOOT_BUILD_DESKTOP_WIN32 "Build the standalone Windows desktop app (ReaShoot.exe)" ON)
   option(REASHOOT_WITH_FFMPEG_DECODER "Use shared FFmpeg for Windows live and playback preview decoding" ON)
   file(GLOB REASHOOT_WIN32_SOURCES CONFIGURE_DEPENDS "${REASHOOT_ROOT}/src/platform/win32/*.cpp")
   file(GLOB REASHOOT_SWELL_CPP_SOURCES CONFIGURE_DEPENDS "${REASHOOT_ROOT}/src/platform/swell/*.cpp")
@@ -224,14 +224,52 @@ if(WIN32)
   if(REASHOOT_BUILD_DESKTOP_WIN32)
     add_executable(reashoot_desktop_win32 WIN32
       "${REASHOOT_ROOT}/src/app/win32/ReaShootDesktopWin32.cpp"
+      "${REASHOOT_ROOT}/src/app/win32/ReaShootWin32Support.cpp"
+      "${REASHOOT_ROOT}/src/platform/win32/win32_helper_process.cpp"
+      "${REASHOOT_ROOT}/src/platform/win32/win32_preview_stream_client.cpp"
+      "${REASHOOT_ROOT}/src/platform/win32/win32_h264_preview_renderer.cpp"
     )
-    target_link_libraries(reashoot_desktop_win32 PRIVATE reashoot_desktop_core user32)
-    target_include_directories(reashoot_desktop_win32 PRIVATE "${REASHOOT_ROOT}/src")
+    target_link_libraries(reashoot_desktop_win32
+      PRIVATE
+        reashoot_desktop_core
+        user32
+        gdi32
+        comctl32
+        dwmapi
+        uxtheme
+        shell32
+        ole32
+        ws2_32
+        winhttp
+        mf
+        mfplat
+        mfreadwrite
+        mfuuid
+        wmcodecdspuuid
+    )
+    target_include_directories(reashoot_desktop_win32 PRIVATE "${REASHOOT_ROOT}/src" "${REASHOOT_SDK_DIR}")
     target_compile_options(reashoot_desktop_win32 PRIVATE ${REASHOOT_WARNING_FLAGS})
-    target_compile_definitions(reashoot_desktop_win32 PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_compile_definitions(reashoot_desktop_win32 PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
+    set_target_properties(reashoot_desktop_win32 PROPERTIES OUTPUT_NAME "ReaShoot")
+
+    if(REASHOOT_WITH_FFMPEG_DECODER AND EXISTS "${REASHOOT_FFMPEG_ROOT}/include/libavcodec/avcodec.h" AND EXISTS "${REASHOOT_FFMPEG_ROOT}/lib/avcodec.lib")
+      target_compile_definitions(reashoot_desktop_win32 PRIVATE REASHOOT_WITH_FFMPEG_DECODER=1 REASHOOT_FFMPEG_BIN_DIR="${REASHOOT_FFMPEG_BIN_DIR_DEFINE}")
+      target_include_directories(reashoot_desktop_win32 PRIVATE "${REASHOOT_FFMPEG_ROOT}/include")
+      target_link_libraries(reashoot_desktop_win32 PRIVATE "${REASHOOT_FFMPEG_ROOT}/lib/avcodec.lib" "${REASHOOT_FFMPEG_ROOT}/lib/avutil.lib")
+    else()
+      message(FATAL_ERROR "reashoot_desktop_win32 requires shared FFmpeg headers/libs. Install Gyan.FFmpeg.Shared or set REASHOOT_FFMPEG_ROOT.")
+    endif()
+
     add_dependencies(reashoot_desktop_win32 reashoot_helper)
     add_custom_command(TARGET reashoot_desktop_win32 POST_BUILD
       COMMAND "${CMAKE_COMMAND}" -E copy "$<TARGET_FILE:reashoot_helper>" "$<TARGET_FILE_DIR:reashoot_desktop_win32>/reashoot-win.exe"
     )
+    # Stage the shared FFmpeg runtime DLLs next to the app so live preview works.
+    file(GLOB REASHOOT_FFMPEG_DLLS "${REASHOOT_FFMPEG_ROOT}/bin/*.dll")
+    foreach(dll ${REASHOOT_FFMPEG_DLLS})
+      add_custom_command(TARGET reashoot_desktop_win32 POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${dll}" "$<TARGET_FILE_DIR:reashoot_desktop_win32>"
+      )
+    endforeach()
   endif()
 endif()
