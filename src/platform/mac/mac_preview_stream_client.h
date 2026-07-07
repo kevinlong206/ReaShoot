@@ -13,6 +13,7 @@
                  path:(NSString *)path
                 token:(NSString *)token
                onData:(void (^)(NSData *accessUnit))onData
+               onText:(void (^)(NSString *text))onText
              onActive:(void (^)(void))onActive
               onError:(void (^)(NSError *error))onError;
 - (void)stop;

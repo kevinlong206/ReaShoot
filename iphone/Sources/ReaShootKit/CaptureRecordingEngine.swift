@@ -374,12 +374,33 @@ public enum CaptureError: Error, LocalizedError {
     }
 }
 
+struct PreviewFrameMetadata: Equatable {
+    var configuredOrientation: String
+    var resolvedOrientation: String
+    var encodedWidth: Int
+    var encodedHeight: Int
+    var displayAspectRatio: String
+
+    var descriptor: PreviewDescriptor {
+        PreviewDescriptor(
+            width: encodedWidth,
+            height: encodedHeight,
+            orientation: configuredOrientation,
+            resolvedOrientation: resolvedOrientation,
+            displayWidth: encodedWidth,
+            displayHeight: encodedHeight,
+            displayAspectRatio: displayAspectRatio,
+            metadataVersion: 2
+        )
+    }
+}
+
 private final class PreviewFrameStore: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     let queue = DispatchQueue(label: "com.kevinlong.reashoot.preview-frames")
 
     private let context = CIContext()
     private let lock = NSLock()
-    private var sampleBufferConsumer: ((CVPixelBuffer, CMTime, UInt64, String) -> Void)?
+    private var sampleBufferConsumer: ((CVPixelBuffer, CMTime, UInt64, PreviewFrameMetadata) -> Void)?
     private var lastFrameTime = Date.distantPast
     private var minimumFrameInterval: TimeInterval = 1.0 / 12.0
     private var look = "natural"
@@ -412,7 +433,7 @@ private final class PreviewFrameStore: NSObject, AVCaptureVideoDataOutputSampleB
         lock.unlock()
     }
 
-    func setSampleBufferConsumer(_ consumer: ((CVPixelBuffer, CMTime, UInt64, String) -> Void)?) {
+    func setSampleBufferConsumer(_ consumer: ((CVPixelBuffer, CMTime, UInt64, PreviewFrameMetadata) -> Void)?) {
         lock.lock()
         sampleBufferConsumer = consumer
         lock.unlock()
@@ -424,7 +445,8 @@ private final class PreviewFrameStore: NSObject, AVCaptureVideoDataOutputSampleB
         let interval = minimumFrameInterval
         let consumer = sampleBufferConsumer
         let look = look
-        let orientation = resolvedOrientation(orientation, fallback: lastResolvedOrientation)
+        let configuredOrientation = orientation
+        let orientation = resolvedOrientation(configuredOrientation, fallback: lastResolvedOrientation)
         let aspectRatio = aspectRatio
         lastResolvedOrientation = orientation
         lock.unlock()
@@ -442,7 +464,8 @@ private final class PreviewFrameStore: NSObject, AVCaptureVideoDataOutputSampleB
 
         let image = aspectCroppedImage(
             normalizedImage(VideoLook.apply(look, to: CIImage(cvPixelBuffer: pixelBuffer)), orientation: orientation),
-            aspectRatio: aspectRatio
+            aspectRatio: aspectRatio,
+            orientation: orientation
         )
         let width = image.extent.width
         let height = image.extent.height
@@ -472,11 +495,18 @@ private final class PreviewFrameStore: NSObject, AVCaptureVideoDataOutputSampleB
                 bounds: CGRect(origin: .zero, size: CGSize(width: outputWidth, height: outputHeight)),
                 colorSpace: CGColorSpaceCreateDeviceRGB()
             )
+            let metadata = PreviewFrameMetadata(
+                configuredOrientation: configuredOrientation,
+                resolvedOrientation: orientation,
+                encodedWidth: outputWidth,
+                encodedHeight: outputHeight,
+                displayAspectRatio: displayAspectRatio(width: outputWidth, height: outputHeight)
+            )
             consumer(
                 renderedPixelBuffer,
                 CMSampleBufferGetPresentationTimeStamp(sampleBuffer),
                 UInt64(now.timeIntervalSince1970 * 1_000_000.0),
-                orientation
+                metadata
             )
         }
     }
@@ -485,9 +515,9 @@ private final class PreviewFrameStore: NSObject, AVCaptureVideoDataOutputSampleB
         let propertyOrientation: CGImagePropertyOrientation
         switch orientation.lowercased() {
         case "landscapeleft":
-            propertyOrientation = .down
-        case "landscaperight", "landscape":
             propertyOrientation = .up
+        case "landscaperight", "landscape":
+            propertyOrientation = .down
         case "portraitupsidedown":
             propertyOrientation = .right
         default:
@@ -498,8 +528,8 @@ private final class PreviewFrameStore: NSObject, AVCaptureVideoDataOutputSampleB
         return oriented.transformed(by: CGAffineTransform(translationX: -extent.origin.x, y: -extent.origin.y))
     }
 
-    private func aspectCroppedImage(_ image: CIImage, aspectRatio: String) -> CIImage {
-        guard let targetAspect = parsedAspectRatio(aspectRatio), targetAspect > 0 else {
+    private func aspectCroppedImage(_ image: CIImage, aspectRatio: String, orientation: String) -> CIImage {
+        guard let targetAspect = orientedAspectRatio(aspectRatio, orientation: orientation), targetAspect > 0 else {
             return image
         }
         let extent = image.extent
@@ -529,6 +559,39 @@ private final class PreviewFrameStore: NSObject, AVCaptureVideoDataOutputSampleB
             return nil
         }
         return CGFloat(parts[0] / parts[1])
+    }
+
+    private func orientedAspectRatio(_ aspectRatio: String, orientation: String) -> CGFloat? {
+        guard var targetAspect = parsedAspectRatio(aspectRatio), targetAspect > 0 else {
+            return nil
+        }
+        if isLandscape(orientation), targetAspect < 1.0 {
+            targetAspect = 1.0 / targetAspect
+        } else if !isLandscape(orientation), targetAspect > 1.0 {
+            targetAspect = 1.0 / targetAspect
+        }
+        return targetAspect
+    }
+
+    private func isLandscape(_ orientation: String) -> Bool {
+        let normalized = orientation.lowercased()
+        return normalized == "landscapeleft" || normalized == "landscaperight" || normalized == "landscape"
+    }
+
+    private func displayAspectRatio(width: Int, height: Int) -> String {
+        let divisor = greatestCommonDivisor(max(width, 1), max(height, 1))
+        return "\(width / divisor):\(height / divisor)"
+    }
+
+    private func greatestCommonDivisor(_ lhs: Int, _ rhs: Int) -> Int {
+        var a = lhs
+        var b = rhs
+        while b != 0 {
+            let remainder = a % b
+            a = b
+            b = remainder
+        }
+        return max(a, 1)
     }
 
     private func resolvedOrientation(_ orientation: String, fallback: String) -> String {
@@ -627,7 +690,7 @@ public final class CaptureRecordingEngine: NSObject, ObservableObject {
         isConfigured = true
     }
 
-    public nonisolated func setPreviewSampleBufferConsumer(_ consumer: ((CVPixelBuffer, CMTime, UInt64, String) -> Void)?) {
+    nonisolated func setPreviewSampleBufferConsumer(_ consumer: ((CVPixelBuffer, CMTime, UInt64, PreviewFrameMetadata) -> Void)?) {
         previewFrameStore.setSampleBufferConsumer(consumer)
     }
 

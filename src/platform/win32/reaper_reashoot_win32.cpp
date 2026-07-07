@@ -25,6 +25,7 @@
 #include <vector>
 
 #include "core/capture_profile.h"
+#include "core/control_protocol.h"
 #include "core/helper_output_parser.h"
 #include "core/path_utils.h"
 #include "core/remote_camera.h"
@@ -764,6 +765,19 @@ void startPreviewStreamWithFields(const reashoot::core::FieldMap &fields) {
             }
           }
         });
+      },
+      [](const std::string &descriptorJson) {
+        try {
+          reashoot::core::ProtocolPreview preview =
+              reashoot::core::previewFromJson(reashoot::core::parseJson(descriptorJson));
+          (void)preview;
+          postToMain([]() {
+            if (!g_previewReceivedFrame && g_previewMode == PreviewMode::Live) {
+              setPanelStatus("Preview: orientation metadata received");
+            }
+          });
+        } catch (const std::exception &) {
+        }
       },
       []() {
         postToMain([]() {

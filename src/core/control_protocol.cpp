@@ -71,6 +71,11 @@ ProtocolPreview previewFromJson(const JsonValue &json) {
   preview.height = json.intValue("height", preview.height);
   preview.fps = json.intValue("fps", preview.fps);
   preview.orientation = json.stringValue("orientation", preview.orientation);
+  preview.resolvedOrientation = json.stringValue("resolvedOrientation", preview.resolvedOrientation);
+  preview.displayWidth = json.intValue("displayWidth", preview.displayWidth);
+  preview.displayHeight = json.intValue("displayHeight", preview.displayHeight);
+  preview.displayAspectRatio = json.stringValue("displayAspectRatio", preview.displayAspectRatio);
+  preview.metadataVersion = json.intValue("metadataVersion", preview.metadataVersion);
   preview.requiresToken = json.boolValue("requiresToken", preview.requiresToken);
   return preview;
 }

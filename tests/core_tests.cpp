@@ -134,6 +134,15 @@ void testRemoteCameraArguments() {
   PreviewStreamDescriptor customPreview = previewStreamDescriptorFromFields(previewFields);
   assert(customPreview.streamPath == "/custom");
   assert(customPreview.port == 8799);
+  FieldMap metadataPreviewFields = parseFields("streamPath=/custom port=8799 width=360 height=640 fps=12 orientation=auto resolvedOrientation=portrait displayWidth=360 displayHeight=640 displayAspectRatio=9:16 metadataVersion=2", ' ');
+  PreviewStreamDescriptor metadataPreview = previewStreamDescriptorFromFields(metadataPreviewFields);
+  assert(metadataPreview.width == 360);
+  assert(metadataPreview.height == 640);
+  assert(metadataPreview.resolvedOrientation == "portrait");
+  assert(metadataPreview.displayWidth == 360);
+  assert(metadataPreview.displayHeight == 640);
+  assert(metadataPreview.displayAspectRatio == "9:16");
+  assert(metadataPreview.metadataVersion == 2);
   FieldMap invalidPreviewFields = parseFields("streamPath= port=-1", ' ');
   PreviewStreamDescriptor invalidPreview = previewStreamDescriptorFromFields(invalidPreviewFields);
   assert(invalidPreview.streamPath == "/preview");
@@ -361,7 +370,7 @@ void testControlProtocol() {
       {"id":"one","filename":"take.mov","byteCount":42,"checksumSHA256":"abc","downloadPath":"/recordings/one"},
       {"id":"two","filename":"take2.mov","byteCount":84,"downloadPath":"/recordings/two"}
     ],
-    "preview":{"codec":"h264","transport":"websocket","streamPath":"/preview","port":8789,"width":640,"height":360,"fps":12,"orientation":"portrait","requiresToken":true}
+    "preview":{"codec":"h264","transport":"websocket","streamPath":"/preview","port":8789,"width":640,"height":360,"fps":12,"orientation":"auto","resolvedOrientation":"landscapeLeft","displayWidth":640,"displayHeight":360,"displayAspectRatio":"16:9","metadataVersion":2,"requiresToken":true}
   })";
   ProtocolEvent event = decodeEventJson(eventJson);
   assert(event.type == "recordingsListed");
@@ -369,6 +378,15 @@ void testControlProtocol() {
   assert(event.recordings[0].checksumSHA256 == "abc");
   assert(event.hasPreview);
   assert(event.preview.port == 8789);
+  assert(event.preview.resolvedOrientation == "landscapeLeft");
+  assert(event.preview.displayAspectRatio == "16:9");
+  assert(event.preview.metadataVersion == 2);
+
+  ProtocolEvent oldPreviewEvent = decodeEventJson(R"({"type":"previewStarted","preview":{"port":8789}})");
+  assert(oldPreviewEvent.hasPreview);
+  assert(oldPreviewEvent.preview.width == 640);
+  assert(oldPreviewEvent.preview.height == 360);
+  assert(oldPreviewEvent.preview.metadataVersion == 1);
 
   ProtocolEvent oldProfileEvent = decodeEventJson(R"({"type":"captureConfigured","captureProfile":{"resolution":"4K"}})");
   assert(oldProfileEvent.hasCaptureProfile);

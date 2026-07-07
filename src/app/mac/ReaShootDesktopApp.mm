@@ -6,6 +6,7 @@
 #import "ReaShootMacUI.h"
 #import "ReaShootPreviewView.h"
 
+#include "../../core/control_protocol.h"
 #include "../../core/helper_output_parser.h"
 #include "../../core/log_sanitization.h"
 #include "../../core/remote_camera.h"
@@ -893,6 +894,40 @@ using reashoot::core::redactedText;
                                                    debugLog(@"Preview access unit #%llu bytes=%zu", _previewAccessUnitCount, data.size());
                                                  }
                                                  _previewRenderer->renderAnnexBAccessUnit(data.data(), data.size());
+                                               },
+                                               [self](const std::string &descriptorJson) {
+                                                 try {
+                                                   reashoot::core::ProtocolPreview preview =
+                                                       reashoot::core::previewFromJson(reashoot::core::parseJson(descriptorJson));
+                                                   const bool dimensionsChanged =
+                                                       preview.width != _previewDescriptor.width ||
+                                                       preview.height != _previewDescriptor.height ||
+                                                       preview.displayWidth != _previewDescriptor.displayWidth ||
+                                                       preview.displayHeight != _previewDescriptor.displayHeight ||
+                                                       preview.resolvedOrientation != _previewDescriptor.resolvedOrientation;
+                                                   _previewDescriptor.width = preview.width;
+                                                   _previewDescriptor.height = preview.height;
+                                                   _previewDescriptor.fps = preview.fps;
+                                                   _previewDescriptor.orientation = preview.orientation;
+                                                   _previewDescriptor.resolvedOrientation = preview.resolvedOrientation;
+                                                   _previewDescriptor.displayWidth = preview.displayWidth;
+                                                   _previewDescriptor.displayHeight = preview.displayHeight;
+                                                   _previewDescriptor.displayAspectRatio = preview.displayAspectRatio;
+                                                   _previewDescriptor.metadataVersion = preview.metadataVersion;
+                                                   [_previewView setDisplaySizeWithWidth:_previewDescriptor.displayWidth
+                                                                                  height:_previewDescriptor.displayHeight];
+                                                   debugLog(@"Preview descriptor update width=%d height=%d orientation=%@ resolved=%@ aspect=%@",
+                                                            _previewDescriptor.width,
+                                                            _previewDescriptor.height,
+                                                            nsString(_previewDescriptor.orientation),
+                                                            nsString(_previewDescriptor.resolvedOrientation),
+                                                            nsString(_previewDescriptor.displayAspectRatio));
+                                                   if (dimensionsChanged) {
+                                                     [_previewView clearFrameWithMessage:@"Updating preview orientation..."];
+                                                   }
+                                                 } catch (const std::exception &error) {
+                                                   debugLog(@"Preview descriptor parse failed: %s", error.what());
+                                                 }
                                                },
                                                [self]() {
                                                  debugLog(@"Preview stream active.");

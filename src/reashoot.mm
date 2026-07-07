@@ -14,6 +14,7 @@
 
 #include "core/alignment_math.h"
 #include "core/capture_profile.h"
+#include "core/control_protocol.h"
 #include "core/helper_output_parser.h"
 #include "core/json_value.h"
 #include "core/path_utils.h"
@@ -2397,6 +2398,27 @@ void setVideoEnabled(bool enabled);
     }
     if (strongSelf->_swellPreviewRenderer && !accessUnit.empty()) {
       strongSelf->_swellPreviewRenderer->renderAnnexBAccessUnit(accessUnit.data(), accessUnit.size());
+    }
+  },
+                                            [weakSelf](const std::string &descriptorJson) {
+    ReaShootRecorder *strongSelf = weakSelf;
+    if (!strongSelf) {
+      return;
+    }
+    try {
+      reashoot::core::ProtocolPreview preview =
+          reashoot::core::previewFromJson(reashoot::core::parseJson(descriptorJson));
+      debugLog(@"Preview descriptor update width=%d height=%d orientation=%@ resolved=%@ aspect=%@",
+               preview.width,
+               preview.height,
+               stringFromStd(preview.orientation),
+               stringFromStd(preview.resolvedOrientation),
+               stringFromStd(preview.displayAspectRatio));
+      if (!strongSelf.swellPreviewReceivedFrame && !strongSelf.transferProgressActive) {
+        [strongSelf setStatus:@"Preview: orientation metadata received"];
+      }
+    } catch (const std::exception &error) {
+      debugLog(@"Preview descriptor parse failed: %s", error.what());
     }
   },
                                             [weakSelf]() {

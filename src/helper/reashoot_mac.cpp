@@ -320,6 +320,11 @@ void printPreview(const reashoot::core::ProtocolPreview &preview) {
             << "\theight=" << preview.height
             << "\tfps=" << preview.fps
             << "\torientation=" << preview.orientation
+            << "\tresolvedOrientation=" << preview.resolvedOrientation
+            << "\tdisplayWidth=" << preview.displayWidth
+            << "\tdisplayHeight=" << preview.displayHeight
+            << "\tdisplayAspectRatio=" << preview.displayAspectRatio
+            << "\tmetadataVersion=" << preview.metadataVersion
             << "\n";
 }
 

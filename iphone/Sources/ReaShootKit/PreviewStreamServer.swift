@@ -11,6 +11,7 @@ final class PreviewStreamServer {
         let id = UUID()
         let connection: NWConnection
         var binarySendInFlight = false
+        var descriptorSendInFlight = false
         var acceptsBroadcasts = false
 
         init(connection: NWConnection) {
@@ -19,7 +20,7 @@ final class PreviewStreamServer {
     }
 
     private let port: UInt16
-    private let descriptor: PreviewDescriptor
+    private var descriptor: PreviewDescriptor
     private let tokenValidator: (String) -> Bool
     private let clientCountChanged: (Int) -> Void
     private let queue = DispatchQueue(label: "com.kevinlong.reashoot.preview-stream")
@@ -79,6 +80,35 @@ final class PreviewStreamServer {
         lock.lock()
         latestKeyframe = nil
         lock.unlock()
+    }
+
+    @discardableResult
+    func updateDescriptor(_ descriptor: PreviewDescriptor) -> Bool {
+        lock.lock()
+        guard self.descriptor != descriptor else {
+            lock.unlock()
+            return false
+        }
+        self.descriptor = descriptor
+        latestKeyframe = nil
+        let activeClients = Array(clients.values)
+        for client in activeClients {
+            client.descriptorSendInFlight = true
+        }
+        lock.unlock()
+        guard let data = try? JSONEncoder().encode(descriptor) else {
+            lock.lock()
+            for client in activeClients {
+                client.descriptorSendInFlight = false
+            }
+            lock.unlock()
+            return true
+        }
+        let frame = encodeWebSocketFrame(opcode: 0x1, payload: data)
+        for client in activeClients {
+            sendDescriptorFrame(frame, to: client)
+        }
+        return true
     }
 
     func broadcast(accessUnit: Data) {
@@ -184,13 +214,32 @@ final class PreviewStreamServer {
     }
 
     private func sendDescriptor(to client: Client, completion: (() -> Void)? = nil) {
+        lock.lock()
+        let descriptor = descriptor
+        client.descriptorSendInFlight = true
+        lock.unlock()
         guard let data = try? JSONEncoder().encode(descriptor) else {
+            lock.lock()
+            client.descriptorSendInFlight = false
+            lock.unlock()
             completion?()
             return
         }
-        client.connection.send(content: encodeWebSocketFrame(opcode: 0x1, payload: data), completion: .contentProcessed { [weak self, weak client] error in
-            if error != nil, let client {
-                self?.remove(client)
+        sendDescriptorFrame(encodeWebSocketFrame(opcode: 0x1, payload: data), to: client) {
+            completion?()
+        }
+    }
+
+    private func sendDescriptorFrame(_ frame: Data, to client: Client, completion: (() -> Void)? = nil) {
+        client.connection.send(content: frame, completion: .contentProcessed { [weak self, weak client] error in
+            guard let self, let client else {
+                return
+            }
+            self.lock.lock()
+            client.descriptorSendInFlight = false
+            self.lock.unlock()
+            if error != nil {
+                self.remove(client)
                 return
             }
             completion?()
