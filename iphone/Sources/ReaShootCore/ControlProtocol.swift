@@ -226,7 +226,29 @@ public struct PreviewDescriptor: Codable, Equatable, Sendable {
     public var height: Int
     public var fps: Int
     public var orientation: String
+    public var resolvedOrientation: String
+    public var displayWidth: Int
+    public var displayHeight: Int
+    public var displayAspectRatio: String
+    public var metadataVersion: Int
     public var requiresToken: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case codec
+        case transport
+        case streamPath
+        case port
+        case width
+        case height
+        case fps
+        case orientation
+        case resolvedOrientation
+        case displayWidth
+        case displayHeight
+        case displayAspectRatio
+        case metadataVersion
+        case requiresToken
+    }
 
     public init(
         codec: String = "h264",
@@ -237,6 +259,11 @@ public struct PreviewDescriptor: Codable, Equatable, Sendable {
         height: Int = 360,
         fps: Int = 12,
         orientation: String = "portrait",
+        resolvedOrientation: String = "portrait",
+        displayWidth: Int = 640,
+        displayHeight: Int = 360,
+        displayAspectRatio: String = "16:9",
+        metadataVersion: Int = 1,
         requiresToken: Bool = true
     ) {
         self.codec = codec
@@ -247,7 +274,30 @@ public struct PreviewDescriptor: Codable, Equatable, Sendable {
         self.height = height
         self.fps = fps
         self.orientation = orientation
+        self.resolvedOrientation = resolvedOrientation
+        self.displayWidth = displayWidth
+        self.displayHeight = displayHeight
+        self.displayAspectRatio = displayAspectRatio
+        self.metadataVersion = metadataVersion
         self.requiresToken = requiresToken
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        codec = try container.decodeIfPresent(String.self, forKey: .codec) ?? "h264"
+        transport = try container.decodeIfPresent(String.self, forKey: .transport) ?? "websocket"
+        streamPath = try container.decodeIfPresent(String.self, forKey: .streamPath) ?? "/preview"
+        port = try container.decodeIfPresent(Int.self, forKey: .port) ?? 8789
+        width = try container.decodeIfPresent(Int.self, forKey: .width) ?? 640
+        height = try container.decodeIfPresent(Int.self, forKey: .height) ?? 360
+        fps = try container.decodeIfPresent(Int.self, forKey: .fps) ?? 12
+        orientation = try container.decodeIfPresent(String.self, forKey: .orientation) ?? "portrait"
+        resolvedOrientation = try container.decodeIfPresent(String.self, forKey: .resolvedOrientation) ?? orientation
+        displayWidth = try container.decodeIfPresent(Int.self, forKey: .displayWidth) ?? width
+        displayHeight = try container.decodeIfPresent(Int.self, forKey: .displayHeight) ?? height
+        displayAspectRatio = try container.decodeIfPresent(String.self, forKey: .displayAspectRatio) ?? "\(displayWidth):\(displayHeight)"
+        metadataVersion = try container.decodeIfPresent(Int.self, forKey: .metadataVersion) ?? 1
+        requiresToken = try container.decodeIfPresent(Bool.self, forKey: .requiresToken) ?? true
     }
 }
 

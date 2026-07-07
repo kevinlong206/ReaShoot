@@ -8,6 +8,8 @@ This branch pivots ReaShoot toward a standalone desktop app for controlling the 
 
 The existing REAPER extension remains in the repository as a legacy/secondary target. Keep it buildable where practical, but do not let new desktop-app workflow code depend on REAPER APIs, SWELL UI, REAPER transport, track insertion, or audio-alignment behavior.
 
+The legacy REAPER extension includes an early opt-in action, `ReaShoot: Enable/Disable Desktop App Integration`, for exercising the desktop API from REAPER. It currently uses the desktop app for status/profile calls and retains direct iPhone control as the recording/media-insertion fallback until that migration is complete.
+
 ## Project layout
 
 - `src/app/mac/` - Native macOS desktop app entry point and UI. Keep these files focused on native controls, layout, windows, menus, alerts, and rendering.
@@ -26,6 +28,7 @@ Keep protocol definitions aligned between `src/core/control_protocol.*` and `iph
 
 - Keep the implementation native. Do not move iPhone control, preview, download, or media workflows into JSFX, VST3, Lua, or web wrappers.
 - Keep standalone app workflow state in `src/desktop/` or `src/core/`; keep Cocoa/Objective-C++ UI thin.
+- Treat `ReaShoot.app` as the integration hub for other apps. Integrations should use the desktop local API instead of reimplementing iPhone discovery, pairing, recording, download, delete, or transfer acknowledgement.
 - Prefer shared C++ for behavior that should be consistent between macOS and future Windows desktop support.
 - Add platform-specific code only for OS APIs, host integration, UI toolkits, decode backends, or build constraints.
 - Do not put desktop orchestration back into AppKit/SwiftUI/WinUI code. Pairing, discovery retry policy, configure-on-profile-change, preview start/stop state, stale-frame empty states, recording start/stop, and iPhone video list/download/delete workflows should be shared C++.
@@ -79,6 +82,43 @@ cmake --build build --config Release --target reashoot_desktop_win32
 ```
 
 The build stages `reashoot-win.exe` and the FFmpeg runtime DLLs next to `ReaShoot.exe`. Settings persist under `HKCU\Software\ReaShoot`. Launch with `-debug` to log to stderr and `%LOCALAPPDATA%\ReaShoot\ReaShoot-debug.log` (tokens redacted). Disable the target with `-DREASHOOT_BUILD_DESKTOP_WIN32=OFF`.
+
+## Desktop integration API
+
+When `ReaShoot.app` is running, it starts a loopback-only HTTP JSON API and writes its endpoint registration to:
+
+```sh
+~/Library/Application Support/ReaShoot/desktop-api.json
+```
+
+The registration contains `apiVersion`, `host`, `port`, `baseUrl`, and a bearer `token`. The file is owner-readable/writable only. Do not commit or log the token.
+
+The helper includes API client commands for scripts and future host integrations:
+
+```sh
+build-desktop/reashoot-mac desktop-status
+build-desktop/reashoot-mac desktop-profile
+build-desktop/reashoot-mac desktop-set-profile --resolution 4K --fps 30 --orientation auto --aspect 9:16
+build-desktop/reashoot-mac desktop-preview-start
+build-desktop/reashoot-mac desktop-preview-stop
+build-desktop/reashoot-mac desktop-start-recording
+build-desktop/reashoot-mac desktop-stop-recording
+build-desktop/reashoot-mac desktop-refresh-recordings
+build-desktop/reashoot-mac desktop-list-recordings
+build-desktop/reashoot-mac desktop-download-recording --recording-id RECORDING_ID --download-dir ~/Movies/ReaShoot
+build-desktop/reashoot-mac desktop-delete-recording --recording-id RECORDING_ID
+```
+
+Raw API smoke test:
+
+```sh
+REG="$HOME/Library/Application Support/ReaShoot/desktop-api.json"
+TOKEN="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["token"])' "$REG")"
+BASE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["baseUrl"])' "$REG")"
+curl -H "Authorization: Bearer $TOKEN" "$BASE/status"
+```
+
+Keep the API local-only. Integrations are clients of the desktop app; they should not talk directly to the iPhone or acknowledge transfers independently.
 
 ## CMake build
 

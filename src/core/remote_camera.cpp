@@ -114,6 +114,54 @@ PreviewStreamDescriptor previewStreamDescriptorFromFields(const FieldMap &fields
       descriptor.port = port;
     }
   }
+  const std::string widthText = value("width");
+  if (!widthText.empty()) {
+    const int width = std::atoi(widthText.c_str());
+    if (width > 0) {
+      descriptor.width = width;
+    }
+  }
+  const std::string heightText = value("height");
+  if (!heightText.empty()) {
+    const int height = std::atoi(heightText.c_str());
+    if (height > 0) {
+      descriptor.height = height;
+    }
+  }
+  const std::string fpsText = value("fps");
+  if (!fpsText.empty()) {
+    const int fps = std::atoi(fpsText.c_str());
+    if (fps > 0) {
+      descriptor.fps = fps;
+    }
+  }
+  const std::string orientation = value("orientation");
+  if (!orientation.empty()) {
+    descriptor.orientation = orientation;
+  }
+  descriptor.resolvedOrientation = value("resolvedOrientation");
+  const std::string displayWidthText = value("displayWidth");
+  if (!displayWidthText.empty()) {
+    const int displayWidth = std::atoi(displayWidthText.c_str());
+    if (displayWidth > 0) {
+      descriptor.displayWidth = displayWidth;
+    }
+  }
+  const std::string displayHeightText = value("displayHeight");
+  if (!displayHeightText.empty()) {
+    const int displayHeight = std::atoi(displayHeightText.c_str());
+    if (displayHeight > 0) {
+      descriptor.displayHeight = displayHeight;
+    }
+  }
+  descriptor.displayAspectRatio = value("displayAspectRatio");
+  const std::string metadataVersionText = value("metadataVersion");
+  if (!metadataVersionText.empty()) {
+    const int metadataVersion = std::atoi(metadataVersionText.c_str());
+    if (metadataVersion > 0) {
+      descriptor.metadataVersion = metadataVersion;
+    }
+  }
   return descriptor;
 }
 

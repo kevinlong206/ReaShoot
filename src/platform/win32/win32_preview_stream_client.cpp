@@ -62,6 +62,7 @@ public:
 
   bool start(const core::PreviewStreamRequest &request,
              core::BinaryDataCallback onData,
+             core::TextDataCallback onText,
              core::VoidCallback onActive,
              core::ErrorCallback onError) override {
     stop();
@@ -69,8 +70,13 @@ public:
       return false;
     }
     running_ = true;
-    worker_ = std::thread([this, request, onData = std::move(onData), onActive = std::move(onActive), onError = std::move(onError)]() mutable {
-      receiveLoop(request, std::move(onData), std::move(onActive), std::move(onError));
+    worker_ = std::thread([this,
+                           request,
+                           onData = std::move(onData),
+                           onText = std::move(onText),
+                           onActive = std::move(onActive),
+                           onError = std::move(onError)]() mutable {
+      receiveLoop(request, std::move(onData), std::move(onText), std::move(onActive), std::move(onError));
     });
     return true;
   }
@@ -104,6 +110,7 @@ public:
 private:
   void receiveLoop(const core::PreviewStreamRequest &request,
                    core::BinaryDataCallback onData,
+                   core::TextDataCallback onText,
                    core::VoidCallback onActive,
                    core::ErrorCallback onError) {
     bool active = false;
@@ -186,6 +193,7 @@ private:
     }
 
     std::vector<uint8_t> frame;
+    std::string textFrame;
     std::vector<uint8_t> buffer(256 * 1024);
     while (running_.load()) {
       DWORD bytesRead = 0;
@@ -202,6 +210,23 @@ private:
       if (bufferType == WINHTTP_WEB_SOCKET_CLOSE_BUFFER_TYPE) {
         running_ = false;
         break;
+      }
+      if (bufferType == WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE ||
+          bufferType == WINHTTP_WEB_SOCKET_UTF8_FRAGMENT_BUFFER_TYPE) {
+        textFrame.append(reinterpret_cast<const char *>(buffer.data()), reinterpret_cast<const char *>(buffer.data()) + bytesRead);
+        if (bufferType == WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE) {
+          if (!active) {
+            active = true;
+            if (onActive) {
+              onActive();
+            }
+          }
+          if (onText && !textFrame.empty()) {
+            onText(textFrame);
+          }
+          textFrame.clear();
+        }
+        continue;
       }
       if (bufferType != WINHTTP_WEB_SOCKET_BINARY_MESSAGE_BUFFER_TYPE &&
           bufferType != WINHTTP_WEB_SOCKET_BINARY_FRAGMENT_BUFFER_TYPE) {

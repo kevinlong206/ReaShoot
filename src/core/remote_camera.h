@@ -37,6 +37,15 @@ struct RemoteRecordingDescriptor {
 struct PreviewStreamDescriptor {
   std::string streamPath = "/preview";
   int port = 8789;
+  int width = 640;
+  int height = 360;
+  int fps = 12;
+  std::string orientation = "portrait";
+  std::string resolvedOrientation;
+  int displayWidth = 0;
+  int displayHeight = 0;
+  std::string displayAspectRatio;
+  int metadataVersion = 1;
 };
 
 CaptureProfile captureProfileFromSettings(const RemoteCameraSettings &settings);

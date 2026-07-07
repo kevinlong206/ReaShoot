@@ -32,7 +32,12 @@ final class ControlProtocolTests: XCTestCase {
             width: 640,
             height: 360,
             fps: 12,
-            orientation: "portrait"
+            orientation: "auto",
+            resolvedOrientation: "landscapeLeft",
+            displayWidth: 640,
+            displayHeight: 360,
+            displayAspectRatio: "16:9",
+            metadataVersion: 2
         )
         let event = ControlEvent(type: .recordingStopped, recording: recording, preview: preview)
 
@@ -40,6 +45,30 @@ final class ControlProtocolTests: XCTestCase {
         let decoded = try ProtocolCodec.decodeEvent(data)
 
         XCTAssertEqual(decoded, event)
+    }
+
+    func testPreviewDescriptorDecodesOlderPayload() throws {
+        let json = """
+        {
+          "codec": "h264",
+          "transport": "websocket",
+          "streamPath": "/preview",
+          "port": 8789,
+          "width": 640,
+          "height": 360,
+          "fps": 12,
+          "orientation": "portrait",
+          "requiresToken": true
+        }
+        """
+
+        let preview = try JSONDecoder().decode(PreviewDescriptor.self, from: Data(json.utf8))
+
+        XCTAssertEqual(preview.resolvedOrientation, "portrait")
+        XCTAssertEqual(preview.displayWidth, 640)
+        XCTAssertEqual(preview.displayHeight, 360)
+        XCTAssertEqual(preview.displayAspectRatio, "640:360")
+        XCTAssertEqual(preview.metadataVersion, 1)
     }
 
     func testTransferStateTransitions() {

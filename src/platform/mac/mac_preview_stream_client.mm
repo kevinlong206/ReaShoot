@@ -8,6 +8,7 @@
 @property(nonatomic, strong) NSURLSession *session;
 @property(nonatomic, strong) NSURLSessionWebSocketTask *task;
 @property(nonatomic, copy) void (^onData)(NSData *accessUnit);
+@property(nonatomic, copy) void (^onText)(NSString *text);
 @property(nonatomic, copy) void (^onActive)(void);
 @property(nonatomic, copy) void (^onError)(NSError *error);
 @property(nonatomic, assign) BOOL active;
@@ -37,6 +38,7 @@ public:
 
   bool start(const core::PreviewStreamRequest &request,
              core::BinaryDataCallback onData,
+             core::TextDataCallback onText,
              core::VoidCallback onActive,
              core::ErrorCallback onError) override {
     return [client_ startWithHost:[NSString stringWithUTF8String:request.host.c_str()]
@@ -49,6 +51,11 @@ public:
       }
       const auto *bytes = static_cast<const uint8_t *>(accessUnit.bytes);
       onData(std::vector<uint8_t>(bytes, bytes + accessUnit.length));
+    }
+                          onText:^(NSString *text) {
+      if (onText) {
+        onText(text.UTF8String ?: "");
+      }
     }
                          onActive:^{
       if (onActive) {
@@ -87,6 +94,7 @@ std::unique_ptr<core::PreviewStreamClient> createPreviewStreamClient() {
                  path:(NSString *)path
                 token:(NSString *)token
                onData:(void (^)(NSData *accessUnit))onData
+               onText:(void (^)(NSString *text))onText
              onActive:(void (^)(void))onActive
               onError:(void (^)(NSError *error))onError {
   [self stop];
@@ -103,6 +111,7 @@ std::unique_ptr<core::PreviewStreamClient> createPreviewStreamClient() {
   }
 
   self.onData = onData;
+  self.onText = onText;
   self.onActive = onActive;
   self.onError = onError;
   self.active = NO;
@@ -119,6 +128,7 @@ std::unique_ptr<core::PreviewStreamClient> createPreviewStreamClient() {
   [self.session invalidateAndCancel];
   self.session = nil;
   self.onData = nil;
+  self.onText = nil;
   self.onActive = nil;
   self.onError = nil;
   self.active = NO;
@@ -151,6 +161,8 @@ std::unique_ptr<core::PreviewStreamClient> createPreviewStreamClient() {
       }
       if (message.type == NSURLSessionWebSocketMessageTypeData && strongSelf.onData) {
         strongSelf.onData(message.data);
+      } else if (message.type == NSURLSessionWebSocketMessageTypeString && strongSelf.onText) {
+        strongSelf.onText(message.string);
       }
       [strongSelf receiveNextMessageForTask:task];
     });

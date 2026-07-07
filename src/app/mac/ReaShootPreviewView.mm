@@ -7,6 +7,8 @@
   int _frameWidth;
   int _frameHeight;
   int _frameStride;
+  int _displayWidth;
+  int _displayHeight;
   NSString *_emptyMessage;
 }
 
@@ -25,6 +27,12 @@
   _frameWidth = width;
   _frameHeight = height;
   _frameStride = stride;
+  [self setNeedsDisplay:YES];
+}
+
+- (void)setDisplaySizeWithWidth:(int)width height:(int)height {
+  _displayWidth = width;
+  _displayHeight = height;
   [self setNeedsDisplay:YES];
 }
 
@@ -80,7 +88,9 @@
   }
 
   NSRect bounds = self.bounds;
-  const CGFloat imageAspect = static_cast<CGFloat>(_frameWidth) / static_cast<CGFloat>(_frameHeight);
+  const int displayWidth = _displayWidth > 0 ? _displayWidth : _frameWidth;
+  const int displayHeight = _displayHeight > 0 ? _displayHeight : _frameHeight;
+  const CGFloat imageAspect = static_cast<CGFloat>(displayWidth) / static_cast<CGFloat>(displayHeight);
   const CGFloat viewAspect = bounds.size.width / std::max<CGFloat>(bounds.size.height, 1.0);
   NSRect drawRect = bounds;
   if (imageAspect > viewAspect) {

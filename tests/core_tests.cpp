@@ -11,14 +11,25 @@
 #include "../src/core/ui_interfaces.h"
 #include "../src/desktop/desktop_app_controller.h"
 #include "../src/desktop/desktop_app_model.h"
+#include "../src/desktop/desktop_integration_api.h"
 #include "../src/desktop/desktop_workflow.h"
 
 #include <cassert>
 #include <cmath>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 
 using namespace reashoot::core;
+
+std::string readTextFile(const std::string &path) {
+  std::ifstream input(path);
+  assert(input.good());
+  std::ostringstream buffer;
+  buffer << input.rdbuf();
+  return buffer.str();
+}
 
 void testPathUtils() {
   assert(hasPathExtension("Take.MOV", ".mov"));
@@ -133,6 +144,15 @@ void testRemoteCameraArguments() {
   PreviewStreamDescriptor customPreview = previewStreamDescriptorFromFields(previewFields);
   assert(customPreview.streamPath == "/custom");
   assert(customPreview.port == 8799);
+  FieldMap metadataPreviewFields = parseFields("streamPath=/custom port=8799 width=360 height=640 fps=12 orientation=auto resolvedOrientation=portrait displayWidth=360 displayHeight=640 displayAspectRatio=9:16 metadataVersion=2", ' ');
+  PreviewStreamDescriptor metadataPreview = previewStreamDescriptorFromFields(metadataPreviewFields);
+  assert(metadataPreview.width == 360);
+  assert(metadataPreview.height == 640);
+  assert(metadataPreview.resolvedOrientation == "portrait");
+  assert(metadataPreview.displayWidth == 360);
+  assert(metadataPreview.displayHeight == 640);
+  assert(metadataPreview.displayAspectRatio == "9:16");
+  assert(metadataPreview.metadataVersion == 2);
   FieldMap invalidPreviewFields = parseFields("streamPath= port=-1", ' ');
   PreviewStreamDescriptor invalidPreview = previewStreamDescriptorFromFields(invalidPreviewFields);
   assert(invalidPreview.streamPath == "/preview");
@@ -280,6 +300,60 @@ void testDesktopAppController() {
   assert(!controller.retryDecision(transient, 0).shouldRetry);
 }
 
+void testDesktopIntegrationApiModels() {
+  using namespace reashoot::desktop;
+  RemoteCameraSettings settings;
+  settings.host = "iphone.local";
+  settings.httpPort = "8798";
+  settings.token = "phone-token";
+  settings.resolution = "1080p";
+  settings.fps = "60";
+  settings.look = "warmVintage";
+
+  JsonValue profile = profileToJson(settings);
+  assert(profile.stringValue("resolution") == "1080p");
+  assert(profile.stringValue("fps") == "60");
+  assert(profile.stringValue("look") == "warmVintage");
+
+  RemoteCameraSettings updated = settings;
+  applyProfileJson(updated, parseJson(R"({"resolution":"4K","fps":"30","zoom":"2.0"})"));
+  assert(updated.resolution == "4K");
+  assert(updated.fps == "30");
+  assert(updated.zoom == "2.0");
+  assert(updated.look == "warmVintage");
+
+  RemoteRecordingDescriptor recording;
+  recording.id = "clip-2026-07-05T12-34-56Z";
+  recording.filename = "take.mov";
+  recording.byteCount = "42";
+  recording.thumbnailPath = "/recordings/clip/thumbnail";
+  JsonValue recordingJson = recordingToJson(settings, recording);
+  assert(recordingJson.stringValue("filename") == "take.mov");
+  assert(recordingJson.stringValue("timestamp") == "2026-07-05T12:34:56Z");
+  assert(recordingJson.stringValue("thumbnailUrl") == "http://iphone.local:8798/recordings/clip/thumbnail?token=phone-token");
+
+  IntegrationStatus status;
+  status.paired = true;
+  status.previewRunning = true;
+  status.host = "iphone.local";
+  status.message = "Preview streaming.";
+  status.profile = settings;
+  JsonValue statusJson = statusToJson(status);
+  assert(statusJson.stringValue("apiVersion") == "v1");
+  assert(statusJson.boolValue("paired"));
+  assert(statusJson.find("profile")->stringValue("resolution") == "1080p");
+
+  IntegrationHttpRequest request;
+  request.headers["Authorization"] = "Bearer secret";
+  assert(requestHasValidToken(request, "secret"));
+  assert(!requestHasValidToken(request, "other"));
+  request.headers.clear();
+  request.query = "token=secret";
+  assert(requestHasValidToken(request, "secret"));
+  assert(errorResponse(401, "unauthorized", "Nope").status == 401);
+  assert(acceptedResponse("Queued").status == 202);
+}
+
 void testJsonValue() {
   JsonValue value = parseJson(R"({"name":"phone","port":8787,"flags":[true,false],"nested":{"x":"y"}})");
   assert(value.stringValue("name") == "phone");
@@ -313,7 +387,7 @@ void testControlProtocol() {
       {"id":"one","filename":"take.mov","byteCount":42,"checksumSHA256":"abc","downloadPath":"/recordings/one"},
       {"id":"two","filename":"take2.mov","byteCount":84,"downloadPath":"/recordings/two"}
     ],
-    "preview":{"codec":"h264","transport":"websocket","streamPath":"/preview","port":8789,"width":640,"height":360,"fps":12,"orientation":"portrait","requiresToken":true}
+    "preview":{"codec":"h264","transport":"websocket","streamPath":"/preview","port":8789,"width":640,"height":360,"fps":12,"orientation":"auto","resolvedOrientation":"landscapeLeft","displayWidth":640,"displayHeight":360,"displayAspectRatio":"16:9","metadataVersion":2,"requiresToken":true}
   })";
   ProtocolEvent event = decodeEventJson(eventJson);
   assert(event.type == "recordingsListed");
@@ -321,6 +395,15 @@ void testControlProtocol() {
   assert(event.recordings[0].checksumSHA256 == "abc");
   assert(event.hasPreview);
   assert(event.preview.port == 8789);
+  assert(event.preview.resolvedOrientation == "landscapeLeft");
+  assert(event.preview.displayAspectRatio == "16:9");
+  assert(event.preview.metadataVersion == 2);
+
+  ProtocolEvent oldPreviewEvent = decodeEventJson(R"({"type":"previewStarted","preview":{"port":8789}})");
+  assert(oldPreviewEvent.hasPreview);
+  assert(oldPreviewEvent.preview.width == 640);
+  assert(oldPreviewEvent.preview.height == 360);
+  assert(oldPreviewEvent.preview.metadataVersion == 1);
 
   ProtocolEvent oldProfileEvent = decodeEventJson(R"({"type":"captureConfigured","captureProfile":{"resolution":"4K"}})");
   assert(oldProfileEvent.hasCaptureProfile);
@@ -355,6 +438,32 @@ void testAlignmentMath() {
   assert(peaks.front().index == 1);
 }
 
+void testLivePreviewRotationGuard() {
+  const std::string source = readTextFile("iphone/Sources/ReaShootKit/CaptureRecordingEngine.swift");
+  const std::string livePreviewMapping =
+      R"(private func normalizedImage(_ image: CIImage, orientation: String) -> CIImage {
+        let propertyOrientation: CGImagePropertyOrientation
+        switch orientation.lowercased() {
+        case "landscapeleft":
+            propertyOrientation = .down
+        case "landscaperight", "landscape":
+            propertyOrientation = .up
+        case "portraitupsidedown":
+            propertyOrientation = .right
+        default:
+            propertyOrientation = .left
+        })";
+  const std::string recordedFileMapping =
+      R"(private func rotationAngle(for orientation: String) -> CGFloat {
+        switch orientation.lowercased() {
+        case "landscapeleft":
+            return 0
+        case "landscaperight", "landscape":
+            return 180)";
+  assert(source.find(livePreviewMapping) != std::string::npos);
+  assert(source.find(recordedFileMapping) != std::string::npos);
+}
+
 int main() {
   testPathUtils();
   testHelperParsing();
@@ -366,9 +475,11 @@ int main() {
   testDesktopWorkflowParsing();
   testDesktopAppModel();
   testDesktopAppController();
+  testDesktopIntegrationApiModels();
   testJsonValue();
   testControlProtocol();
   testH264AnnexB();
   testAlignmentMath();
+  testLivePreviewRotationGuard();
   return 0;
 }

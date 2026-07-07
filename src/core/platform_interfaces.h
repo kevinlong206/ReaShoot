@@ -36,6 +36,7 @@ struct VideoFrame {
 
 using VideoFrameCallback = std::function<void(const VideoFrame &)>;
 using BinaryDataCallback = std::function<void(std::vector<uint8_t>)>;
+using TextDataCallback = std::function<void(const std::string &)>;
 
 struct DecoderStatus {
   bool hardwareAccelerated = false;
@@ -82,6 +83,7 @@ public:
   virtual bool isRunning() const = 0;
   virtual bool start(const PreviewStreamRequest &request,
                      BinaryDataCallback onData,
+                     TextDataCallback onText,
                      VoidCallback onActive,
                      ErrorCallback onError) = 0;
   virtual void stop() = 0;

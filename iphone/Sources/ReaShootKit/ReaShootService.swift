@@ -126,7 +126,7 @@ public final class ReaShootService: ObservableObject {
             try httpServer.start()
             self.httpServer = httpServer
 
-            let previewDescriptor = PreviewDescriptor(port: Int(previewPort))
+            let previewDescriptor = PreviewDescriptor(port: Int(previewPort), metadataVersion: 2)
             let previewServer = PreviewStreamServer(
                 port: previewPort,
                 descriptor: previewDescriptor,
@@ -408,7 +408,7 @@ public final class ReaShootService: ObservableObject {
     }
 
     private func startPreviewStream() throws -> PreviewDescriptor {
-        let descriptor = PreviewDescriptor(port: Int(previewPort), orientation: capture.currentProfile.orientation)
+        let descriptor = PreviewDescriptor(port: Int(previewPort), orientation: capture.currentProfile.orientation, metadataVersion: 2)
         guard let previewStreamServer else {
             throw PreviewStreamError.serverUnavailable
         }
@@ -420,8 +420,15 @@ public final class ReaShootService: ObservableObject {
         }
         try encoder.start()
         previewEncoder = encoder
-        capture.setPreviewSampleBufferConsumer { [weak encoder] pixelBuffer, timestamp, captureUnixMicros, orientation in
-            encoder?.encode(pixelBuffer: pixelBuffer, timestamp: timestamp, captureUnixMicros: captureUnixMicros, orientation: orientation)
+        let previewPort = Int(previewPort)
+        capture.setPreviewSampleBufferConsumer { [weak encoder, weak previewStreamServer] pixelBuffer, timestamp, captureUnixMicros, metadata in
+            var descriptor = metadata.descriptor
+            descriptor.port = previewPort
+            descriptor.streamPath = "/preview"
+            if previewStreamServer?.updateDescriptor(descriptor) == true {
+                encoder?.requestKeyframe()
+            }
+            encoder?.encode(pixelBuffer: pixelBuffer, timestamp: timestamp, captureUnixMicros: captureUnixMicros, orientation: metadata.resolvedOrientation)
         }
         return descriptor
     }

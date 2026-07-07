@@ -7,6 +7,7 @@ This branch contains ReaShoot as a standalone desktop app plus its companion iPh
 - The macOS desktop app currently uses native Cocoa/Objective-C++; the Windows desktop app uses native Win32 (Windows SDK). Keep both thin over shared C++ workflow code. Native Win32 (not WinUI 3/Qt/.NET) is the Windows UI direction: it links the shared C++ core directly and needs no external runtime, maximizing compatibility. Both frontends sit over the same shared controller/state layer.
 - The iPhone app lives in `iphone/` and records full-quality iPhone video while the desktop app controls it over the local Wi-Fi/Bonjour network.
 - The desktop app controls the iPhone over WebSocket port `8787`, downloads recordings over HTTP port `8788`, and receives preview video over an authenticated H.264 WebSocket stream on port `8789`.
+- `ReaShoot.app` is also the integration hub. Other apps should use its local desktop API instead of duplicating iPhone discovery, pairing, control, preview, download, or transfer-acknowledgement logic.
 - Keep desktop workflow logic cross-platform-friendly so future Windows desktop support can reuse protocol, discovery, control, preview transport, download, stored-recording management, and capture-profile behavior.
 - The REAPER extension remains in the repo for legacy users. Keep it buildable where practical, but do not put new standalone desktop behavior behind REAPER APIs, SWELL controls, REAPER transport, track insertion, or audio alignment.
 - `iphone/` is the source of truth for the iPhone app; do not recreate old external development copies.
@@ -14,8 +15,10 @@ This branch contains ReaShoot as a standalone desktop app plus its companion iPh
 ## Important files
 
 - `src/app/mac/` - Standalone macOS desktop app bundle sources. Keep AppKit/SwiftUI files focused on native controls, layout, windows, menus, and rendering.
+- `src/app/mac/ReaShootMacIntegrationServer.*` - macOS loopback HTTP/SSE server for the desktop integration API.
 - `src/app/win32/` - Standalone Windows desktop app (`ReaShoot.exe`, native Win32). `ReaShootDesktopWin32.cpp` is the app/UI + main-thread dispatch; `ReaShootWin32Support.*` holds registry settings, folder picker, reveal-in-Explorer, and string helpers. Keep it thin over `src/desktop`/`src/core`.
 - `src/desktop/` - Desktop workflow/state/view-model helpers shared by standalone app frontends. Cross-platform desktop behavior belongs here unless it is protocol-level core code.
+- `src/desktop/desktop_integration_api.*` - Shared `/v1` integration API request/response/status/profile/recording JSON helpers and auth checks.
 - `src/core/control_protocol.*` and `iphone/Sources/ReaShootCore/ControlProtocol.swift` - Protocol definitions; keep these compatible when adding commands/events.
 - `src/core/` - Shared C++ protocol, parsing, capture-profile, H.264, status, and controller code.
 - `src/helper/` - C++ helper executable. Builds `reashoot-mac` on macOS and `reashoot-win.exe` on Windows for iPhone discovery/control/download. The macOS desktop app bundles this helper.
@@ -96,6 +99,8 @@ rm -rf iphone/Package.resolved iphone/.build helper/.build
 - Downloads default to `~/Movies/ReaShoot` and should be user-changeable.
 - Stop flow should remain safe: send `stop-only`, show Download/Delete/Cancel, prepare/download only after Download, and acknowledge transfer only after verifying the downloaded file.
 - Failed/canceled downloads remain on the phone because the Mac only sends transfer acknowledgement after verifying the downloaded file. Use `Videos on iPhone` to download or delete stored phone videos.
+- The desktop app exposes a loopback-only `/v1` HTTP JSON API plus Server-Sent Events at `/v1/events`. It registers `host`, `port`, `baseUrl`, and bearer `token` in `~/Library/Application Support/ReaShoot/desktop-api.json` with owner-only permissions.
+- The helper supports desktop API client commands including `desktop-status`, `desktop-profile`, `desktop-set-profile`, `desktop-preview-start`, `desktop-preview-stop`, `desktop-start-recording`, `desktop-stop-recording`, `desktop-refresh-recordings`, `desktop-list-recordings`, `desktop-download-recording`, and `desktop-delete-recording`.
 - The first desktop milestone reveals downloaded files in Finder; a local recordings library/player is deferred.
 - Pairing tokens are credentials. Do not write them into docs or source, and do not commit them.
 
@@ -104,6 +109,7 @@ rm -rf iphone/Package.resolved iphone/.build helper/.build
 - The iPhone app advertises `_reashoot._tcp` with Bonjour.
 - The iPhone app records a single `.mov` with video and camera audio embedded.
 - The current preview implementation uses a dedicated authenticated binary WebSocket carrying H.264 Annex B access units.
+- Live preview rotation is intentionally separate from recorded-file rotation in `iphone/Sources/ReaShootKit/CaptureRecordingEngine.swift`. Keep `PreviewFrameStore.normalizedImage` mapping as `landscapeLeft -> .down` and `landscapeRight/landscape -> .up`; do not "fix" it to match `rotationAngle(for:)`, or landscape live preview becomes upside down.
 - The helper validates complete WebSocket handshake headers, including `Sec-WebSocket-Accept`; keep the iPhone server response terminated with `\r\n\r\n`.
 - The iPhone capture profile includes resolution, FPS, orientation, aspect, lens, zoom, and look. Lens availability is hardware-dependent; zoom is clamped by AVFoundation and is not guaranteed optical for every value.
 - Keep the curated raw look lists aligned between legacy desktop UI surfaces and `iphone/Sources/ReaShootKit/CaptureRecordingEngine.swift`; saved removed `ci:` looks should fall back to `natural`.
@@ -115,6 +121,8 @@ rm -rf iphone/Package.resolved iphone/.build helper/.build
 - Prefer shared code for behavior that should be consistent across macOS and future Windows desktop support. Add platform-specific code only when host APIs, OS services, UI toolkits, or build constraints make sharing impractical.
 - Keep desktop app orchestration out of native UI files. Pairing, discovery retry policy, configure-on-profile-change, preview start/stop state, stale-frame empty states, recording start/stop, and iPhone video list/download/delete workflows should live in `src/desktop/` or `src/core/`.
 - Native UI/platform files may own layout, colors, menus, alerts, file dialogs, settings storage adapters, main-thread dispatch/timers, thumbnail/image display, and preview renderer/client factories.
+- Keep the desktop API local-only by default (`127.0.0.1`). Do not expose iPhone control to the LAN, and do not log the API bearer token or iPhone pairing token.
+- Integration clients are clients of `ReaShoot.app`; they must not independently acknowledge iPhone transfers or race the desktop app for recording/download/delete ownership.
 - Keep preview transport dependency-light and same-LAN oriented; prefer simple H.264 streaming over heavyweight realtime SDKs unless requirements change.
 - Keep routine status in the desktop app UI. Use modal alerts for real decisions and errors.
 - Do not commit iPhone pairing tokens, downloaded `.mov` files, `test-downloads`, DerivedData, `.DS_Store`, or Xcode `xcuserdata`.
@@ -124,6 +132,7 @@ rm -rf iphone/Package.resolved iphone/.build helper/.build
 
 - The legacy macOS REAPER extension is implemented in Objective-C++ with the REAPER Extension SDK, AVFoundation/Cocoa for Mac services, a local H.264 preview stream, and shared FFmpeg recorded-file playback preview.
 - The legacy Windows REAPER extension builds with CMake as `reaper_reashoot.dll`.
+- The legacy REAPER extension has an opt-in action, `ReaShoot: Enable/Disable Desktop App Integration`, which uses the desktop API for status/profile calls and falls back to direct iPhone control while recording/media-insertion migration remains incomplete.
 - Keep legacy extension fixes cross-platform where behavior exists on both macOS and Windows, but do not apply Windows-specific playback workarounds to macOS without Mac-specific evidence.
 - Keep the REAPER extension GUI defined in the shared SWELL panel (`src/platform/swell/swell_panel_probe.cpp`). Do not add parallel Cocoa or Win32 control trees for legacy preview/setup/status UI.
 - Avoid enabling REAPER audio recording on the `ReaShoot` track.
@@ -134,6 +143,7 @@ rm -rf iphone/Package.resolved iphone/.build helper/.build
 ## Validation
 
 - Run `make check` before committing Swift/protocol/helper changes; it checks mirrored Swift files, runs iPhone Swift tests, and builds the helper.
+- `make check` includes a source-level guard for the iPhone live-preview landscape rotation mapping because that regression is easy to reintroduce.
 - Build the desktop app with `cmake --build build-desktop --target reashoot_desktop --parallel` after macOS app changes.
 - Use helper `ping`, `configure`, start/stop/download, and preview smoke tests after changing WebSocket/control startup behavior.
 
