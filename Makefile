@@ -1,10 +1,11 @@
 SDK_DIR := vendor/reaper-sdk/sdk
 BUILD_DIR := build
 TARGET := $(BUILD_DIR)/reaper_reashoot.dylib
-HELPER_TARGET := $(BUILD_DIR)/reashoot-mac
 SRC := src/reashoot.mm
 CORE_SRC := $(wildcard src/core/*.cpp)
 CORE_HEADERS := $(wildcard src/core/*.h)
+CAMERA_TRANSPORT_SRC := $(wildcard src/core/camera_transport/*.cpp)
+CAMERA_TRANSPORT_HEADERS := $(wildcard src/core/camera_transport/*.h)
 DESKTOP_SRC := $(wildcard src/desktop/*.cpp)
 DESKTOP_HEADERS := $(wildcard src/desktop/*.h)
 MAC_SRC := src/platform/mac/mac_media_audio_reader.mm
@@ -17,7 +18,6 @@ REAPER_SRC := $(wildcard src/reaper/*.cpp)
 REAPER_HEADERS := $(wildcard src/reaper/*.h)
 WIN32_STUB_SRC := src/platform/win32/win32_portability_stub.cpp
 SWELL_PROBE_SRC := src/platform/swell/swell_panel_probe.cpp
-HELPER_CPP_SRC := $(wildcard src/helper/*.cpp)
 CORE_TEST_TARGET := $(BUILD_DIR)/core_tests
 WIN32_STUB_TARGET := $(BUILD_DIR)/win32_portability_stub.o
 SWELL_PROBE_TARGET := $(BUILD_DIR)/swell_panel_probe.o
@@ -40,33 +40,27 @@ LDFLAGS := -dynamiclib -undefined dynamic_lookup $(ARCH_FLAGS) \
 
 .PHONY: all clean install check
 
-all: $(TARGET) $(HELPER_TARGET)
+all: $(TARGET)
 
-$(TARGET): $(SRC) $(CORE_SRC) $(CORE_HEADERS) $(MAC_SRC) $(MAC_HEADERS) $(REAPER_SRC) $(REAPER_HEADERS) Info.plist $(SDK_DIR)/reaper_plugin.h $(SDK_DIR)/reaper_plugin_functions.h
+$(TARGET): $(SRC) $(CORE_SRC) $(CORE_HEADERS) $(CAMERA_TRANSPORT_SRC) $(CAMERA_TRANSPORT_HEADERS) $(MAC_SRC) $(MAC_HEADERS) $(REAPER_SRC) $(REAPER_HEADERS) Info.plist $(SDK_DIR)/reaper_plugin.h $(SDK_DIR)/reaper_plugin_functions.h
 	mkdir -p $(BUILD_DIR)
-	$(CXX) $(CXXFLAGS) $(SRC) $(CORE_SRC) $(DESKTOP_SRC) $(MAC_SRC) $(REAPER_SRC) $(LDFLAGS) -o $(TARGET)
+	$(CXX) $(CXXFLAGS) $(SRC) $(CORE_SRC) $(CAMERA_TRANSPORT_SRC) $(DESKTOP_SRC) $(MAC_SRC) $(REAPER_SRC) $(LDFLAGS) -o $(TARGET)
 
-$(HELPER_TARGET): $(HELPER_CPP_SRC) $(CORE_SRC) $(CORE_HEADERS) $(DESKTOP_SRC) $(DESKTOP_HEADERS)
-	mkdir -p $(BUILD_DIR)
-	$(CXX) $(CORE_TEST_CXXFLAGS) $(HELPER_CPP_SRC) $(CORE_SRC) $(DESKTOP_SRC) -o $(HELPER_TARGET)
-
-install: $(TARGET) $(HELPER_TARGET)
+install: $(TARGET)
 	mkdir -p "$(HOME)/Library/Application Support/REAPER/UserPlugins"
 	rm -f "$(HOME)/Library/Application Support/REAPER/UserPlugins/reaper_video_recorder.dylib"
 	rm -f "$(HOME)/Library/Application Support/REAPER/UserPlugins/reashoot.dylib"
 	rm -f "$(HOME)/Library/Application Support/REAPER/UserPlugins/video-sync-mac"
+	rm -f "$(HOME)/Library/Application Support/REAPER/UserPlugins/reashoot-mac"
 	cp $(TARGET) "$(HOME)/Library/Application Support/REAPER/UserPlugins/reaper_reashoot.dylib"
-	cp $(HELPER_TARGET) "$(HOME)/Library/Application Support/REAPER/UserPlugins/reashoot-mac"
-	codesign --force --sign - "$(HOME)/Library/Application Support/REAPER/UserPlugins/reashoot-mac"
 	codesign --force --sign - "$(HOME)/Library/Application Support/REAPER/UserPlugins/reaper_reashoot.dylib"
 
 check:
 	mkdir -p $(BUILD_DIR)
-	$(CXX) $(CORE_TEST_CXXFLAGS) tests/core_tests.cpp $(CORE_SRC) $(DESKTOP_SRC) -o $(CORE_TEST_TARGET)
+	$(CXX) $(CORE_TEST_CXXFLAGS) tests/core_tests.cpp $(CORE_SRC) $(CAMERA_TRANSPORT_SRC) $(DESKTOP_SRC) -o $(CORE_TEST_TARGET)
 	$(CORE_TEST_TARGET)
 	$(CXX) $(CORE_TEST_CXXFLAGS) -c $(WIN32_STUB_SRC) -o $(WIN32_STUB_TARGET)
 	$(CXX) $(CORE_TEST_CXXFLAGS) -isystem $(SDK_DIR) -c $(SWELL_PROBE_SRC) -o $(SWELL_PROBE_TARGET)
-	$(CXX) $(CORE_TEST_CXXFLAGS) $(HELPER_CPP_SRC) $(CORE_SRC) $(DESKTOP_SRC) -o $(HELPER_TARGET)
 	$(SWIFT_GIT_ENV) swift test --package-path iphone
 
 clean:

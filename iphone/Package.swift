@@ -10,8 +10,7 @@ let package = Package(
     ],
     products: [
         .library(name: "ReaShootCore", targets: ["ReaShootCore"]),
-        .library(name: "ReaShootKit", targets: ["ReaShootKit"]),
-        .executable(name: "reashoot-mac", targets: ["reashoot-mac"])
+        .library(name: "ReaShootKit", targets: ["ReaShootKit"])
     ],
     dependencies: [],
     targets: [
@@ -23,10 +22,6 @@ let package = Package(
             dependencies: [
                 "ReaShootCore"
             ]
-        ),
-        .executableTarget(
-            name: "reashoot-mac",
-            dependencies: ["ReaShootCore"]
         ),
         .testTarget(
             name: "ReaShootCoreTests",

@@ -58,7 +58,6 @@ public:
   virtual FileDialogService &fileDialogs() = 0;
   virtual FileRevealService &fileReveal() = 0;
   virtual ThumbnailLoader &thumbnailLoader() = 0;
-  virtual std::unique_ptr<core::HelperProcess> createHelperProcess() = 0;
   virtual std::unique_ptr<core::PreviewStreamClient> createPreviewStreamClient() = 0;
   virtual std::unique_ptr<core::PreviewRenderer> createPreviewRenderer(core::VideoFrameCallback frameHandler,
                                                                         core::DecoderStatusCallback statusHandler) = 0;

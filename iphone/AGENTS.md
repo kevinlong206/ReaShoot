@@ -29,7 +29,6 @@ The app disables the idle timer while ready/listening so foreground preview does
 - `Sources/ReaShootKit`: iOS recording engine, pairing, WebSocket server, HTTP server, and orchestration service.
 - `Sources/ReaShootKit/PreviewH264Encoder.swift`: VideoToolbox H.264 encoder for low-resolution dock preview.
 - `Sources/ReaShootKit/PreviewStreamServer.swift`: authenticated binary WebSocket server for preview frames.
-- `Sources/reashoot-mac`: Legacy SwiftPM Mac command-line tool target for iPhone-package development. The standalone desktop app and legacy REAPER extension bundle the C++ helper from `../src/helper/`.
 - `Tests/ReaShootCoreTests`: shared protocol and state-machine tests.
 - `test-downloads`: local output directory for downloaded recordings; do not commit it.
 
@@ -43,12 +42,6 @@ Run package tests:
 
 ```sh
 swift test
-```
-
-Show CLI help:
-
-```sh
-swift run reashoot-mac --help
 ```
 
 When SwiftPM commands need to bypass bare-repository safety checks, prefix commands with:
@@ -109,51 +102,14 @@ Do not write pairing tokens into docs or source. Tokens are credentials for cont
 Remove local build artifacts before wrapping up unless a dependency change intentionally requires them:
 
 ```sh
-rm -rf .build Package.resolved ../helper/.build
+rm -rf .build Package.resolved
 ```
 
 ## Manual end-to-end test
 
-Keep the iPhone unlocked with the ReaShoot app open in the foreground, then run:
+Keep the iPhone unlocked with the ReaShoot app open in the foreground, then use the standalone desktop app to discover/pair, configure, start recording, stop recording, and download from `Videos on iPhone`.
 
-```sh
-swift run reashoot-mac ping --host kevin-long-iphone.local --port 8787
-
-PAIR_OUTPUT="$(swift run reashoot-mac pair \
-  --host kevin-long-iphone.local \
-  --port 8787 \
-  --client-name "My Mac")"
-export REASHOOT_TOKEN="${PAIR_OUTPUT#paired token=}"
-
-swift run reashoot-mac configure \
-  --host kevin-long-iphone.local \
-  --port 8787 \
-  --token "$REASHOOT_TOKEN" \
-  --lens ultrawide \
-  --zoom 0.5 \
-  --look ci:CIThermal
-
-swift run reashoot-mac start \
-  --host kevin-long-iphone.local \
-  --port 8787 \
-  --token "$REASHOOT_TOKEN" \
-  --session cli-tool-test
-
-sleep 3
-
-swift run reashoot-mac stop \
-  --host kevin-long-iphone.local \
-  --port 8787 \
-  --http-port 8788 \
-  --token "$REASHOOT_TOKEN" \
-  --download-dir test-downloads
-```
-
-Expected result: a `.mov` appears in `test-downloads`, and the CLI prints `downloaded ...`.
-
-Add `--progress` to `swift run reashoot-mac stop ...` when testing progress. It emits `encode percent=...` during on-phone look preparation and `progress bytes=... total=... percent=...` lines during the HTTP download.
-
-For prompted desktop stop flows, use `stop-only` to get raw pending recording metadata immediately, then either `download-recording --progress` or `delete-recording`. REAPER integrations should instead call the desktop API stop/download handoff so transfer acknowledgement remains desktop-app-owned. `download-recording` prepares/encodes non-natural looks only after Download is chosen unless `encodeLookAtRecordTime` was enabled for the capture profile. If a download fails before acknowledgement, the recording remains pending on the phone; use `list-recordings` plus `download-recording --progress` to restore it, `delete-recording` to remove it, or delete it from the iPhone app's Recordings section.
+Expected result: pairing shows an iPhone dialog saying `Accept pairing request from <computer name>`; after accepting, the desktop app can control recording and only acknowledges transfer after verifying the downloaded `.mov`. If a download fails before acknowledgement, the recording remains pending on the phone; use `Videos on iPhone` to restore/delete it or delete it from the iPhone app's Recordings section.
 
 `encodeLookAtRecordTime` is opt-in/default-off. When enabled with a non-natural look, the iPhone records through the AVAssetWriter record-time look path with embedded camera audio and marks the recording's `renderedLook` as the selected look, so download preparation must not export the look a second time. Keep this path using recorded-file orientation mapping; do not reuse the live-preview-only landscape mapping from `PreviewFrameStore.normalizedImage`.
 
@@ -170,13 +126,13 @@ For prompted desktop stop flows, use `stop-only` to get raw pending recording me
 - The iPhone app status UI exposes a `Preview` row. It should report `Streaming` only when a preview WebSocket client is actually connected; after `startPreview` but before the desktop app connects, it reports waiting.
 - HTTP is used for recording downloads, not live preview.
 - The app starts control/HTTP listeners before camera preparation so the desktop app can reconnect quickly after app launch.
-- The helper validates complete WebSocket handshake headers, including `Sec-WebSocket-Accept`; keep `LocalWebSocketServer.handshakeResponse` terminated with `\r\n\r\n`.
+- Desktop control clients validate complete WebSocket handshake headers, including `Sec-WebSocket-Accept`; keep `LocalWebSocketServer.handshakeResponse` terminated with `\r\n\r\n`.
 - Lens selection uses AVFoundation rear camera discovery. Not every iPhone exposes `ultrawide` or `telephoto`; unavailable lens requests should fail clearly instead of silently pretending they worked.
 - Looks include custom names plus a curated raw Core Image subset accepted as `ci:<filterName>`. Keep `VideoLook.rawFilterIDs` aligned with desktop/legacy dropdown lists.
 
 ## Known issues and next work
 
-- Bonjour discovery in the CLI may be less reliable than `dns-sd`; if discovery fails, verify with:
+- If Bonjour discovery fails, verify the iPhone advertisement with:
 
 ```sh
 dns-sd -B _reashoot._tcp local
@@ -185,6 +141,6 @@ dns-sd -L iPhone _reashoot._tcp local
 
 - Background/locked recording is not validated and may not be permitted by iOS.
 - The WebSocket and HTTP servers are custom lightweight implementations; add parser tests before expanding protocol behavior.
-- Downloads support HTTP byte ranges and helper-side resume/retry through `.download` temp files.
+- Downloads support HTTP byte ranges and desktop-side resume/retry through `.download` temp files.
 - Pending recordings can be restored after app relaunch via recording metadata; continue improving diagnostics around failed transfers.
 - Avoid broad rewrites of the manually generated Xcode project unless replacing it with a more maintainable project-generation workflow.

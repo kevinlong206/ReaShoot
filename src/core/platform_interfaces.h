@@ -53,16 +53,6 @@ public:
   virtual void terminate() = 0;
 };
 
-class HelperProcess {
-public:
-  virtual ~HelperProcess() = default;
-  virtual CommandResult run(const std::string &command, const std::vector<std::string> &arguments) = 0;
-  virtual std::shared_ptr<AsyncCommandHandle> runAsync(const std::string &command,
-                                                       const std::vector<std::string> &arguments,
-                                                       ProgressCallback progress,
-                                                       CompletionCallback completion) = 0;
-};
-
 class PreviewRenderer {
 public:
   virtual ~PreviewRenderer() = default;

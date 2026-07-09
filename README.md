@@ -68,19 +68,11 @@ After the desktop app verifies a downloaded movie and acknowledges the transfer,
 
 While the desktop app is running, it hosts a local-only HTTP JSON API on `127.0.0.1` for scripts and integrations. The app writes the current endpoint and bearer token to `~/Library/Application Support/ReaShoot/desktop-api.json` on macOS or `%LOCALAPPDATA%\ReaShoot\desktop-api.json` on Windows with owner-only permissions where available.
 
-The bundled helper can call the API:
+Scripts and integrations can call the API directly with the bearer token from `desktop-api.json`:
 
 ```sh
-build-desktop/reashoot-mac desktop-status
-build-desktop/reashoot-mac desktop-profile
-build-desktop/reashoot-mac desktop-set-profile --resolution 4K --fps 30 --aspect 9:16 --look warmVintage --encode-look-at-record-time
-build-desktop/reashoot-mac desktop-preview-start
-build-desktop/reashoot-mac desktop-start-recording
-build-desktop/reashoot-mac desktop-stop-recording
-build-desktop/reashoot-mac desktop-stop-recording-download --download-dir ~/Movies/ReaShoot --progress
-build-desktop/reashoot-mac desktop-refresh-recordings
-build-desktop/reashoot-mac desktop-list-recordings
-build-desktop/reashoot-mac desktop-download-recording --recording-id RECORDING_ID --download-dir ~/Movies/ReaShoot
+curl -H "Authorization: Bearer $REASHOOT_DESKTOP_API_TOKEN" \
+  "$REASHOOT_DESKTOP_API_BASE_URL/status"
 ```
 
 Current `/v1` endpoints include status, profile, discovery, pairing, preview start/stop, recording start/stop, stop-and-download operation handoff, operation polling, recording list/refresh/download/delete, and `GET /v1/events` for Server-Sent Events. Keep the API local; do not share the registration token.

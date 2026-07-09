@@ -66,7 +66,7 @@ PreviewStreamDescriptor previewStreamDescriptorFromFields(const FieldMap &fields
 
 class RemoteCameraController {
 public:
-  explicit RemoteCameraController(HelperProcess &helper) : helper_(helper) {}
+  RemoteCameraController() = default;
 
   CommandResult run(const RemoteCameraSettings &settings,
                     const std::string &command,
@@ -89,9 +89,6 @@ public:
                                                          const std::string &downloadDirectory,
                                                          ProgressCallback progress,
                                                          CompletionCallback completion);
-
-private:
-  HelperProcess &helper_;
 };
 
 } // namespace reashoot::core

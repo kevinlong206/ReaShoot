@@ -6,7 +6,7 @@
 #include <utility>
 #include <vector>
 
-namespace reashoot::helper {
+namespace reashoot::transport {
 namespace {
 
 uint32_t leftRotate(uint32_t value, int bits) {
@@ -140,7 +140,7 @@ std::string readExact(SocketHandle socket, size_t count) {
   while (offset < count) {
     const int result = receiveSocketBytes(socket, data.data() + offset, count - offset);
     if (result <= 0) {
-      throw HelperError(controlSocketConnectionError("connection closed"));
+      throw TransportError(controlSocketConnectionError("connection closed"));
     }
     offset += static_cast<size_t>(result);
   }
@@ -152,7 +152,7 @@ void writeAll(SocketHandle socket, const std::string &data) {
   while (offset < data.size()) {
     const int result = sendSocketBytes(socket, data.data() + offset, data.size() - offset);
     if (result <= 0) {
-      throw HelperError(controlSocketConnectionError(socketErrorMessage()));
+      throw TransportError(controlSocketConnectionError(socketErrorMessage()));
     }
     offset += static_cast<size_t>(result);
   }
@@ -207,7 +207,7 @@ core::ProtocolEvent ControlClient::send(const core::ProtocolCommand &command) co
 SocketHandle ControlClient::openSocket() const {
   try {
     return connectTcpSocket(host_, port_, timeoutSeconds_, "the control socket");
-  } catch (const HelperError &error) {
+  } catch (const TransportError &error) {
     std::string detail = error.what();
     const std::string prefix = "Could not connect to the control socket:";
     if (detail.rfind(prefix, 0) == 0) {
@@ -216,7 +216,7 @@ SocketHandle ControlClient::openSocket() const {
         detail.erase(detail.begin());
       }
     }
-    throw HelperError(controlSocketConnectionError(detail));
+    throw TransportError(controlSocketConnectionError(detail));
   }
 }
 
@@ -236,13 +236,13 @@ void ControlClient::performHandshake(SocketHandle socket) const {
   while (response.find("\r\n\r\n") == std::string::npos) {
     const int count = receiveSocketBytes(socket, buffer, sizeof(buffer));
     if (count <= 0) {
-      throw HelperError(controlSocketConnectionError("connection closed"));
+      throw TransportError(controlSocketConnectionError("connection closed"));
     }
     response.append(buffer, static_cast<size_t>(count));
   }
   if (response.find("101 Switching Protocols") == std::string::npos ||
       headerValue(response, "sec-websocket-accept") != webSocketAcceptForKey(key)) {
-    throw HelperError("WebSocket handshake failed: " + response);
+    throw TransportError("WebSocket handshake failed: " + response);
   }
 }
 
@@ -256,7 +256,7 @@ void ControlClient::sendFrame(SocketHandle socket, const std::string &payload) c
     frame.push_back(static_cast<char>((payload.size() >> 8) & 0xff));
     frame.push_back(static_cast<char>(payload.size() & 0xff));
   } else {
-    throw HelperError("WebSocket frame is too large.");
+    throw TransportError("WebSocket frame is too large.");
   }
   const std::string mask = randomBytes(4);
   frame += mask;
@@ -271,18 +271,18 @@ std::string ControlClient::receiveFrame(SocketHandle socket) const {
   const uint8_t first = static_cast<uint8_t>(header[0]);
   const uint8_t second = static_cast<uint8_t>(header[1]);
   if ((first & 0x0f) != 0x1) {
-    throw HelperError("Received an unexpected WebSocket frame.");
+    throw TransportError("Received an unexpected WebSocket frame.");
   }
   uint64_t length = second & 0x7f;
   if (length == 126) {
     const std::string extended = readExact(socket, 2);
     length = (static_cast<uint8_t>(extended[0]) << 8) | static_cast<uint8_t>(extended[1]);
   } else if (length == 127) {
-    throw HelperError("Received an unexpected WebSocket frame.");
+    throw TransportError("Received an unexpected WebSocket frame.");
   }
   if (second & 0x80) {
     (void)readExact(socket, 4);
-    throw HelperError("Received an unexpected WebSocket frame.");
+    throw TransportError("Received an unexpected WebSocket frame.");
   }
   return readExact(socket, static_cast<size_t>(length));
 }
@@ -315,4 +315,4 @@ std::string randomUUID() {
   return output;
 }
 
-} // namespace reashoot::helper
+} // namespace reashoot::transport

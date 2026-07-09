@@ -38,7 +38,6 @@
 #include "../../desktop/desktop_integration_api.h"
 #include "../../desktop/desktop_workflow.h"
 #include "../../platform/win32/win32_h264_preview_renderer.h"
-#include "../../platform/win32/win32_helper_process.h"
 #include "../../platform/win32/win32_preview_stream_client.h"
 
 #include <algorithm>
@@ -480,7 +479,6 @@ private:
   int chooserResult_ = -1;
   bool chooserDone_ = false;
 
-  std::unique_ptr<reashoot::core::HelperProcess> helper_;
   std::unique_ptr<reashoot::core::RemoteCameraController> camera_;
   std::unique_ptr<reashoot::core::PreviewStreamClient> previewClient_;
   std::unique_ptr<reashoot::core::PreviewRenderer> previewRenderer_;
@@ -631,11 +629,8 @@ int ReaShootApp::run(HINSTANCE instance, bool debug) {
   createSetupWindow(instance);
 
   // Services. The preview panel must exist before the renderer captures it.
-  const std::string helperPath = reashoot::win32app::helperExecutablePath();
-  debugLog("Application starting. helper=" + helperPath);
-  helper_ = reashoot::platform::win32::createHelperProcess(
-      helperPath, [](const std::string &message) { debugLog("helper: " + redactedText(message)); });
-  camera_ = std::make_unique<reashoot::core::RemoteCameraController>(*helper_);
+  debugLog("Application starting.");
+  camera_ = std::make_unique<reashoot::core::RemoteCameraController>();
   previewClient_ = reashoot::platform::win32::createPreviewStreamClient();
   previewRenderer_ = reashoot::platform::win32::createH264PreviewRenderer(
       [this](const reashoot::core::VideoFrame &frame) {

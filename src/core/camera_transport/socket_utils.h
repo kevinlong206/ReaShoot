@@ -16,7 +16,7 @@
 #include <sys/types.h>
 #endif
 
-namespace reashoot::helper {
+namespace reashoot::transport {
 
 #ifdef _WIN32
 using SocketHandle = SOCKET;
@@ -35,4 +35,4 @@ std::string socketErrorMessage();
 std::string gaiErrorMessage(int status);
 void sleepSeconds(int seconds);
 
-} // namespace reashoot::helper
+} // namespace reashoot::transport

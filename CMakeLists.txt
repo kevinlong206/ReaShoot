@@ -23,8 +23,22 @@ file(GLOB REASHOOT_DESKTOP_SOURCES CONFIGURE_DEPENDS "${REASHOOT_ROOT}/src/deskt
 file(GLOB REASHOOT_DESKTOP_HEADERS CONFIGURE_DEPENDS "${REASHOOT_ROOT}/src/desktop/*.h")
 file(GLOB REASHOOT_FFMPEG_SOURCES CONFIGURE_DEPENDS "${REASHOOT_ROOT}/src/platform/ffmpeg/*.cpp")
 file(GLOB REASHOOT_FFMPEG_HEADERS CONFIGURE_DEPENDS "${REASHOOT_ROOT}/src/platform/ffmpeg/*.h")
+set(REASHOOT_CAMERA_TRANSPORT_SOURCES
+  "${REASHOOT_ROOT}/src/core/camera_transport/checksum.cpp"
+  "${REASHOOT_ROOT}/src/core/camera_transport/control_client.cpp"
+  "${REASHOOT_ROOT}/src/core/camera_transport/discovery.cpp"
+  "${REASHOOT_ROOT}/src/core/camera_transport/downloader.cpp"
+  "${REASHOOT_ROOT}/src/core/camera_transport/socket_utils.cpp"
+)
+set(REASHOOT_CAMERA_TRANSPORT_HEADERS
+  "${REASHOOT_ROOT}/src/core/camera_transport/checksum.h"
+  "${REASHOOT_ROOT}/src/core/camera_transport/control_client.h"
+  "${REASHOOT_ROOT}/src/core/camera_transport/discovery.h"
+  "${REASHOOT_ROOT}/src/core/camera_transport/downloader.h"
+  "${REASHOOT_ROOT}/src/core/camera_transport/socket_utils.h"
+)
 
-add_library(reashoot_core STATIC ${REASHOOT_CORE_SOURCES} ${REASHOOT_CORE_HEADERS})
+add_library(reashoot_core STATIC ${REASHOOT_CORE_SOURCES} ${REASHOOT_CORE_HEADERS} ${REASHOOT_CAMERA_TRANSPORT_SOURCES} ${REASHOOT_CAMERA_TRANSPORT_HEADERS})
 target_include_directories(reashoot_core
   PUBLIC
     "${REASHOOT_ROOT}/src"
@@ -32,6 +46,9 @@ target_include_directories(reashoot_core
 )
 target_compile_options(reashoot_core PRIVATE ${REASHOOT_WARNING_FLAGS})
 set_target_properties(reashoot_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if(WIN32)
+  target_link_libraries(reashoot_core PUBLIC ws2_32 iphlpapi)
+endif()
 
 add_library(reashoot_desktop_core STATIC ${REASHOOT_DESKTOP_SOURCES} ${REASHOOT_DESKTOP_HEADERS})
 target_link_libraries(reashoot_desktop_core PUBLIC reashoot_core)
@@ -47,19 +64,6 @@ enable_testing()
 add_test(NAME reashoot_core_tests COMMAND reashoot_core_tests)
 add_test(NAME reashoot_gui_drift_guard
          COMMAND "${CMAKE_COMMAND}" "-DREASHOOT_ROOT=${REASHOOT_ROOT}" -P "${REASHOOT_ROOT}/tests/gui_drift_guard.cmake")
-
-file(GLOB REASHOOT_HELPER_SOURCES CONFIGURE_DEPENDS "${REASHOOT_ROOT}/src/helper/*.cpp")
-add_executable(reashoot_helper ${REASHOOT_HELPER_SOURCES})
-target_link_libraries(reashoot_helper PRIVATE reashoot_desktop_core)
-target_compile_options(reashoot_helper PRIVATE ${REASHOOT_WARNING_FLAGS})
-if(WIN32)
-  target_link_libraries(reashoot_helper PRIVATE ws2_32 iphlpapi shell32)
-  set_target_properties(reashoot_helper PROPERTIES OUTPUT_NAME "reashoot-win")
-elseif(APPLE)
-  set_target_properties(reashoot_helper PROPERTIES OUTPUT_NAME "reashoot-mac")
-else()
-  set_target_properties(reashoot_helper PROPERTIES OUTPUT_NAME "reashoot-helper")
-endif()
 
 if(APPLE)
   add_library(reaper_reashoot SHARED
@@ -92,13 +96,13 @@ if(APPLE)
     "file(REMOVE
        \"${REAPER_USERPLUGINS_DIR}/reaper_video_recorder.dylib\"
        \"${REAPER_USERPLUGINS_DIR}/reashoot.dylib\"
-       \"${REAPER_USERPLUGINS_DIR}/video-sync-mac\")")
-  install(TARGETS reaper_reashoot reashoot_helper
+       \"${REAPER_USERPLUGINS_DIR}/video-sync-mac\"
+       \"${REAPER_USERPLUGINS_DIR}/reashoot-mac\")")
+  install(TARGETS reaper_reashoot
           RUNTIME DESTINATION "${REAPER_USERPLUGINS_DIR}"
           LIBRARY DESTINATION "${REAPER_USERPLUGINS_DIR}")
   install(CODE
-    "execute_process(COMMAND /usr/bin/codesign --force --sign - \"${REAPER_USERPLUGINS_DIR}/reashoot-mac\" COMMAND_ERROR_IS_FATAL ANY)
-     execute_process(COMMAND /usr/bin/codesign --force --sign - \"${REAPER_USERPLUGINS_DIR}/reaper_reashoot.dylib\" COMMAND_ERROR_IS_FATAL ANY)")
+    "execute_process(COMMAND /usr/bin/codesign --force --sign - \"${REAPER_USERPLUGINS_DIR}/reaper_reashoot.dylib\" COMMAND_ERROR_IS_FATAL ANY)")
 
   add_executable(reashoot_desktop MACOSX_BUNDLE
     "${REASHOOT_ROOT}/src/app/mac/ReaShootDesktopApp.mm"
@@ -106,7 +110,6 @@ if(APPLE)
     "${REASHOOT_ROOT}/src/app/mac/ReaShootMacSupport.mm"
     "${REASHOOT_ROOT}/src/app/mac/ReaShootMacUI.mm"
     "${REASHOOT_ROOT}/src/app/mac/ReaShootPreviewView.mm"
-    "${REASHOOT_ROOT}/src/platform/mac/mac_helper_process.mm"
     "${REASHOOT_ROOT}/src/platform/mac/mac_preview_stream_client.mm"
     "${REASHOOT_ROOT}/src/platform/mac/mac_h264_preview_renderer.mm"
   )
@@ -127,11 +130,6 @@ if(APPLE)
   set_target_properties(reashoot_desktop PROPERTIES
     OUTPUT_NAME "ReaShoot"
     MACOSX_BUNDLE_INFO_PLIST "${REASHOOT_ROOT}/src/app/mac/Info.plist"
-  )
-  add_dependencies(reashoot_desktop reashoot_helper)
-  add_custom_command(TARGET reashoot_desktop POST_BUILD
-    COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_BUNDLE_CONTENT_DIR:reashoot_desktop>/Resources"
-    COMMAND "${CMAKE_COMMAND}" -E copy "$<TARGET_FILE:reashoot_helper>" "$<TARGET_BUNDLE_CONTENT_DIR:reashoot_desktop>/Resources/reashoot-mac"
   )
 endif()
 
@@ -187,7 +185,8 @@ if(WIN32)
 
   set(REAPER_WINDOWS_USERPLUGINS_DIR "$ENV{APPDATA}/REAPER/UserPlugins"
       CACHE PATH "Windows REAPER UserPlugins install directory")
-  install(TARGETS reaper_reashoot reashoot_helper
+  install(CODE "file(REMOVE \"${REAPER_WINDOWS_USERPLUGINS_DIR}/reashoot-win.exe\")")
+  install(TARGETS reaper_reashoot
           RUNTIME DESTINATION "${REAPER_WINDOWS_USERPLUGINS_DIR}"
           LIBRARY DESTINATION "${REAPER_WINDOWS_USERPLUGINS_DIR}")
 
@@ -196,7 +195,6 @@ if(WIN32)
       "${REASHOOT_ROOT}/src/app/win32/ReaShootDesktopWin32.cpp"
       "${REASHOOT_ROOT}/src/app/win32/ReaShootWin32IntegrationServer.cpp"
       "${REASHOOT_ROOT}/src/app/win32/ReaShootWin32Support.cpp"
-      "${REASHOOT_ROOT}/src/platform/win32/win32_helper_process.cpp"
       "${REASHOOT_ROOT}/src/platform/win32/win32_preview_stream_client.cpp"
       "${REASHOOT_ROOT}/src/platform/win32/win32_h264_preview_renderer.cpp"
     )
@@ -231,10 +229,6 @@ if(WIN32)
       message(FATAL_ERROR "reashoot_desktop_win32 requires shared FFmpeg headers/libs. Install Gyan.FFmpeg.Shared or set REASHOOT_FFMPEG_ROOT.")
     endif()
 
-    add_dependencies(reashoot_desktop_win32 reashoot_helper)
-    add_custom_command(TARGET reashoot_desktop_win32 POST_BUILD
-      COMMAND "${CMAKE_COMMAND}" -E copy "$<TARGET_FILE:reashoot_helper>" "$<TARGET_FILE_DIR:reashoot_desktop_win32>/reashoot-win.exe"
-    )
     # Stage the shared FFmpeg runtime DLLs next to the app so live preview works.
     file(GLOB REASHOOT_FFMPEG_DLLS "${REASHOOT_FFMPEG_ROOT}/bin/*.dll")
     foreach(dll ${REASHOOT_FFMPEG_DLLS})

@@ -23,10 +23,6 @@ void initializeDebugLogging(bool enabled);
 bool debugLoggingEnabled();
 void debugLog(const std::string &message);
 
-// Absolute path to the bundled reashoot-win.exe helper (sits next to the app
-// executable).
-std::string helperExecutablePath();
-
 // A friendly name for this computer, used as the pairing client name.
 std::string localComputerName();
 

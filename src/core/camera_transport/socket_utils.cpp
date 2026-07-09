@@ -16,7 +16,7 @@
 #include <unistd.h>
 #endif
 
-namespace reashoot::helper {
+namespace reashoot::transport {
 namespace {
 
 #ifdef _WIN32
@@ -26,7 +26,7 @@ public:
     WSADATA data = {};
     const int status = WSAStartup(MAKEWORD(2, 2), &data);
     if (status != 0) {
-      throw HelperError("Could not initialize WinSock: " + std::to_string(status));
+      throw TransportError("Could not initialize WinSock: " + std::to_string(status));
     }
   }
 
@@ -109,7 +109,7 @@ SocketHandle connectTcpSocket(const std::string &host, int port, int timeoutSeco
   const std::string portText = std::to_string(port);
   const int status = getaddrinfo(host.c_str(), portText.c_str(), &hints, &result);
   if (status != 0 || !result) {
-    throw HelperError("Could not connect to " + description + ": " + gaiErrorMessage(status));
+    throw TransportError("Could not connect to " + description + ": " + gaiErrorMessage(status));
   }
 
   SocketHandle connected = kInvalidSocket;
@@ -142,7 +142,7 @@ SocketHandle connectTcpSocket(const std::string &host, int port, int timeoutSeco
   }
   freeaddrinfo(result);
   if (connected == kInvalidSocket) {
-    throw HelperError("Could not connect to " + description + ": " + lastError);
+    throw TransportError("Could not connect to " + description + ": " + lastError);
   }
   return connected;
 }
@@ -167,4 +167,4 @@ void sleepSeconds(int seconds) {
   std::this_thread::sleep_for(std::chrono::seconds((std::max)(0, seconds)));
 }
 
-} // namespace reashoot::helper
+} // namespace reashoot::transport

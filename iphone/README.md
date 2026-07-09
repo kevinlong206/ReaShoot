@@ -6,7 +6,6 @@ ReaShoot is the companion iPhone app for the standalone ReaShoot desktop app. It
 
 - `Sources/ReaShootCore`: shared protocol models, file-state types, and checksum helpers.
 - `Sources/ReaShootKit`: iOS capture, local WebSocket control, and HTTP transfer services.
-- `Sources/reashoot-mac`: Legacy SwiftPM Mac CLI for discovery/control/download workflows.
 - `Apps/ReaShoot`: SwiftUI app sources that consume `ReaShootKit`.
 - `Tests/ReaShootCoreTests`: shared protocol tests.
 
@@ -14,7 +13,6 @@ ReaShoot is the companion iPhone app for the standalone ReaShoot desktop app. It
 
 ```sh
 swift test
-swift run reashoot-mac --help
 ```
 
 The iPhone app can be built from `ReaShoot.xcodeproj`. For local device testing on the currently paired phone:
@@ -52,25 +50,15 @@ Scripts/app-store-upload.sh --export-only --marketing-version 1.0
 
 ## End-to-end smoke test
 
-Keep the iPhone unlocked with the app in the foreground, then run:
+Keep the iPhone unlocked with the app in the foreground, then use the standalone desktop app to discover/pair, configure, start recording, stop recording, and download from `Videos on iPhone`.
 
-```sh
-swift run reashoot-mac ping --host kevin-long-iphone.local --port 8787
-PAIR_OUTPUT="$(swift run reashoot-mac pair --host kevin-long-iphone.local --port 8787 --client-name "My Mac")"
-export REASHOOT_TOKEN="${PAIR_OUTPUT#paired token=}"
-swift run reashoot-mac configure --host kevin-long-iphone.local --port 8787 --token "$REASHOOT_TOKEN" --lens ultrawide --zoom 0.5 --look warmVintage
-swift run reashoot-mac start --host kevin-long-iphone.local --port 8787 --token "$REASHOOT_TOKEN" --session smoke-test
-sleep 3
-swift run reashoot-mac stop --host kevin-long-iphone.local --port 8787 --http-port 8788 --token "$REASHOOT_TOKEN" --download-dir test-downloads
-```
-
-Expected result: `pair` shows an iPhone dialog saying `Accept pairing request from My Mac`; after accepting, the CLI prints a token that the example exports as `REASHOOT_TOKEN`. The stop command prints a downloaded `.mov` path in `test-downloads`, then acknowledges transfer so the iPhone deletes its local copy. Add `--progress` to the `stop` command to print transfer progress lines during on-phone look encoding and movie download. The standalone desktop app and legacy REAPER extension use the safer prompted stop flow: `stop-only` returns raw pending recording metadata immediately, while `download-recording` prepares/encodes only after Download is chosen. If a download fails before acknowledgement, the recording remains pending on the phone and can be restored with `list-recordings` plus `download-recording`, deleted through the helper, or deleted directly in the iPhone app's Recordings section.
+Expected result: pairing shows an iPhone dialog saying `Accept pairing request from <computer name>`; after accepting, the desktop app can control recording and only acknowledges transfer after verifying the downloaded `.mov`. If a download fails before acknowledgement, the recording remains pending on the phone and can be restored or deleted from the desktop app's `Videos on iPhone` window, or deleted directly in the iPhone app's Recordings section.
 
 ## Preview
 
 The current preview implementation uses an authenticated local H.264 stream. The desktop app sends `startPreview` over the control WebSocket, then connects to the preview WebSocket returned in the descriptor. The iPhone app sends low-resolution H.264 frames rendered from the same preview capture output. The iPhone applies the selected look before encoding preview frames, so natural and styled previews use the same transport.
 
-The app starts its WebSocket control listener and HTTP download listener before camera preparation so the desktop app can retry control commands immediately after launch. The WebSocket server must return a complete `\r\n\r\n`-terminated handshake because the bundled helper validates the full `Sec-WebSocket-Accept` response.
+The app starts its WebSocket control listener and HTTP download listener before camera preparation so the desktop app can retry control commands immediately after launch. The WebSocket server must return a complete `\r\n\r\n`-terminated handshake because the desktop control client validates the full `Sec-WebSocket-Accept` response.
 
 Capture configuration supports hardware-dependent lens selection (`wide`, `ultrawide`, `telephoto`, `auto`), zoom, and baked-in artistic looks (`natural`, `warmVintage`, `coolBlue`, `highContrastBW`, `fadedFilm`, `dreamGlow`, `noir`, `saturatedPop`, `bleachBypass`, `sepia`, `instantPhoto`, `chrome`, `tonal`, `silvertone`, `dramaticWarm`, `dramaticCool`, `softMatte`, `comicBook`, `vhs`, `musicVideoPop`) plus a curated `ci:<CoreImageFilterName>` subset for thermal/X-ray, gradients/edges, crystallize/pixel/halftone, and a few kaleidoscope/distortion looks. Zoom is applied through AVFoundation and clamped to the selected camera's supported range. Non-natural looks are applied as a post-record Core Image export only when the clip is prepared for download, so unwanted takes can be discarded before encoding while the reliable movie recording path and embedded camera audio are preserved.
 

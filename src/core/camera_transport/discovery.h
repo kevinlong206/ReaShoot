@@ -3,7 +3,7 @@
 #include <string>
 #include <vector>
 
-namespace reashoot::helper {
+namespace reashoot::transport {
 
 struct DiscoveredPhone {
   std::string name;
@@ -15,4 +15,4 @@ struct DiscoveredPhone {
 
 std::vector<DiscoveredPhone> discoverPhones(int timeoutSeconds);
 
-} // namespace reashoot::helper
+} // namespace reashoot::transport

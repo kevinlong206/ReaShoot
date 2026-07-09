@@ -2,8 +2,8 @@
 
 #include <string>
 
-namespace reashoot::helper {
+namespace reashoot::transport {
 
 std::string sha256FileHex(const std::string &path);
 
-} // namespace reashoot::helper
+} // namespace reashoot::transport

@@ -13,7 +13,7 @@
 #include <sys/stat.h>
 #include <utility>
 
-namespace reashoot::helper {
+namespace reashoot::transport {
 namespace {
 
 constexpr int64_t kChunkBytes = 32LL * 1024LL * 1024LL;
@@ -28,7 +28,7 @@ void writeAll(SocketHandle socket, const std::string &data) {
   while (offset < data.size()) {
     const int sent = sendSocketBytes(socket, data.data() + offset, data.size() - offset);
     if (sent <= 0) {
-      throw HelperError("Download connection closed before the file was complete.");
+      throw TransportError("Download connection closed before the file was complete.");
     }
     offset += static_cast<size_t>(sent);
   }
@@ -40,7 +40,7 @@ std::pair<std::vector<std::string>, std::string> readHeaders(SocketHandle socket
   while (data.find("\r\n\r\n") == std::string::npos) {
     const int count = receiveSocketBytes(socket, buffer, sizeof(buffer));
     if (count <= 0) {
-      throw HelperError("Download did not return an HTTP response.");
+      throw TransportError("Download did not return an HTTP response.");
     }
     data.append(buffer, static_cast<size_t>(count));
   }
@@ -59,14 +59,14 @@ std::pair<std::vector<std::string>, std::string> readHeaders(SocketHandle socket
 
 int httpStatus(const std::vector<std::string> &headers) {
   if (headers.empty()) {
-    throw HelperError("Download returned an invalid HTTP response.");
+    throw TransportError("Download returned an invalid HTTP response.");
   }
   std::istringstream stream(headers.front());
   std::string version;
   int status = 0;
   stream >> version >> status;
   if (status == 0) {
-    throw HelperError("Download returned an invalid HTTP response.");
+    throw TransportError("Download returned an invalid HTTP response.");
   }
   return status;
 }
@@ -104,15 +104,15 @@ int64_t downloadAttempt(const core::ProtocolRecording &recording,
     auto [headers, initialBody] = readHeaders(socket);
     const int status = httpStatus(headers);
     if (status != 200 && status != 206) {
-      throw HelperError("Download failed with HTTP status " + std::to_string(status) + ".");
+      throw TransportError("Download failed with HTTP status " + std::to_string(status) + ".");
     }
     if (offset > 0 && status != 206) {
-      throw HelperError("Download failed with HTTP status " + std::to_string(status) + ".");
+      throw TransportError("Download failed with HTTP status " + std::to_string(status) + ".");
     }
 
     std::ofstream output(temporaryPath, std::ios::binary | std::ios::app);
     if (!output) {
-      throw HelperError("Could not open temporary download file.");
+      throw TransportError("Could not open temporary download file.");
     }
     int64_t written = offset;
     if (!initialBody.empty()) {
@@ -131,7 +131,7 @@ int64_t downloadAttempt(const core::ProtocolRecording &recording,
       } else if (count == 0) {
         break;
       } else {
-        throw HelperError("Download connection closed before the file was complete.");
+        throw TransportError("Download connection closed before the file was complete.");
       }
     }
     closeSocket(socket);
@@ -185,10 +185,10 @@ std::string downloadRecording(const core::ProtocolRecording &recording,
   if (!recording.checksumSHA256.empty()) {
     const std::string actual = sha256FileHex(destination);
     if (actual != recording.checksumSHA256) {
-      throw HelperError("Checksum mismatch. Expected " + recording.checksumSHA256 + ", got " + actual);
+      throw TransportError("Checksum mismatch. Expected " + recording.checksumSHA256 + ", got " + actual);
     }
   }
   return destination;
 }
 
-} // namespace reashoot::helper
+} // namespace reashoot::transport

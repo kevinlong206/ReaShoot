@@ -14,9 +14,8 @@ The REAPER extension is now a thin integration client of the desktop app. It sho
 
 - `src/app/mac/` - Native macOS desktop app entry point and UI. Keep these files focused on native controls, layout, windows, menus, alerts, and rendering.
 - `src/desktop/` - Desktop workflow, state, view-model, and UI-facing constants shared by the standalone app and future platform frontends.
-- `src/core/` - Shared protocol, parsing, capture profile, H.264 Annex B, status, and controller code.
-- `src/helper/` - C++ helper executable used by the desktop apps for discovery, iPhone control, transfer, and download. Its `desktop-*` CLI commands are thin wrappers over the shared desktop API client for scripts.
-- `src/platform/mac/` - macOS adapters for helper execution, preview WebSocket transport, H.264 preview decode, prompts, media reading, and legacy extension support.
+- `src/core/` - Shared protocol, parsing, capture profile, H.264 Annex B, status, controller code, and in-process iPhone discovery/control/download transport (`src/core/camera_transport/`).
+- `src/platform/mac/` - macOS adapters for preview WebSocket transport, H.264 preview decode, prompts, media reading, and legacy extension support.
 - `src/platform/win32/` - Windows adapters. Keep future desktop logic reusable here.
 - `src/platform/ffmpeg/` - Shared FFmpeg recorded-file playback preview support for legacy playback surfaces outside the thin REAPER integration.
 - `src/reashoot.mm`, `src/platform/win32/reaper_reashoot_win32.cpp`, `src/reaper/`, `src/platform/swell/` - REAPER extension integration surfaces. Keep the extension thin over the desktop local API; do not add new REAPER-hosted camera setup/preview UI.
@@ -37,7 +36,7 @@ Keep protocol definitions aligned between `src/core/control_protocol.*` and `iph
 - Keep `encodeLookAtRecordTime` default-off. When enabled with a non-natural look, the iPhone uses the AVAssetWriter record-time look path; otherwise it preserves the AVCaptureMovieFileOutput path and prepares looks only after Download is chosen.
 - Keep routine status in the desktop app UI. Use modal alerts for user decisions and real errors.
 - Do not commit pairing tokens, downloaded `.mov` files, `test-downloads`, DerivedData, `.DS_Store`, Xcode `xcuserdata`, or generated local SwiftPM build output.
-- Keep the iPhone app and desktop/helper protocol definitions compatible.
+- Keep the iPhone app and desktop protocol definitions compatible.
 
 ## macOS desktop app build
 
@@ -49,7 +48,7 @@ cmake --build build-desktop --target reashoot_desktop --parallel
 open build-desktop/ReaShoot.app
 ```
 
-The app bundle copies the C++ helper into `ReaShoot.app/Contents/Resources/reashoot-mac`.
+The app controls the iPhone in-process through shared C++ transport code; no helper executable is bundled.
 For pairing, discovery, preview, and window-layout debugging, launch with:
 
 ```sh
@@ -60,7 +59,7 @@ Debug output goes to stderr and `~/Library/Logs/ReaShoot/ReaShoot-debug.log`; pa
 
 ## Windows desktop app build
 
-The Windows standalone app is a native Win32 executable, `ReaShoot.exe` (CMake target `reashoot_desktop_win32`, sources in `src/app/win32/`). It reuses the shared `reashoot_desktop_core`/`reashoot_core` libraries and the `src/platform/win32/` adapters (helper process, preview stream client, FFmpeg H.264 live-preview decoder).
+The Windows standalone app is a native Win32 executable, `ReaShoot.exe` (CMake target `reashoot_desktop_win32`, sources in `src/app/win32/`). It reuses the shared `reashoot_desktop_core`/`reashoot_core` libraries and the `src/platform/win32/` adapters (preview stream client, FFmpeg H.264 live-preview decoder).
 
 Live preview decoding requires the shared FFmpeg headers/libs. Install the Gyan FFmpeg shared build (CMake auto-detects the winget install location) or set `REASHOOT_FFMPEG_ROOT` to a prefix containing `include/`, `lib/`, and `bin/`:
 
@@ -76,7 +75,7 @@ cmake --build build --config Release --target reashoot_desktop_win32
 .\build\Release\ReaShoot.exe
 ```
 
-The build stages `reashoot-win.exe` and the FFmpeg runtime DLLs next to `ReaShoot.exe`. Settings persist under `HKCU\Software\ReaShoot`. Launch with `-debug` to log to stderr and `%LOCALAPPDATA%\ReaShoot\ReaShoot-debug.log` (tokens redacted). Disable the target with `-DREASHOOT_BUILD_DESKTOP_WIN32=OFF`.
+The build stages the FFmpeg runtime DLLs next to `ReaShoot.exe`. Settings persist under `HKCU\Software\ReaShoot`. Launch with `-debug` to log to stderr and `%LOCALAPPDATA%\ReaShoot\ReaShoot-debug.log` (tokens redacted). Disable the target with `-DREASHOOT_BUILD_DESKTOP_WIN32=OFF`.
 
 ## Desktop integration API
 
@@ -90,21 +89,11 @@ When the desktop app is running, it starts a loopback-only HTTP JSON API and wri
 
 The registration contains `apiVersion`, `host`, `port`, `baseUrl`, and a bearer `token`. The file is owner-readable/writable only. Do not commit or log the token.
 
-The helper includes API client commands for scripts and future host integrations:
+Scripts and future host integrations should call the local desktop API directly using the bearer token from `desktop-api.json`:
 
 ```sh
-build-desktop/reashoot-mac desktop-status
-build-desktop/reashoot-mac desktop-profile
-build-desktop/reashoot-mac desktop-set-profile --resolution 4K --fps 30 --orientation auto --aspect 9:16
-build-desktop/reashoot-mac desktop-preview-start
-build-desktop/reashoot-mac desktop-preview-stop
-build-desktop/reashoot-mac desktop-start-recording
-build-desktop/reashoot-mac desktop-stop-recording
-build-desktop/reashoot-mac desktop-stop-recording-download --download-dir ~/Movies/ReaShoot --progress
-build-desktop/reashoot-mac desktop-refresh-recordings
-build-desktop/reashoot-mac desktop-list-recordings
-build-desktop/reashoot-mac desktop-download-recording --recording-id RECORDING_ID --download-dir ~/Movies/ReaShoot
-build-desktop/reashoot-mac desktop-delete-recording --recording-id RECORDING_ID
+curl -H "Authorization: Bearer $REASHOOT_DESKTOP_API_TOKEN" \
+  "$REASHOOT_DESKTOP_API_BASE_URL/status"
 ```
 
 Raw API smoke test:
@@ -145,7 +134,6 @@ The Makefile remains available for the legacy macOS REAPER extension:
 ```sh
 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=all make
 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=all make install
-codesign --verify "$HOME/Library/Application Support/REAPER/UserPlugins/reashoot-mac"
 codesign --verify "$HOME/Library/Application Support/REAPER/UserPlugins/reaper_reashoot.dylib"
 ```
 
@@ -180,7 +168,7 @@ The iPhone bundle ID remains `com.kevinlong.reashoot`.
 
 ## Validation
 
-Run the lightweight validation suite before committing C++, Swift, protocol, helper, or shared UI changes:
+Run the lightweight validation suite before committing C++, Swift, protocol, shared transport, or shared UI changes:
 
 ```sh
 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=all make check
@@ -193,7 +181,7 @@ cmake -S . -B build-desktop -DCMAKE_BUILD_TYPE=Debug
 cmake --build build-desktop --target reashoot_desktop --parallel
 ```
 
-For WebSocket/control startup changes, smoke-test against a paired iPhone with the helper or the desktop app. Keep the iPhone unlocked with ReaShoot open in the foreground.
+For WebSocket/control startup changes, smoke-test against a paired iPhone with the desktop app or local desktop API. Keep the iPhone unlocked with ReaShoot open in the foreground.
 
 ## Documentation
 

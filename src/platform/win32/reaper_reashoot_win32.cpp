@@ -36,7 +36,6 @@
 #include "platform/swell/swell_panel_probe.h"
 #include "platform/swell/swell_runtime.h"
 #include "platform/win32/win32_h264_preview_renderer.h"
-#include "platform/win32/win32_helper_process.h"
 #include "platform/win32/win32_playback_preview_renderer.h"
 #include "platform/win32/win32_preview_stream_client.h"
 #include "reaper/reaper_host.h"
@@ -270,18 +269,8 @@ std::string moduleDirectory() {
   return modulePath.parent_path().string();
 }
 
-std::string helperPath() {
-  return (std::filesystem::path(moduleDirectory()) / "reashoot-win.exe").string();
-}
-
-reashoot::core::HelperProcess &helperProcess() {
-  static std::unique_ptr<reashoot::core::HelperProcess> helper =
-      reashoot::platform::win32::createHelperProcess(helperPath(), debugLog);
-  return *helper;
-}
-
 reashoot::core::RemoteCameraController &remoteCameraController() {
-  static reashoot::core::RemoteCameraController controller(helperProcess());
+  static reashoot::core::RemoteCameraController controller;
   return controller;
 }
 
@@ -459,7 +448,7 @@ void runHelperOnWorker(std::string command,
                        std::vector<std::string> arguments,
                        std::function<void(reashoot::core::CommandResult)> completion) {
   std::thread([command = std::move(command), arguments = std::move(arguments), completion = std::move(completion)]() mutable {
-    reashoot::core::CommandResult result = helperProcess().run(command, arguments);
+    reashoot::core::CommandResult result = remoteCameraController().run(cameraSettings(), command, arguments);
     postToMain([result = std::move(result), completion = std::move(completion)]() mutable {
       if (completion) {
         completion(std::move(result));
@@ -1019,7 +1008,7 @@ void downloadRecordingAt(const reashoot::core::RemoteRecordingDescriptor &record
           if (path.empty()) {
             if (!recoveredCompletedDownload) {
               setPanelStatus("iPhone download failed");
-              showError("The iPhone video downloaded, but the helper did not report the downloaded path.");
+              showError("The iPhone video downloaded, but the desktop service did not report the downloaded path.");
               return;
             }
             path = expectedPath;

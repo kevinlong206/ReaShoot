@@ -7,9 +7,9 @@
 #include <stdexcept>
 #include <string>
 
-namespace reashoot::helper {
+namespace reashoot::transport {
 
-class HelperError : public std::runtime_error {
+class TransportError : public std::runtime_error {
 public:
   using std::runtime_error::runtime_error;
 };
@@ -34,4 +34,4 @@ std::string webSocketAcceptForKey(const std::string &key);
 std::string randomWebSocketKey();
 std::string randomUUID();
 
-} // namespace reashoot::helper
+} // namespace reashoot::transport

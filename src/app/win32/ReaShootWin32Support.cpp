@@ -98,16 +98,6 @@ void debugLog(const std::string &message) {
   }
 }
 
-std::string helperExecutablePath() {
-  wchar_t modulePath[MAX_PATH] = {};
-  const DWORD length = GetModuleFileNameW(nullptr, modulePath, MAX_PATH);
-  if (length == 0 || length >= MAX_PATH) {
-    return "reashoot-win.exe";
-  }
-  std::filesystem::path executable(modulePath);
-  return narrow((executable.parent_path() / L"reashoot-win.exe").wstring());
-}
-
 std::string localComputerName() {
   wchar_t buffer[256] = {};
   DWORD size = static_cast<DWORD>(std::size(buffer));

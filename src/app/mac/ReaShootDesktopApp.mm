@@ -1,5 +1,4 @@
 #import "../../platform/mac/mac_h264_preview_renderer.h"
-#import "../../platform/mac/mac_helper_process.h"
 #import "../../platform/mac/mac_preview_stream_client.h"
 #include "ReaShootMacIntegrationServer.h"
 #import "ReaShootMacSupport.h"
@@ -64,7 +63,6 @@ double previewNowSeconds() {
   NSStackView *_videosList;
   NSTimer *_recordBlinkTimer;
 
-  std::unique_ptr<reashoot::core::HelperProcess> _helper;
   std::unique_ptr<reashoot::core::RemoteCameraController> _camera;
   std::unique_ptr<reashoot::core::PreviewStreamClient> _previewClient;
   std::unique_ptr<reashoot::core::PreviewRenderer> _previewRenderer;
@@ -90,12 +88,8 @@ double previewNowSeconds() {
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
   (void)notification;
-  const std::string helperPath = helperExecutablePath();
-  debugLog(@"Application did finish launching. bundle=%@ helper=%@", NSBundle.mainBundle.bundlePath, nsString(helperPath));
-  _helper = reashoot::platform::mac::createHelperProcess(helperPath, [](const std::string &message) {
-    debugLog(@"helper: %@", nsString(redactedText(message)));
-  });
-  _camera = std::make_unique<reashoot::core::RemoteCameraController>(*_helper);
+  debugLog(@"Application did finish launching. bundle=%@", NSBundle.mainBundle.bundlePath);
+  _camera = std::make_unique<reashoot::core::RemoteCameraController>();
   _previewClient = reashoot::platform::mac::createPreviewStreamClient();
   _previewRenderer = reashoot::platform::mac::createH264PreviewRenderer([self](const reashoot::core::VideoFrame &frame) {
     ++_previewFrameCount;

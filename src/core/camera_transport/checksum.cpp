@@ -9,7 +9,7 @@
 #include <iomanip>
 #include <sstream>
 
-namespace reashoot::helper {
+namespace reashoot::transport {
 namespace {
 
 uint32_t rotr(uint32_t value, int bits) {
@@ -121,7 +121,7 @@ std::string finishHex(Sha256State &state) {
 std::string sha256FileHex(const std::string &path) {
   std::ifstream file(path, std::ios::binary);
   if (!file) {
-    throw HelperError("Could not open file for checksum: " + path);
+    throw TransportError("Could not open file for checksum: " + path);
   }
   Sha256State state;
   std::array<char, 64 * 1024> buffer = {};
@@ -135,4 +135,4 @@ std::string sha256FileHex(const std::string &path) {
   return finishHex(state);
 }
 
-} // namespace reashoot::helper
+} // namespace reashoot::transport

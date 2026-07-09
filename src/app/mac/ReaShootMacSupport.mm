@@ -64,16 +64,6 @@ void initializeDebugLogging(int argc, const char *argv[]) {
   debugLog(@"Debug logging enabled. path=%@ pid=%d", path, getpid());
 }
 
-std::string helperExecutablePath() {
-  NSString *resourcePath = [[NSBundle mainBundle] pathForResource:@"reashoot-mac" ofType:nil];
-  if (resourcePath.length > 0) {
-    return stdString(resourcePath);
-  }
-  NSString *executableDir = [NSBundle mainBundle].executablePath.stringByDeletingLastPathComponent;
-  NSString *sibling = [executableDir stringByAppendingPathComponent:@"reashoot-mac"];
-  return stdString(sibling);
-}
-
 std::string localComputerName() {
   NSString *localizedName = NSHost.currentHost.localizedName;
   if (localizedName.length > 0) {
