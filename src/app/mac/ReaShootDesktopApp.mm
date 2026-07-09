@@ -30,6 +30,10 @@ using reashoot::core::redactedArguments;
 using reashoot::core::redactedSettingsSummary;
 using reashoot::core::redactedText;
 
+double previewNowSeconds() {
+  return [[NSDate date] timeIntervalSince1970];
+}
+
 } // namespace
 
 @interface ReaShootAppDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate, NSTextFieldDelegate>
@@ -74,6 +78,10 @@ using reashoot::core::redactedText;
   bool _previewDesired;
   uint64_t _previewAccessUnitCount;
   uint64_t _previewFrameCount;
+  uint64_t _previewLastSequence;
+  uint64_t _previewDroppedFrameCount;
+  double _previewStartTime;
+  double _previewStreamActiveTime;
 }
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
@@ -87,13 +95,32 @@ using reashoot::core::redactedText;
   _previewClient = reashoot::platform::mac::createPreviewStreamClient();
   _previewRenderer = reashoot::platform::mac::createH264PreviewRenderer([self](const reashoot::core::VideoFrame &frame) {
     ++_previewFrameCount;
+    uint64_t sequenceGap = 0;
+    if (frame.previewSequence > 0) {
+      if (_previewLastSequence > 0 && frame.previewSequence > _previewLastSequence + 1) {
+        sequenceGap = frame.previewSequence - _previewLastSequence - 1;
+        _previewDroppedFrameCount += sequenceGap;
+      }
+      _previewLastSequence = frame.previewSequence;
+    }
     if (_previewFrameCount == 1 || _previewFrameCount % 60 == 0) {
-      debugLog(@"Preview frame #%llu width=%d height=%d stride=%d bytes=%zu",
+      const double firstFrameMs = _previewFrameCount == 1 && _previewStartTime > 0.0
+                                      ? (previewNowSeconds() - _previewStartTime) * 1000.0
+                                      : 0.0;
+      debugLog(@"Preview frame #%llu seq=%llu gap=%llu dropped=%llu width=%d height=%d stride=%d bytes=%zu sourceReceive=%.1fms receiveDisplay=%.1fms sourceDisplay=%.1fms firstFrame=%.1fms nalTypes=0x%08x",
                _previewFrameCount,
+               frame.previewSequence,
+               sequenceGap,
+               _previewDroppedFrameCount,
                frame.width,
                frame.height,
                frame.strideBytes,
-               frame.pixels.size());
+               frame.pixels.size(),
+               frame.previewSourceToReceiveMs,
+               frame.previewReceiveToEmitMs,
+               frame.previewSourceToEmitMs,
+               firstFrameMs,
+               frame.previewAccessUnitNalTypes);
     }
     [_previewView setFramePixels:frame.pixels width:frame.width height:frame.height stride:frame.strideBytes];
   });
@@ -887,6 +914,8 @@ using reashoot::core::redactedText;
   }
   [self saveDefaults];
   reashoot::core::RemoteCameraSettings settings = [self settings];
+  _previewStartTime = previewNowSeconds();
+  _previewStreamActiveTime = 0.0;
   [_previewView clearFrameWithMessage:@"Connecting to iPhone preview..."];
   debugLog(@"Starting preview attempt=%ld automatic=%d settings=%s",
            static_cast<long>(attempt),
@@ -921,6 +950,8 @@ using reashoot::core::redactedText;
     _previewRenderer->reset();
     _previewAccessUnitCount = 0;
     _previewFrameCount = 0;
+    _previewLastSequence = 0;
+    _previewDroppedFrameCount = 0;
     const bool started = _previewClient->start(request,
                                                [self](std::vector<uint8_t> data) {
                                                  ++_previewAccessUnitCount;
@@ -948,23 +979,23 @@ using reashoot::core::redactedText;
                                                    _previewDescriptor.displayHeight = preview.displayHeight;
                                                    _previewDescriptor.displayAspectRatio = preview.displayAspectRatio;
                                                    _previewDescriptor.metadataVersion = preview.metadataVersion;
-                                                   [_previewView setDisplaySizeWithWidth:_previewDescriptor.displayWidth
-                                                                                  height:_previewDescriptor.displayHeight];
                                                    debugLog(@"Preview descriptor update width=%d height=%d orientation=%@ resolved=%@ aspect=%@",
                                                             _previewDescriptor.width,
                                                             _previewDescriptor.height,
                                                             nsString(_previewDescriptor.orientation),
                                                             nsString(_previewDescriptor.resolvedOrientation),
                                                             nsString(_previewDescriptor.displayAspectRatio));
-                                                   if (dimensionsChanged) {
-                                                     [_previewView clearFrameWithMessage:@"Updating preview orientation..."];
-                                                   }
+                                                   (void)dimensionsChanged;
                                                  } catch (const std::exception &error) {
                                                    debugLog(@"Preview descriptor parse failed: %s", error.what());
                                                  }
                                                },
                                                [self]() {
-                                                 debugLog(@"Preview stream active.");
+                                                 _previewStreamActiveTime = previewNowSeconds();
+                                                 const double connectMs = _previewStartTime > 0.0
+                                                                              ? (_previewStreamActiveTime - _previewStartTime) * 1000.0
+                                                                              : 0.0;
+                                                 debugLog(@"Preview stream active connect=%.1fms.", connectMs);
                                                  _previewRunning = true;
                                                  [self updateButtons];
                                                  [_previewView setEmptyMessage:@"Waiting for video from iPhone..."];
@@ -994,7 +1025,11 @@ using reashoot::core::redactedText;
 }
 
 - (void)stopPreview {
-  debugLog(@"Stopping preview. running=%d accessUnits=%llu frames=%llu", _previewRunning, _previewAccessUnitCount, _previewFrameCount);
+  debugLog(@"Stopping preview. running=%d accessUnits=%llu frames=%llu dropped=%llu",
+           _previewRunning,
+           _previewAccessUnitCount,
+           _previewFrameCount,
+           _previewDroppedFrameCount);
   _previewDesired = false;
   _previewClient->stop();
   _previewRenderer->reset();

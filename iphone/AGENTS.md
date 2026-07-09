@@ -161,6 +161,10 @@ For the standalone desktop app and legacy REAPER prompted stop flow, use `stop-o
 - The iPhone returns a `PreviewDescriptor` for an authenticated preview WebSocket on port `8789`.
 - The preview server sends an initial JSON descriptor text frame, then binary H.264 Annex B access units.
 - SPS/PPS must be sent before keyframes so desktop clients can rebuild decoder format descriptions after reconnects.
+- `PreviewH264Encoder` includes `RSDIAG1` diagnostic SEI metadata (sequence and source timestamp). Desktop preview clients use it to log source-to-display latency and dropped sequence gaps; preserve it when touching encoder output.
+- Auto preview orientation uses CoreMotion gravity plus short sample-count/time hysteresis in `CaptureRecordingEngine.swift`. Do not rely only on `UIDevice.current.orientation`; it can bounce between portrait and landscape and make the desktop preview repeatedly reset orientation.
+- Keep live-preview orientation separate from recorded-file rotation. `PreviewFrameStore.normalizedImage` intentionally maps `landscapeLeft` to `.down` and `landscapeRight`/`landscape` to `.up`.
+- Desktop preview views should draw each decoded frame using that frame's dimensions/aspect. Descriptor text updates should not stretch an old-orientation frame while waiting for the first frame in the new orientation.
 - The iPhone app status UI exposes a `Preview` row. It should report `Streaming` only when a preview WebSocket client is actually connected; after `startPreview` but before the desktop app connects, it reports waiting.
 - HTTP is used for recording downloads, not live preview.
 - The app starts control/HTTP listeners before camera preparation so the desktop app can reconnect quickly after app launch.

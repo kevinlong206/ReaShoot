@@ -11,6 +11,7 @@
 @property(nonatomic, copy) void (^onText)(NSString *text);
 @property(nonatomic, copy) void (^onActive)(void);
 @property(nonatomic, copy) void (^onError)(NSError *error);
+@property(nonatomic, strong) dispatch_queue_t processingQueue;
 @property(nonatomic, assign) BOOL active;
 @end
 
@@ -115,6 +116,7 @@ std::unique_ptr<core::PreviewStreamClient> createPreviewStreamClient() {
   self.onActive = onActive;
   self.onError = onError;
   self.active = NO;
+  self.processingQueue = dispatch_queue_create("com.kevinlong.reashoot.preview-stream-client", DISPATCH_QUEUE_SERIAL);
   self.session = [NSURLSession sessionWithConfiguration:NSURLSessionConfiguration.defaultSessionConfiguration];
   self.task = [self.session webSocketTaskWithURL:url];
   [self.task resume];
@@ -131,6 +133,7 @@ std::unique_ptr<core::PreviewStreamClient> createPreviewStreamClient() {
   self.onText = nil;
   self.onActive = nil;
   self.onError = nil;
+  self.processingQueue = nil;
   self.active = NO;
 }
 
@@ -140,31 +143,72 @@ std::unique_ptr<core::PreviewStreamClient> createPreviewStreamClient() {
   }
   __weak ReaShootMacPreviewStreamClient *weakSelf = self;
   [task receiveMessageWithCompletionHandler:^(NSURLSessionWebSocketMessage *message, NSError *error) {
-    reashoot::platform::mac::performOnMainRunLoopCommonModes(^{
-      ReaShootMacPreviewStreamClient *strongSelf = weakSelf;
-      if (!strongSelf || task != strongSelf.task) {
-        return;
-      }
-      if (error) {
-        void (^onError)(NSError *) = strongSelf.onError;
-        [strongSelf stop];
+    ReaShootMacPreviewStreamClient *strongSelf = weakSelf;
+    if (!strongSelf || task != strongSelf.task) {
+      return;
+    }
+    if (error) {
+      reashoot::platform::mac::performOnMainRunLoopCommonModes(^{
+        ReaShootMacPreviewStreamClient *mainSelf = weakSelf;
+        if (!mainSelf || task != mainSelf.task) {
+          return;
+        }
+        void (^onError)(NSError *) = mainSelf.onError;
+        [mainSelf stop];
         if (onError) {
           onError(error);
         }
+      });
+      return;
+    }
+    if (!strongSelf.active) {
+      reashoot::platform::mac::performOnMainRunLoopCommonModes(^{
+        ReaShootMacPreviewStreamClient *mainSelf = weakSelf;
+        if (!mainSelf || task != mainSelf.task || mainSelf.active) {
+          return;
+        }
+        mainSelf.active = YES;
+        if (mainSelf.onActive) {
+          mainSelf.onActive();
+        }
+      });
+    }
+
+    if (message.type == NSURLSessionWebSocketMessageTypeData && strongSelf.onData) {
+      NSData *data = message.data;
+      dispatch_queue_t processingQueue = strongSelf.processingQueue;
+      if (!processingQueue) {
         return;
       }
-      if (!strongSelf.active) {
-        strongSelf.active = YES;
-        if (strongSelf.onActive) {
-          strongSelf.onActive();
+      dispatch_async(processingQueue, ^{
+        ReaShootMacPreviewStreamClient *processingSelf = weakSelf;
+        if (!processingSelf || task != processingSelf.task) {
+          return;
+        }
+        void (^onData)(NSData *) = processingSelf.onData;
+        if (onData && data.length > 0) {
+          onData(data);
+        }
+        [processingSelf receiveNextMessageForTask:task];
+      });
+      return;
+    }
+
+    reashoot::platform::mac::performOnMainRunLoopCommonModes(^{
+      ReaShootMacPreviewStreamClient *mainSelf = weakSelf;
+      if (!mainSelf || task != mainSelf.task) {
+        return;
+      }
+      if (!mainSelf.active) {
+        mainSelf.active = YES;
+        if (mainSelf.onActive) {
+          mainSelf.onActive();
         }
       }
-      if (message.type == NSURLSessionWebSocketMessageTypeData && strongSelf.onData) {
-        strongSelf.onData(message.data);
-      } else if (message.type == NSURLSessionWebSocketMessageTypeString && strongSelf.onText) {
-        strongSelf.onText(message.string);
+      if (message.type == NSURLSessionWebSocketMessageTypeString && mainSelf.onText) {
+        mainSelf.onText(message.string);
       }
-      [strongSelf receiveNextMessageForTask:task];
+      [mainSelf receiveNextMessageForTask:task];
     });
   }];
 }

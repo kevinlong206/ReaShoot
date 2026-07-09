@@ -1,5 +1,6 @@
 #if os(iOS)
 @preconcurrency import AVFoundation
+import CoreMotion
 import CoreImage
 import Foundation
 import UIKit
@@ -407,7 +408,12 @@ private final class PreviewFrameStore: NSObject, AVCaptureVideoDataOutputSampleB
     private var orientation = "portrait"
     private var aspectRatio = "9:16"
     private var lastResolvedOrientation = "portrait"
+    private var pendingResolvedOrientation: String?
+    private var pendingResolvedOrientationSince = Date.distantPast
+    private var pendingResolvedOrientationSamples = 0
     private let maximumDimension: CGFloat = 640
+    private let orientationSwitchDelay: TimeInterval = 0.15
+    private let orientationSwitchSampleCount = 2
 
     func setTargetFPS(_ fps: Double) {
         lock.lock()
@@ -424,6 +430,14 @@ private final class PreviewFrameStore: NSObject, AVCaptureVideoDataOutputSampleB
     func setOrientation(_ orientation: String) {
         lock.lock()
         self.orientation = orientation
+        pendingResolvedOrientation = nil
+        pendingResolvedOrientationSince = .distantPast
+        pendingResolvedOrientationSamples = 0
+        if orientation.lowercased() == "auto" {
+            lastResolvedOrientation = PhysicalOrientation.current(fallback: lastResolvedOrientation)
+        } else {
+            lastResolvedOrientation = orientation
+        }
         lock.unlock()
     }
 
@@ -446,9 +460,8 @@ private final class PreviewFrameStore: NSObject, AVCaptureVideoDataOutputSampleB
         let consumer = sampleBufferConsumer
         let look = look
         let configuredOrientation = orientation
-        let orientation = resolvedOrientation(configuredOrientation, fallback: lastResolvedOrientation)
+        let orientation = resolvedOrientation(configuredOrientation, now: now)
         let aspectRatio = aspectRatio
-        lastResolvedOrientation = orientation
         lock.unlock()
         guard now.timeIntervalSince(lastFrameTime) >= interval else {
             return
@@ -594,16 +607,75 @@ private final class PreviewFrameStore: NSObject, AVCaptureVideoDataOutputSampleB
         return max(a, 1)
     }
 
-    private func resolvedOrientation(_ orientation: String, fallback: String) -> String {
+    private func resolvedOrientation(_ orientation: String, now: Date) -> String {
         guard orientation.lowercased() == "auto" else {
             return orientation
         }
-        return PhysicalOrientation.current(fallback: fallback)
+        let candidate = PhysicalOrientation.current(fallback: lastResolvedOrientation)
+        if candidate == lastResolvedOrientation {
+            pendingResolvedOrientation = nil
+            pendingResolvedOrientationSince = .distantPast
+            pendingResolvedOrientationSamples = 0
+            return lastResolvedOrientation
+        }
+        if pendingResolvedOrientation != candidate {
+            pendingResolvedOrientation = candidate
+            pendingResolvedOrientationSince = now
+            pendingResolvedOrientationSamples = 1
+            return lastResolvedOrientation
+        }
+        pendingResolvedOrientationSamples += 1
+        guard pendingResolvedOrientationSamples >= orientationSwitchSampleCount,
+              now.timeIntervalSince(pendingResolvedOrientationSince) >= orientationSwitchDelay else {
+            return lastResolvedOrientation
+        }
+        lastResolvedOrientation = candidate
+        pendingResolvedOrientation = nil
+        pendingResolvedOrientationSince = .distantPast
+        pendingResolvedOrientationSamples = 0
+        return candidate
     }
 }
 
-private enum PhysicalOrientation {
+private final class PhysicalOrientation {
+    static let shared = PhysicalOrientation()
+
+    private let motionManager = CMMotionManager()
+    private let motionQueue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.name = "com.kevinlong.reashoot.orientation-motion"
+        queue.maxConcurrentOperationCount = 1
+        return queue
+    }()
+    private let lock = NSLock()
+    private var latestGravity: CMAcceleration?
+
+    private init() {
+        guard motionManager.isDeviceMotionAvailable else {
+            return
+        }
+        motionManager.deviceMotionUpdateInterval = 1.0 / 30.0
+        motionManager.startDeviceMotionUpdates(to: motionQueue) { [weak self] motion, _ in
+            guard let self, let gravity = motion?.gravity else {
+                return
+            }
+            self.lock.lock()
+            self.latestGravity = gravity
+            self.lock.unlock()
+        }
+    }
+
     static func current(fallback: String) -> String {
+        shared.current(fallback: fallback)
+    }
+
+    private func current(fallback: String) -> String {
+        lock.lock()
+        let gravity = latestGravity
+        lock.unlock()
+        if let resolved = gravity.flatMap({ orientation(from: $0, fallback: fallback) }) {
+            return resolved
+        }
         switch UIDevice.current.orientation {
         case .landscapeLeft:
             return "landscapeLeft"
@@ -616,6 +688,25 @@ private enum PhysicalOrientation {
         default:
             return fallback.lowercased() == "auto" ? "portrait" : fallback
         }
+    }
+
+    private func orientation(from gravity: CMAcceleration, fallback: String) -> String? {
+        let x = gravity.x
+        let y = gravity.y
+        let absX = abs(x)
+        let absY = abs(y)
+        let minimumAxisGravity = 0.55
+        let dominance = 1.25
+        guard max(absX, absY) >= minimumAxisGravity else {
+            return fallback.lowercased() == "auto" ? nil : fallback
+        }
+        if absX >= absY * dominance {
+            return x >= 0 ? "landscapeRight" : "landscapeLeft"
+        }
+        if absY >= absX * dominance {
+            return y >= 0 ? "portraitUpsideDown" : "portrait"
+        }
+        return fallback.lowercased() == "auto" ? nil : fallback
     }
 }
 

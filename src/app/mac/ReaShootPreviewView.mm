@@ -27,6 +27,8 @@
   _frameWidth = width;
   _frameHeight = height;
   _frameStride = stride;
+  _displayWidth = width;
+  _displayHeight = height;
   [self setNeedsDisplay:YES];
 }
 

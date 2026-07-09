@@ -4,8 +4,10 @@
 
 #import <VideoToolbox/VideoToolbox.h>
 
+#include <chrono>
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include <utility>
 #include <vector>
 
@@ -18,6 +20,92 @@
 @end
 
 namespace {
+
+using SteadyClock = std::chrono::steady_clock;
+
+struct PreviewDiagnosticMetadata {
+  bool valid = false;
+  uint64_t sequence = 0;
+  uint64_t sourceUnixMicros = 0;
+  uint32_t nalTypes = 0;
+};
+
+uint64_t wallClockMicros() {
+  return static_cast<uint64_t>([[NSDate date] timeIntervalSince1970] * 1'000'000.0);
+}
+
+uint64_t readBigEndianU64(const uint8_t *bytes) {
+  uint64_t value = 0;
+  for (int i = 0; i < 8; ++i) {
+    value = (value << 8) | bytes[i];
+  }
+  return value;
+}
+
+PreviewDiagnosticMetadata parseDiagnosticSEI(const uint8_t *bytes, size_t length) {
+  PreviewDiagnosticMetadata metadata;
+  for (const auto &unit : reashoot::core::splitAnnexB(bytes, length)) {
+    if (unit.type < 32) {
+      metadata.nalTypes |= (1u << unit.type);
+    }
+    if (unit.type != 6 || unit.size < 2) {
+      continue;
+    }
+    const uint8_t *nalu = bytes + unit.offset;
+    size_t offset = 1;
+    int payloadType = 0;
+    while (offset < unit.size && nalu[offset] == 0xff) {
+      payloadType += 255;
+      ++offset;
+    }
+    if (offset >= unit.size) {
+      continue;
+    }
+    payloadType += nalu[offset++];
+    int payloadSize = 0;
+    while (offset < unit.size && nalu[offset] == 0xff) {
+      payloadSize += 255;
+      ++offset;
+    }
+    if (offset >= unit.size) {
+      continue;
+    }
+    payloadSize += nalu[offset++];
+    if (payloadType != 5 || payloadSize < 23) {
+      continue;
+    }
+
+    std::vector<uint8_t> unescapedPayload;
+    unescapedPayload.reserve(static_cast<size_t>(payloadSize));
+    int zeroCount = 0;
+    size_t cursor = offset;
+    while (cursor < unit.size && unescapedPayload.size() < static_cast<size_t>(payloadSize)) {
+      const uint8_t value = nalu[cursor++];
+      if (zeroCount == 2 && value == 0x03) {
+        zeroCount = 0;
+        continue;
+      }
+      unescapedPayload.push_back(value);
+      if (value == 0) {
+        ++zeroCount;
+      } else {
+        zeroCount = 0;
+      }
+    }
+    if (unescapedPayload.size() < 23) {
+      continue;
+    }
+    const uint8_t *payload = unescapedPayload.data();
+    if (std::memcmp(payload, "RSDIAG1", 7) != 0) {
+      continue;
+    }
+    metadata.valid = true;
+    metadata.sequence = readBigEndianU64(payload + 7);
+    metadata.sourceUnixMicros = readBigEndianU64(payload + 15);
+    return metadata;
+  }
+  return metadata;
+}
 
 void performOnMainRunLoopCommonModes(dispatch_block_t block) {
   if (!block) {
@@ -103,6 +191,7 @@ void ReaShootMacH264FrameDecoderOutputCallback(void *refCon,
   if (status != noErr || !self.decompressionSession) {
     return NO;
   }
+  VTSessionSetProperty(self.decompressionSession, kVTDecompressionPropertyKey_RealTime, kCFBooleanTrue);
   if (self.decoderStatusHandler) {
     BOOL hardwareAccelerated = NO;
     CFTypeRef usingHardware = nullptr;
@@ -221,6 +310,7 @@ void ReaShootMacH264FrameDecoderOutputCallback(void *refCon,
   }
 
   VTDecompressionSessionDecodeFrame(self.decompressionSession, sampleBuffer, 0, nullptr, nullptr);
+  VTDecompressionSessionWaitForAsynchronousFrames(self.decompressionSession);
   CFRelease(sampleBuffer);
 }
 
@@ -251,9 +341,7 @@ void ReaShootMacH264FrameDecoderOutputCallback(void *refCon,
 
   NSData *immutableFrame = [frameData copy];
   ReaShootMacH264FrameHandler handler = self.frameHandler;
-  performOnMainRunLoopCommonModes(^{
-    handler(immutableFrame.bytes, width, height, static_cast<int>(destinationStride));
-  });
+  handler(immutableFrame.bytes, width, height, static_cast<int>(destinationStride));
 }
 
 @end
@@ -262,21 +350,43 @@ namespace reashoot::platform::mac {
 
 namespace {
 
+struct DecodeContext {
+  PreviewDiagnosticMetadata diagnostic;
+  SteadyClock::time_point receiveTime;
+  uint64_t receiveWallMicros = 0;
+};
+
+struct PendingFrame {
+  std::shared_ptr<core::VideoFrame> frame;
+  DecodeContext context;
+};
+
 class MacH264PreviewRenderer final : public core::PreviewRenderer {
 public:
-  MacH264PreviewRenderer(core::VideoFrameCallback frameHandler, core::DecoderStatusCallback decoderStatusHandler) {
+  MacH264PreviewRenderer(core::VideoFrameCallback frameHandler, core::DecoderStatusCallback decoderStatusHandler)
+      : frameHandler_(std::move(frameHandler)),
+        decodeQueue_(dispatch_queue_create("com.kevinlong.reashoot.h264-preview-decoder", DISPATCH_QUEUE_SERIAL)) {
     decoder_ = [[ReaShootMacH264FrameDecoder alloc] initWithFrameHandler:^(const void *pixels, int width, int height, int strideBytes) {
-      if (!frameHandler || !pixels || width <= 0 || height <= 0 || strideBytes <= 0) {
+      if (!frameHandler_ || !pixels || width <= 0 || height <= 0 || strideBytes <= 0) {
         return;
       }
-      core::VideoFrame frame;
-      frame.width = width;
-      frame.height = height;
-      frame.strideBytes = strideBytes;
+      auto frame = std::make_shared<core::VideoFrame>();
+      frame->width = width;
+      frame->height = height;
+      frame->strideBytes = strideBytes;
       const auto byteCount = static_cast<size_t>(strideBytes) * static_cast<size_t>(height);
       const auto *bytes = static_cast<const uint8_t *>(pixels);
-      frame.pixels.assign(bytes, bytes + byteCount);
-      frameHandler(frame);
+      frame->pixels.assign(bytes, bytes + byteCount);
+      DecodeContext context = currentDecodeContext();
+      frame->previewAccessUnitNalTypes = context.diagnostic.nalTypes;
+      if (context.diagnostic.valid) {
+        frame->previewSequence = context.diagnostic.sequence;
+      }
+      if (context.diagnostic.sourceUnixMicros > 0 && context.receiveWallMicros > context.diagnostic.sourceUnixMicros) {
+        frame->previewSourceToReceiveMs =
+            static_cast<double>(context.receiveWallMicros - context.diagnostic.sourceUnixMicros) / 1000.0;
+      }
+      publishFrame(std::move(frame), context);
     } decoderStatusHandler:^(BOOL hardwareAccelerated, const char *system) {
       if (!decoderStatusHandler) {
         return;
@@ -288,18 +398,100 @@ public:
     }];
   }
 
-  void reset() override { [decoder_ reset]; }
+  void reset() override {
+    {
+      std::lock_guard<std::mutex> lock(frameMutex_);
+      pendingFrame_.reset();
+      frameDispatchPending_ = false;
+      ++frameGeneration_;
+    }
+    dispatch_sync(decodeQueue_, ^{
+      [decoder_ reset];
+    });
+  }
 
   void renderAnnexBAccessUnit(const uint8_t *bytes, size_t length) override {
     if (!bytes || length == 0) {
       return;
     }
+    const DecodeContext context = {
+        parseDiagnosticSEI(bytes, length),
+        SteadyClock::now(),
+        wallClockMicros(),
+    };
     NSData *data = [NSData dataWithBytes:bytes length:length];
-    [decoder_ decodeAccessUnit:data];
+    dispatch_sync(decodeQueue_, ^{
+      setCurrentDecodeContext(context);
+      [decoder_ decodeAccessUnit:data];
+    });
   }
 
 private:
+  void setCurrentDecodeContext(const DecodeContext &context) {
+    std::lock_guard<std::mutex> lock(contextMutex_);
+    currentContext_ = context;
+  }
+
+  DecodeContext currentDecodeContext() {
+    std::lock_guard<std::mutex> lock(contextMutex_);
+    return currentContext_;
+  }
+
+  void publishFrame(std::shared_ptr<core::VideoFrame> frame, const DecodeContext &context) {
+    if (!frame) {
+      return;
+    }
+    bool shouldSchedule = false;
+    uint64_t generation = 0;
+    {
+      std::lock_guard<std::mutex> lock(frameMutex_);
+      pendingFrame_ = std::make_shared<PendingFrame>(PendingFrame{std::move(frame), context});
+      generation = frameGeneration_;
+      if (!frameDispatchPending_) {
+        frameDispatchPending_ = true;
+        shouldSchedule = true;
+      }
+    }
+    if (!shouldSchedule) {
+      return;
+    }
+    performOnMainRunLoopCommonModes(^{
+      std::shared_ptr<PendingFrame> pendingFrame;
+      {
+        std::lock_guard<std::mutex> lock(frameMutex_);
+        if (generation != frameGeneration_) {
+          return;
+        }
+        pendingFrame = std::move(pendingFrame_);
+        pendingFrame_.reset();
+        frameDispatchPending_ = false;
+      }
+      if (pendingFrame && pendingFrame->frame && frameHandler_) {
+        const auto now = SteadyClock::now();
+        pendingFrame->frame->previewReceiveToEmitMs =
+            static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(now - pendingFrame->context.receiveTime).count()) /
+            1000.0;
+        if (pendingFrame->context.diagnostic.sourceUnixMicros > 0) {
+          const uint64_t emitWallMicros = wallClockMicros();
+          if (emitWallMicros > pendingFrame->context.diagnostic.sourceUnixMicros) {
+            pendingFrame->frame->previewSourceToEmitMs =
+                static_cast<double>(emitWallMicros - pendingFrame->context.diagnostic.sourceUnixMicros) / 1000.0;
+          }
+        }
+        frameHandler_(*pendingFrame->frame);
+      }
+    });
+  }
+
+  core::VideoFrameCallback frameHandler_;
   __strong ReaShootMacH264FrameDecoder *decoder_ = nil;
+  dispatch_queue_t decodeQueue_ = nil;
+  std::mutex contextMutex_;
+  DecodeContext currentContext_;
+  std::mutex frameMutex_;
+  std::shared_ptr<PendingFrame> pendingFrame_;
+  bool frameDispatchPending_ = false;
+  uint64_t frameGeneration_ = 0;
 };
 
 } // namespace
