@@ -10,6 +10,7 @@
 #include <atomic>
 #include <cctype>
 #include <chrono>
+#include <exception>
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
@@ -26,6 +27,7 @@
 
 #include "core/capture_profile.h"
 #include "core/control_protocol.h"
+#include "desktop/desktop_api_client.h"
 #include "core/helper_output_parser.h"
 #include "core/path_utils.h"
 #include "core/remote_camera.h"
@@ -461,6 +463,47 @@ void runHelperOnWorker(std::string command,
     postToMain([result = std::move(result), completion = std::move(completion)]() mutable {
       if (completion) {
         completion(std::move(result));
+      }
+    });
+  }).detach();
+}
+
+void runDesktopStartRecordingOnWorker(std::function<void(std::string)> completion) {
+  std::thread([completion = std::move(completion)]() mutable {
+    std::string errorMessage;
+    try {
+      reashoot::desktop::DesktopApiClient().startRecording();
+    } catch (const std::exception &error) {
+      errorMessage = error.what();
+    }
+    postToMain([completion = std::move(completion), errorMessage = std::move(errorMessage)]() mutable {
+      if (completion) {
+        completion(std::move(errorMessage));
+      }
+    });
+  }).detach();
+}
+
+void runDesktopStopDownloadOnWorker(std::string downloadDirectory,
+                                    std::function<void(std::string)> progress,
+                                    std::function<void(std::string, std::string)> completion) {
+  std::thread([downloadDirectory = std::move(downloadDirectory),
+               progress = std::move(progress),
+               completion = std::move(completion)]() mutable {
+    std::string path;
+    std::string errorMessage;
+    try {
+      path = reashoot::desktop::DesktopApiClient().stopRecordingAndDownload(downloadDirectory, [progress](const std::string &message) {
+        if (progress && !message.empty()) {
+          postToMain([progress, message]() { progress(message); });
+        }
+      });
+    } catch (const std::exception &error) {
+      errorMessage = error.what();
+    }
+    postToMain([completion = std::move(completion), path = std::move(path), errorMessage = std::move(errorMessage)]() mutable {
+      if (completion) {
+        completion(std::move(path), std::move(errorMessage));
       }
     });
   }).detach();
@@ -1443,13 +1486,13 @@ void beginRecording() {
   ensureVideoTrackReady(g_recordProject);
   setPanelStatus("Starting recording through ReaShoot.exe");
   updatePanel();
-  runHelperOnWorker("desktop-start-recording", {}, [](reashoot::core::CommandResult result) {
-    if (result.exitCode != 0) {
+  runDesktopStartRecordingOnWorker([](std::string errorMessage) {
+    if (!errorMessage.empty()) {
       g_activeTransportRecording = false;
       g_transportStartInFlight = false;
       g_transportStopRequested = false;
       updatePanel();
-      showError(resultError(result, "ReaShoot.exe recording start failed."));
+      showError(reashoot::core::friendlyStatusText(errorMessage));
       return;
     }
     g_transportStartInFlight = false;
@@ -1479,33 +1522,28 @@ void finishRecording() {
   const std::string downloadDirectory = captureOutputDirectory(project);
   setPanelStatus("Stopping recording through ReaShoot.exe");
   updatePanel();
-  g_stopHandle = helperProcess().runAsync("desktop-stop-recording-download",
-                                          {"--download-dir", downloadDirectory, "--progress"},
-                                          [](const std::string &line) {
-                                            const std::string status = reashoot::core::progressStatusText(line);
-                                            if (!status.empty()) {
-                                              postToMain([status]() { setPanelStatus(status); });
-                                            }
-                                          },
-                                          [project, insertPosition](reashoot::core::CommandResult result) {
-                                            postToMain([project, insertPosition, result = std::move(result)]() mutable {
-                                              g_activeTransportRecording = false;
-                                              updatePanel();
-                                              if (result.exitCode != 0) {
-                                                showError(resultError(result, "ReaShoot.exe recording stop/download failed."));
-                                                return;
-                                              }
-                                              const std::string path = reashoot::core::parseDownloadedPath(result.output);
-                                              if (path.empty()) {
-                                                showError("ReaShoot.exe downloaded the recording, but did not report a local file path.");
-                                                return;
-                                              }
-                                              g_pendingInsertPath = path;
-                                              g_pendingInsertPosition = insertPosition;
-                                              g_pendingInsertProject = project;
-                                              g_pendingInsert = true;
-                                            });
-                                          });
+  runDesktopStopDownloadOnWorker(downloadDirectory,
+                                 [](std::string status) {
+                                   if (!status.empty()) {
+                                     setPanelStatus(status);
+                                   }
+                                 },
+                                 [project, insertPosition](std::string path, std::string errorMessage) {
+                                   g_activeTransportRecording = false;
+                                   updatePanel();
+                                   if (!errorMessage.empty()) {
+                                     showError(reashoot::core::friendlyStatusText(errorMessage));
+                                     return;
+                                   }
+                                   if (path.empty()) {
+                                     showError("ReaShoot.exe downloaded the recording, but did not report a local file path.");
+                                     return;
+                                   }
+                                   g_pendingInsertPath = std::move(path);
+                                   g_pendingInsertPosition = insertPosition;
+                                   g_pendingInsertProject = project;
+                                   g_pendingInsert = true;
+                                 });
 }
 
 void pollTransport() {

@@ -15,10 +15,10 @@ The REAPER extension is now a thin integration client of the desktop app. It sho
 - `src/app/mac/` - Native macOS desktop app entry point and UI. Keep these files focused on native controls, layout, windows, menus, alerts, and rendering.
 - `src/desktop/` - Desktop workflow, state, view-model, and UI-facing constants shared by the standalone app and future platform frontends.
 - `src/core/` - Shared protocol, parsing, capture profile, H.264 Annex B, status, and controller code.
-- `src/helper/` - C++ helper executable used by the desktop apps for discovery, iPhone control, transfer, and download, and by the REAPER extensions as a desktop-API client.
+- `src/helper/` - C++ helper executable used by the desktop apps for discovery, iPhone control, transfer, and download. Its `desktop-*` CLI commands are thin wrappers over the shared desktop API client for scripts.
 - `src/platform/mac/` - macOS adapters for helper execution, preview WebSocket transport, H.264 preview decode, prompts, media reading, and legacy extension support.
 - `src/platform/win32/` - Windows adapters. Keep future desktop logic reusable here.
-- `src/platform/ffmpeg/` - Shared FFmpeg recorded-file playback preview used by legacy preview/playback surfaces.
+- `src/platform/ffmpeg/` - Shared FFmpeg recorded-file playback preview support for legacy playback surfaces outside the thin REAPER integration.
 - `src/reashoot.mm`, `src/platform/win32/reaper_reashoot_win32.cpp`, `src/reaper/`, `src/platform/swell/` - REAPER extension integration surfaces. Keep the extension thin over the desktop local API; do not add new REAPER-hosted camera setup/preview UI.
 - `iphone/` - Companion iPhone app and Swift package. This remains the source of truth for the iPhone app.
 
@@ -40,12 +40,6 @@ Keep protocol definitions aligned between `src/core/control_protocol.*` and `iph
 - Keep the iPhone app and desktop/helper protocol definitions compatible.
 
 ## macOS desktop app build
-
-macOS recorded-file playback support for legacy targets requires FFmpeg headers and dylibs. Install FFmpeg with Homebrew or set `REASHOOT_FFMPEG_ROOT` to a prefix containing `include/` and `lib/`:
-
-```sh
-brew install ffmpeg
-```
 
 Build the standalone macOS app with CMake:
 

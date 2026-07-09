@@ -451,7 +451,7 @@ public final class ReaShootService: ObservableObject {
                 previewStatus = "Streaming"
             } else {
                 status = webSocketServer == nil ? "Ready" : "Listening on Wi-Fi"
-                previewStatus = "Waiting for REAPER"
+                previewStatus = "Waiting for desktop preview"
             }
             return
         }

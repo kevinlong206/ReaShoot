@@ -1,23 +1,21 @@
 #include "control_client.h"
 #include "core/control_protocol.h"
 #include "core/json_value.h"
+#include "desktop/desktop_api_client.h"
 #include "discovery.h"
 #include "downloader.h"
 #include "socket_utils.h"
 
 #include <algorithm>
-#include <chrono>
 #include <cstdlib>
-#include <fstream>
 #include <future>
 #include <iostream>
 #include <sstream>
 #include <string>
-#include <thread>
 #include <vector>
 
 #ifdef _WIN32
-#include <windows.h>
+#include <winsock2.h>
 #else
 #include <unistd.h>
 #endif
@@ -131,159 +129,6 @@ void runDiscovery(const CLIArguments &args) {
   }
 }
 
-struct DesktopApiRegistration {
-  std::string host = "127.0.0.1";
-  int port = 0;
-  std::string token;
-  std::string appPath;
-};
-
-std::string desktopRegistrationPath() {
-#ifdef _WIN32
-  const char *localAppData = std::getenv("LOCALAPPDATA");
-  if (!localAppData || !localAppData[0]) {
-    fail("LOCALAPPDATA is not set; ReaShoot desktop API registration was not found.");
-  }
-  return std::string(localAppData) + "\\ReaShoot\\desktop-api.json";
-#else
-  const char *home = std::getenv("HOME");
-  if (!home || !home[0]) {
-    fail("HOME is not set; ReaShoot desktop API registration was not found.");
-  }
-  return std::string(home) + "/Library/Application Support/ReaShoot/desktop-api.json";
-#endif
-}
-
-std::string readFile(const std::string &path) {
-  std::ifstream file(path);
-  if (!file) {
-    return {};
-  }
-  std::ostringstream stream;
-  stream << file.rdbuf();
-  return stream.str();
-}
-
-bool loadDesktopApiRegistration(DesktopApiRegistration &registration) {
-  const std::string text = readFile(desktopRegistrationPath());
-  if (text.empty()) {
-    return false;
-  }
-  const reashoot::core::JsonValue json = reashoot::core::parseJson(text);
-  registration.host = json.stringValue("host", registration.host);
-  registration.port = json.intValue("port", 0);
-  registration.token = json.stringValue("token");
-  registration.appPath = json.stringValue("appPath");
-  return registration.port > 0 && !registration.token.empty();
-}
-
-void launchDesktopApp(const std::string &appPath = {}) {
-#ifdef _WIN32
-  ShellExecuteA(nullptr, "open", appPath.empty() ? "ReaShoot.exe" : appPath.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-#else
-  (void)appPath;
-  std::system("/usr/bin/open -a ReaShoot >/dev/null 2>&1");
-#endif
-}
-
-DesktopApiRegistration loadOrStartDesktopApiRegistration() {
-  DesktopApiRegistration registration;
-  if (loadDesktopApiRegistration(registration)) {
-    return registration;
-  }
-  launchDesktopApp();
-  for (int attempt = 0; attempt < 40; ++attempt) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    if (loadDesktopApiRegistration(registration)) {
-      return registration;
-    }
-  }
-  fail("ReaShoot desktop API is not registered. Start ReaShoot.app/ReaShoot.exe first.");
-}
-
-std::string httpBody(const std::string &response) {
-  const size_t headerEnd = response.find("\r\n\r\n");
-  return headerEnd == std::string::npos ? response : response.substr(headerEnd + 4);
-}
-
-int httpStatus(const std::string &response) {
-  std::istringstream stream(response);
-  std::string version;
-  int status = 0;
-  stream >> version >> status;
-  return status;
-}
-
-void sendAllSocketBytes(reashoot::helper::SocketHandle socket, const std::string &data) {
-  size_t offset = 0;
-  while (offset < data.size()) {
-    const int sent = reashoot::helper::sendSocketBytes(socket, data.data() + offset, data.size() - offset);
-    if (sent <= 0) {
-      throw reashoot::helper::HelperError("Could not send request to ReaShoot desktop API.");
-    }
-    offset += static_cast<size_t>(sent);
-  }
-}
-
-std::string performDesktopApiCall(const DesktopApiRegistration &registration,
-                                  const std::string &method,
-                                  const std::string &path,
-                                  const std::string &body) {
-  reashoot::helper::SocketHandle socket = reashoot::helper::connectTcpSocket(registration.host, registration.port, 10, "ReaShoot desktop API");
-  std::ostringstream request;
-  request << method << ' ' << path << " HTTP/1.1\r\n"
-          << "Host: " << registration.host << ':' << registration.port << "\r\n"
-          << "Authorization: Bearer " << registration.token << "\r\n"
-          << "Accept: application/json\r\n"
-          << "Connection: close\r\n";
-  if (!body.empty()) {
-    request << "Content-Type: application/json\r\n"
-            << "Content-Length: " << body.size() << "\r\n";
-  }
-  request << "\r\n" << body;
-  const std::string requestText = request.str();
-  sendAllSocketBytes(socket, requestText);
-  std::string response;
-  char buffer[4096];
-  while (true) {
-    const int count = reashoot::helper::receiveSocketBytes(socket, buffer, sizeof(buffer));
-    if (count <= 0) {
-      break;
-    }
-    response.append(buffer, static_cast<size_t>(count));
-  }
-  reashoot::helper::closeSocket(socket);
-  const int status = httpStatus(response);
-  const std::string bodyText = httpBody(response);
-  if (status >= 400 || status == 0) {
-    fail(bodyText.empty() ? "ReaShoot desktop API request failed." : bodyText);
-  }
-  return bodyText;
-}
-
-std::string callDesktopApi(const std::string &method, const std::string &path, const std::string &body = {}) {
-  DesktopApiRegistration registration = loadOrStartDesktopApiRegistration();
-  try {
-    return performDesktopApiCall(registration, method, path, body);
-  } catch (const reashoot::helper::HelperError &) {
-    launchDesktopApp(registration.appPath);
-  }
-  for (int attempt = 0; attempt < 40; ++attempt) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    if (!loadDesktopApiRegistration(registration)) {
-      continue;
-    }
-    try {
-      return performDesktopApiCall(registration, method, path, body);
-    } catch (const reashoot::helper::HelperError &) {
-      if (attempt == 39) {
-        throw;
-      }
-    }
-  }
-  fail("ReaShoot desktop API is not reachable. Start ReaShoot.app/ReaShoot.exe first.");
-}
-
 bool isDesktopApiCommand(const std::string &command) {
   return command.rfind("desktop-", 0) == 0;
 }
@@ -309,111 +154,49 @@ std::string desktopProfileBodyFromArgs(const CLIArguments &args) {
   return reashoot::core::JsonValue(std::move(object)).serialize();
 }
 
-std::string desktopDownloadBodyFromArgs(const CLIArguments &args) {
-  reashoot::core::JsonValue::Object object;
-  const std::string downloadDirectory = args.valueAfter("--download-dir");
-  if (!downloadDirectory.empty()) {
-    object.emplace("downloadDirectory", reashoot::core::JsonValue(downloadDirectory));
-  }
-  return reashoot::core::JsonValue(std::move(object)).serialize();
-}
-
-const reashoot::core::JsonValue &requiredOperation(const std::string &body) {
-  static reashoot::core::JsonValue root;
-  root = reashoot::core::parseJson(body);
-  const reashoot::core::JsonValue *operation = root.find("operation");
-  if (!operation) {
-    fail("ReaShoot desktop API response did not include an operation.");
-  }
-  return *operation;
-}
-
-std::string operationIDFromResponse(const std::string &body) {
-  const reashoot::core::JsonValue &operation = requiredOperation(body);
-  const std::string id = operation.stringValue("id");
-  if (id.empty()) {
-    fail("ReaShoot desktop API operation did not include an id.");
-  }
-  return id;
-}
-
-void pollDesktopUntilRecordingStarted() {
-  for (int attempt = 0; attempt < 60; ++attempt) {
-    const std::string body = callDesktopApi("GET", "/v1/status");
-    const reashoot::core::JsonValue root = reashoot::core::parseJson(body);
-    const reashoot::core::JsonValue *status = root.find("status");
-    if (status && status->boolValue("recording")) {
-      return;
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-  }
-  fail("Timed out waiting for ReaShoot desktop recording to start.");
-}
-
-void pollDesktopOperationUntilDownloaded(const std::string &operationID, bool showProgress) {
-  std::string lastMessage;
-  for (int attempt = 0; attempt < 600; ++attempt) {
-    const std::string body = callDesktopApi("GET", "/v1/operations/" + operationID);
-    const reashoot::core::JsonValue &operation = requiredOperation(body);
-    const std::string state = operation.stringValue("state");
-    const std::string message = operation.stringValue("message");
-    if (showProgress && !message.empty() && message != lastMessage) {
-      std::cout << "progress message=" << message << "\n";
-      lastMessage = message;
-    }
-    if (state == "succeeded") {
-      const std::string downloadedPath = operation.stringValue("downloadedPath");
-      if (downloadedPath.empty()) {
-        fail("ReaShoot desktop operation succeeded without a downloaded path.");
-      }
-      std::cout << "downloaded " << downloadedPath << "\n";
-      return;
-    }
-    if (state == "failed") {
-      fail(message.empty() ? "ReaShoot desktop operation failed." : message);
-    }
-    std::this_thread::sleep_for(std::chrono::seconds(1));
-  }
-  fail("Timed out waiting for ReaShoot desktop operation.");
-}
-
 void runDesktopApiCommand(const CLIArguments &args) {
   const std::string command = args.command();
+  reashoot::desktop::DesktopApiClient client;
   std::string output;
   if (command == "desktop-status") {
-    output = callDesktopApi("GET", "/v1/status");
+    output = client.request("GET", "/v1/status");
   } else if (command == "desktop-profile") {
-    output = callDesktopApi("GET", "/v1/profile");
+    output = client.request("GET", "/v1/profile");
   } else if (command == "desktop-set-profile") {
-    output = callDesktopApi("PUT", "/v1/profile", desktopProfileBodyFromArgs(args));
+    output = client.request("PUT", "/v1/profile", desktopProfileBodyFromArgs(args));
   } else if (command == "desktop-preview-start") {
-    output = callDesktopApi("POST", "/v1/preview/start");
+    output = client.request("POST", "/v1/preview/start");
   } else if (command == "desktop-preview-stop") {
-    output = callDesktopApi("POST", "/v1/preview/stop");
+    output = client.request("POST", "/v1/preview/stop");
   } else if (command == "desktop-start-recording") {
-    output = callDesktopApi("POST", "/v1/recording/start");
-    pollDesktopUntilRecordingStarted();
+    client.startRecording();
+    output = "{\"ok\":true}";
   } else if (command == "desktop-stop-recording") {
-    output = callDesktopApi("POST", "/v1/recording/stop");
+    output = client.request("POST", "/v1/recording/stop");
   } else if (command == "desktop-stop-recording-download") {
-    output = callDesktopApi("POST", "/v1/recording/stop-download", desktopDownloadBodyFromArgs(args));
-    pollDesktopOperationUntilDownloaded(operationIDFromResponse(output), args.hasFlag("--progress"));
+    const std::string downloaded = client.stopRecordingAndDownload(args.valueAfter("--download-dir"),
+                                                                   args.hasFlag("--progress")
+                                                                       ? [](const std::string &message) {
+                                                                           std::cout << "progress message=" << message << "\n";
+                                                                         }
+                                                                       : reashoot::desktop::DesktopApiProgressCallback());
+    std::cout << "downloaded " << downloaded << "\n";
     return;
   } else if (command == "desktop-list-recordings") {
-    output = callDesktopApi("GET", "/v1/recordings");
+    output = client.request("GET", "/v1/recordings");
   } else if (command == "desktop-refresh-recordings") {
-    output = callDesktopApi("POST", "/v1/recordings/refresh");
+    output = client.request("POST", "/v1/recordings/refresh");
   } else if (command == "desktop-download-recording") {
     reashoot::core::JsonValue::Object object;
     const std::string downloadDirectory = args.valueAfter("--download-dir");
     if (!downloadDirectory.empty()) {
       object.emplace("downloadDirectory", reashoot::core::JsonValue(downloadDirectory));
     }
-    output = callDesktopApi("POST",
+    output = client.request("POST",
                             "/v1/recordings/" + required(args, "--recording-id") + "/download",
                             reashoot::core::JsonValue(std::move(object)).serialize());
   } else if (command == "desktop-delete-recording") {
-    output = callDesktopApi("DELETE", "/v1/recordings/" + required(args, "--recording-id"));
+    output = client.request("DELETE", "/v1/recordings/" + required(args, "--recording-id"));
   } else {
     fail("unsupported desktop API command: " + command, 2);
   }

@@ -143,7 +143,6 @@ rm -rf iphone/Package.resolved iphone/.build helper/.build
 - Avoid enabling REAPER audio recording on the `ReaShoot` track.
 - Be careful editing `~/Library/Application Support/REAPER/reaper-menu.ini`; preserve user toolbar config and avoid duplicate toolbar entries.
 - Windows live preview should prefer the FFmpeg H.264 decoder path; do not suggest switching live preview back to Media Foundation.
-- macOS recorded-file playback preview should use the shared FFmpeg playback path rather than restoring AVFoundation/`AVAssetImageGenerator`.
 
 ## Validation
 

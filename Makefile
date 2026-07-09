@@ -7,8 +7,8 @@ CORE_SRC := $(wildcard src/core/*.cpp)
 CORE_HEADERS := $(wildcard src/core/*.h)
 DESKTOP_SRC := $(wildcard src/desktop/*.cpp)
 DESKTOP_HEADERS := $(wildcard src/desktop/*.h)
-MAC_SRC := $(filter-out src/platform/mac/mac_reashoot_panel.mm,$(wildcard src/platform/mac/*.mm))
-MAC_HEADERS := $(filter-out src/platform/mac/mac_reashoot_panel.h,$(wildcard src/platform/mac/*.h))
+MAC_SRC := src/platform/mac/mac_media_audio_reader.mm
+MAC_HEADERS := src/platform/mac/mac_media_audio_reader.h
 FFMPEG_SRC := $(wildcard src/platform/ffmpeg/*.cpp)
 FFMPEG_HEADERS := $(wildcard src/platform/ffmpeg/*.h)
 SWELL_SRC := $(wildcard src/platform/swell/*.cpp) $(wildcard src/platform/swell/*.mm)
@@ -34,9 +34,7 @@ CORE_TEST_CXXFLAGS := -std=c++17 -Wall -Wextra -Wno-unused-parameter -Isrc $(ARC
 LDFLAGS := -dynamiclib -undefined dynamic_lookup $(ARCH_FLAGS) \
   -framework Cocoa \
   -framework AVFoundation \
-  -framework QuartzCore \
-  -framework VideoToolbox \
-  $(FFMPEG_LDFLAGS) \
+  -framework AudioToolbox \
   -Wl,-rpath,@loader_path \
   -sectcreate __TEXT __info_plist Info.plist
 
@@ -44,14 +42,13 @@ LDFLAGS := -dynamiclib -undefined dynamic_lookup $(ARCH_FLAGS) \
 
 all: $(TARGET) $(HELPER_TARGET)
 
-$(TARGET): $(SRC) $(CORE_SRC) $(CORE_HEADERS) $(MAC_SRC) $(MAC_HEADERS) $(FFMPEG_SRC) $(FFMPEG_HEADERS) $(SWELL_SRC) $(SWELL_HEADERS) $(REAPER_SRC) $(REAPER_HEADERS) Info.plist $(SDK_DIR)/reaper_plugin.h $(SDK_DIR)/reaper_plugin_functions.h
-	@if [ -z "$(FFMPEG_ROOT)" ]; then echo "FFmpeg not found. Install with 'brew install ffmpeg' or set FFMPEG_ROOT=/path/to/ffmpeg-prefix or REASHOOT_FFMPEG_ROOT=/path/to/ffmpeg-prefix."; exit 1; fi
+$(TARGET): $(SRC) $(CORE_SRC) $(CORE_HEADERS) $(MAC_SRC) $(MAC_HEADERS) $(REAPER_SRC) $(REAPER_HEADERS) Info.plist $(SDK_DIR)/reaper_plugin.h $(SDK_DIR)/reaper_plugin_functions.h
 	mkdir -p $(BUILD_DIR)
-	$(CXX) $(CXXFLAGS) $(SRC) $(CORE_SRC) $(MAC_SRC) $(FFMPEG_SRC) $(SWELL_SRC) $(REAPER_SRC) $(LDFLAGS) -o $(TARGET)
+	$(CXX) $(CXXFLAGS) $(SRC) $(CORE_SRC) $(DESKTOP_SRC) $(MAC_SRC) $(REAPER_SRC) $(LDFLAGS) -o $(TARGET)
 
-$(HELPER_TARGET): $(HELPER_CPP_SRC) $(CORE_SRC) $(CORE_HEADERS)
+$(HELPER_TARGET): $(HELPER_CPP_SRC) $(CORE_SRC) $(CORE_HEADERS) $(DESKTOP_SRC) $(DESKTOP_HEADERS)
 	mkdir -p $(BUILD_DIR)
-	$(CXX) $(CORE_TEST_CXXFLAGS) $(HELPER_CPP_SRC) $(CORE_SRC) -o $(HELPER_TARGET)
+	$(CXX) $(CORE_TEST_CXXFLAGS) $(HELPER_CPP_SRC) $(CORE_SRC) $(DESKTOP_SRC) -o $(HELPER_TARGET)
 
 install: $(TARGET) $(HELPER_TARGET)
 	mkdir -p "$(HOME)/Library/Application Support/REAPER/UserPlugins"
@@ -69,7 +66,7 @@ check:
 	$(CORE_TEST_TARGET)
 	$(CXX) $(CORE_TEST_CXXFLAGS) -c $(WIN32_STUB_SRC) -o $(WIN32_STUB_TARGET)
 	$(CXX) $(CORE_TEST_CXXFLAGS) -isystem $(SDK_DIR) -c $(SWELL_PROBE_SRC) -o $(SWELL_PROBE_TARGET)
-	$(CXX) $(CORE_TEST_CXXFLAGS) $(HELPER_CPP_SRC) $(CORE_SRC) -o $(HELPER_TARGET)
+	$(CXX) $(CORE_TEST_CXXFLAGS) $(HELPER_CPP_SRC) $(CORE_SRC) $(DESKTOP_SRC) -o $(HELPER_TARGET)
 	$(SWIFT_GIT_ENV) swift test --package-path iphone
 
 clean:

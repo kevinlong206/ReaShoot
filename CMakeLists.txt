@@ -50,10 +50,10 @@ add_test(NAME reashoot_gui_drift_guard
 
 file(GLOB REASHOOT_HELPER_SOURCES CONFIGURE_DEPENDS "${REASHOOT_ROOT}/src/helper/*.cpp")
 add_executable(reashoot_helper ${REASHOOT_HELPER_SOURCES})
-target_link_libraries(reashoot_helper PRIVATE reashoot_core)
+target_link_libraries(reashoot_helper PRIVATE reashoot_desktop_core)
 target_compile_options(reashoot_helper PRIVATE ${REASHOOT_WARNING_FLAGS})
 if(WIN32)
-  target_link_libraries(reashoot_helper PRIVATE ws2_32 iphlpapi)
+  target_link_libraries(reashoot_helper PRIVATE ws2_32 iphlpapi shell32)
   set_target_properties(reashoot_helper PROPERTIES OUTPUT_NAME "reashoot-win")
 elseif(APPLE)
   set_target_properties(reashoot_helper PROPERTIES OUTPUT_NAME "reashoot-mac")
@@ -62,50 +62,19 @@ else()
 endif()
 
 if(APPLE)
-  set(REASHOOT_FFMPEG_ROOT "" CACHE PATH "FFmpeg root containing include and lib directories")
-  set(REASHOOT_FFMPEG_HINTS)
-  if(NOT "${REASHOOT_FFMPEG_ROOT}" STREQUAL "")
-    list(APPEND REASHOOT_FFMPEG_HINTS "${REASHOOT_FFMPEG_ROOT}")
-  endif()
-  list(APPEND REASHOOT_FFMPEG_HINTS /opt/homebrew /usr/local)
-  find_path(REASHOOT_FFMPEG_INCLUDE_DIR
-    NAMES libavcodec/avcodec.h libavformat/avformat.h
-    HINTS ${REASHOOT_FFMPEG_HINTS}
-    PATH_SUFFIXES include
-  )
-  find_library(REASHOOT_AVFORMAT_LIBRARY NAMES avformat HINTS ${REASHOOT_FFMPEG_HINTS} PATH_SUFFIXES lib)
-  find_library(REASHOOT_AVCODEC_LIBRARY NAMES avcodec HINTS ${REASHOOT_FFMPEG_HINTS} PATH_SUFFIXES lib)
-  find_library(REASHOOT_AVUTIL_LIBRARY NAMES avutil HINTS ${REASHOOT_FFMPEG_HINTS} PATH_SUFFIXES lib)
-  if(NOT REASHOOT_FFMPEG_INCLUDE_DIR OR NOT REASHOOT_AVFORMAT_LIBRARY OR NOT REASHOOT_AVCODEC_LIBRARY OR NOT REASHOOT_AVUTIL_LIBRARY)
-    message(FATAL_ERROR "macOS FFmpeg playback requires FFmpeg headers/libs. Install with 'brew install ffmpeg' or set REASHOOT_FFMPEG_ROOT.")
-  endif()
-  get_filename_component(REASHOOT_FFMPEG_LIBRARY_DIR "${REASHOOT_AVFORMAT_LIBRARY}" DIRECTORY)
-
-  file(GLOB REASHOOT_MAC_SOURCES CONFIGURE_DEPENDS "${REASHOOT_ROOT}/src/platform/mac/*.mm")
-  file(GLOB REASHOOT_SWELL_CPP_SOURCES CONFIGURE_DEPENDS "${REASHOOT_ROOT}/src/platform/swell/*.cpp")
-  file(GLOB REASHOOT_SWELL_OBJCXX_SOURCES CONFIGURE_DEPENDS "${REASHOOT_ROOT}/src/platform/swell/*.mm")
-
   add_library(reaper_reashoot SHARED
     "${REASHOOT_ROOT}/src/reashoot.mm"
     "${REASHOOT_ROOT}/src/reaper/reaper_host.cpp"
-    ${REASHOOT_MAC_SOURCES}
-    ${REASHOOT_FFMPEG_SOURCES}
-    ${REASHOOT_FFMPEG_HEADERS}
-    ${REASHOOT_SWELL_CPP_SOURCES}
-    ${REASHOOT_SWELL_OBJCXX_SOURCES}
+    "${REASHOOT_ROOT}/src/platform/mac/mac_media_audio_reader.mm"
   )
   target_link_libraries(reaper_reashoot
     PRIVATE
-      reashoot_core
+      reashoot_desktop_core
       "-framework Cocoa"
       "-framework AVFoundation"
-      "-framework QuartzCore"
-      "-framework VideoToolbox"
-      "${REASHOOT_AVFORMAT_LIBRARY}"
-      "${REASHOOT_AVCODEC_LIBRARY}"
-      "${REASHOOT_AVUTIL_LIBRARY}"
+      "-framework AudioToolbox"
   )
-  target_include_directories(reaper_reashoot PRIVATE "${REASHOOT_ROOT}/src" "${REASHOOT_SDK_DIR}" "${REASHOOT_FFMPEG_INCLUDE_DIR}")
+  target_include_directories(reaper_reashoot PRIVATE "${REASHOOT_ROOT}/src" "${REASHOOT_SDK_DIR}")
   target_compile_options(reaper_reashoot PRIVATE
     ${REASHOOT_WARNING_FLAGS}
     $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>
@@ -113,7 +82,6 @@ if(APPLE)
   target_link_options(reaper_reashoot PRIVATE
     -undefined dynamic_lookup
     -Wl,-rpath,@loader_path
-    "-Wl,-rpath,${REASHOOT_FFMPEG_LIBRARY_DIR}"
     -sectcreate __TEXT __info_plist "${REASHOOT_ROOT}/Info.plist"
   )
   set_target_properties(reaper_reashoot PROPERTIES PREFIX "" SUFFIX ".dylib")
@@ -192,9 +160,10 @@ if(WIN32)
   )
   target_link_libraries(reaper_reashoot
     PRIVATE
-      reashoot_core
+      reashoot_desktop_core
       user32
       gdi32
+      shell32
       mf
       mfplat
       mfreadwrite

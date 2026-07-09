@@ -1,5 +1,4 @@
 #import <Cocoa/Cocoa.h>
-#import <QuartzCore/QuartzCore.h>
 
 #include <algorithm>
 #include <cstdarg>
@@ -7,26 +6,21 @@
 #include <cmath>
 #include <cstdio>
 #include <ctime>
+#include <exception>
 #include <limits>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "core/alignment_math.h"
 #include "core/capture_profile.h"
-#include "core/control_protocol.h"
-#include "core/helper_output_parser.h"
+#include "desktop/desktop_api_client.h"
 #include "core/json_value.h"
 #include "core/path_utils.h"
-#include "core/remote_camera.h"
 #include "core/reashoot_controller.h"
 #include "core/reashoot_status.h"
-#import "platform/mac/mac_h264_preview_renderer.h"
-#include "platform/mac/mac_helper_process.h"
 #include "platform/mac/mac_media_audio_reader.h"
-#import "platform/mac/mac_modal_prompts.h"
-#import "platform/mac/mac_playback_preview_renderer.h"
-#import "platform/mac/mac_preview_stream_client.h"
 #include "reaper/reaper_host.h"
 
 #define REAPERAPI_IMPLEMENT
@@ -84,8 +78,6 @@
 #define REAPERAPI_WANT_ValidatePtr2
 #include "reaper_plugin_functions.h"
 
-#include "platform/swell/swell_panel_probe.h"
-
 namespace {
 
 constexpr const char *kExtStateSection = "klong_reashoot";
@@ -104,9 +96,7 @@ constexpr const char *kIPhoneAspectKey = "iphone_aspect";
 constexpr const char *kIPhoneLensKey = "iphone_lens";
 constexpr const char *kIPhoneZoomKey = "iphone_zoom";
 constexpr const char *kIPhoneLookKey = "iphone_look";
-constexpr const char *kDockIdent = "klong_reashoot_preview";
 constexpr const char *kVideoTrackName = "ReaShoot";
-constexpr const char *kDefaultIPhoneHost = "kevin-long-iphone.local";
 constexpr int kRecordBit = 4;
 constexpr double kAlignmentPeakRate = 200.0;
 constexpr double kAlignmentFinePeakRate = 1000.0;
@@ -119,7 +109,6 @@ constexpr double kAlignmentSampleRefineSearchSeconds = 0.030;
 constexpr double kAlignmentSearchSeconds = 5.0;
 constexpr double kAlignmentMinimumScore = 0.15;
 constexpr int kAlignmentRetryLimit = 15;
-constexpr NSTimeInterval kPreviewFrameTimeoutSeconds = 5.0;
 NSString *kDebugLogPath = @"/tmp/reashoot_debug.log";
 
 constexpr const char *kExtStateKeys[] = {
@@ -177,85 +166,9 @@ std::string stdStringFromNSString(NSString *value) {
   return value.UTF8String ? value.UTF8String : "";
 }
 
-NSArray<NSString *> *stringArrayFromStdVector(const std::vector<std::string> &values) {
-  NSMutableArray<NSString *> *array = [NSMutableArray arrayWithCapacity:values.size()];
-  for (const std::string &value : values) {
-    [array addObject:stringFromStd(value)];
-  }
-  return array;
-}
-
-std::vector<std::string> stdVectorFromStringArray(NSArray<NSString *> *values) {
-  std::vector<std::string> vector;
-  vector.reserve(values.count);
-  for (NSString *value in values) {
-    vector.push_back(stdStringFromNSString(value ?: @""));
-  }
-  return vector;
-}
-
-NSDictionary<NSString *, NSString *> *dictionaryFromFields(const reashoot::core::FieldMap &fields) {
-  NSMutableDictionary<NSString *, NSString *> *dictionary = [NSMutableDictionary dictionaryWithCapacity:fields.size()];
-  for (const auto &entry : fields) {
-    dictionary[stringFromStd(entry.first)] = stringFromStd(entry.second);
-  }
-  return dictionary;
-}
-
-reashoot::core::RemoteRecordingDescriptor recordingDescriptorFromDictionary(NSDictionary<NSString *, NSString *> *recording) {
-  reashoot::core::RemoteRecordingDescriptor descriptor;
-  descriptor.id = stdStringFromNSString(recording[@"id"] ?: @"");
-  descriptor.filename = stdStringFromNSString(recording[@"filename"] ?: @"recording.mov");
-  descriptor.byteCount = stdStringFromNSString(recording[@"byteCount"] ?: @"0");
-  descriptor.downloadPath = stdStringFromNSString(recording[@"downloadPath"] ?: @"");
-  descriptor.checksum = stdStringFromNSString(recording[@"checksum"] ?: @"");
-  return descriptor;
-}
-
-std::vector<reashoot::core::RemoteRecordingDescriptor> recordingDescriptorsFromArray(NSArray<NSDictionary<NSString *, NSString *> *> *recordings) {
-  std::vector<reashoot::core::RemoteRecordingDescriptor> descriptors;
-  descriptors.reserve(recordings.count);
-  for (NSDictionary<NSString *, NSString *> *recording in recordings) {
-    descriptors.push_back(recordingDescriptorFromDictionary(recording));
-  }
-  return descriptors;
-}
-
-NSDictionary<NSString *, NSString *> *recordingWithID(NSArray<NSDictionary<NSString *, NSString *> *> *recordings,
-                                                       const std::string &recordingID) {
-  for (NSDictionary<NSString *, NSString *> *recording in recordings) {
-    if (stdStringFromNSString(recording[@"id"] ?: @"") == recordingID) {
-      return recording;
-    }
-  }
-  return nil;
-}
-
-std::string reashootHelperPath() {
-  return stdStringFromNSString([NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/REAPER/UserPlugins/reashoot-mac"]);
-}
-
-reashoot::core::HelperProcess &helperProcess() {
-  static std::unique_ptr<reashoot::core::HelperProcess> helper =
-      reashoot::platform::mac::createHelperProcess(reashootHelperPath(), [](const std::string &message) {
-        debugLog(@"%s", message.c_str());
-      });
-  return *helper;
-}
-
-reashoot::core::RemoteCameraController &remoteCameraController() {
-  static reashoot::core::RemoteCameraController controller(helperProcess());
-  return controller;
-}
-
 reashoot::core::MediaAudioReader &mediaAudioReader() {
   static std::unique_ptr<reashoot::core::MediaAudioReader> reader = reashoot::platform::mac::createMediaAudioReader();
   return *reader;
-}
-
-reashoot::core::ModalPrompts &modalPrompts() {
-  static std::unique_ptr<reashoot::core::ModalPrompts> prompts = reashoot::platform::mac::createModalPrompts();
-  return *prompts;
 }
 
 reaper_plugin_info_t *g_reaper = nullptr;
@@ -1143,6 +1056,7 @@ void setVideoEnabled(bool enabled);
 
 } // namespace
 
+#if 0
 @interface ReaShootRecorder : NSObject
 {
   std::unique_ptr<reashoot::core::PreviewRenderer> _swellPreviewRenderer;
@@ -2547,6 +2461,26 @@ void setVideoEnabled(bool enabled);
 
 @end
 
+#endif
+
+@interface ReaShootRecorder : NSObject
+- (void)setStatus:(NSString *)status;
+- (void)setRecordingVisualState:(BOOL)recording;
+@end
+
+@implementation ReaShootRecorder
+
+- (void)setStatus:(NSString *)status {
+  std::string friendlyStatus = reashoot::core::friendlyStatusText(status ? status.UTF8String : "Idle");
+  debugLog(@"status: %s", friendlyStatus.c_str());
+}
+
+- (void)setRecordingVisualState:(BOOL)recording {
+  (void)recording;
+}
+
+@end
+
 namespace {
 
 ReaShootRecorder *recorder() {
@@ -2591,6 +2525,64 @@ bool isRecordingState(int playState) {
   return (playState & kRecordBit) != 0;
 }
 
+NSError *desktopApiNSError(const std::string &message, NSInteger code) {
+  NSString *text = stringFromStd(reashoot::core::friendlyStatusText(message));
+  if (text.length == 0) {
+    text = @"Unknown desktop API error.";
+  }
+  return [NSError errorWithDomain:@"com.klong.reashoot.desktop-api"
+                             code:code
+                         userInfo:@{NSLocalizedDescriptionKey: text}];
+}
+
+void runDesktopStartRecordingAsync(void (^completion)(NSError *error)) {
+  void (^completionCopy)(NSError *) = [completion copy];
+  std::thread([completionCopy] {
+    std::string errorMessage;
+    @autoreleasepool {
+      try {
+        reashoot::desktop::DesktopApiClient().startRecording();
+      } catch (const std::exception &error) {
+        errorMessage = error.what();
+      }
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+      NSError *error = errorMessage.empty() ? nil : desktopApiNSError(errorMessage, 30);
+      completionCopy(error);
+    });
+  }).detach();
+}
+
+void runDesktopStopDownloadAsync(const std::string &downloadDirectory,
+                                 void (^progress)(NSString *message),
+                                 void (^completion)(NSString *path, NSError *error)) {
+  void (^progressCopy)(NSString *) = [progress copy];
+  void (^completionCopy)(NSString *, NSError *) = [completion copy];
+  std::thread([downloadDirectory, progressCopy, completionCopy] {
+    std::string downloadedPath;
+    std::string errorMessage;
+    @autoreleasepool {
+      try {
+        downloadedPath = reashoot::desktop::DesktopApiClient().stopRecordingAndDownload(downloadDirectory, [progressCopy](const std::string &message) {
+          if (!progressCopy) {
+            return;
+          }
+          NSString *status = stringFromStd(message);
+          dispatch_async(dispatch_get_main_queue(), ^{
+            progressCopy(status);
+          });
+        });
+      } catch (const std::exception &error) {
+        errorMessage = error.what();
+      }
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+      NSError *error = errorMessage.empty() ? nil : desktopApiNSError(errorMessage, 31);
+      completionCopy(stringFromStd(downloadedPath), error);
+    });
+  }).detach();
+}
+
 void startTransportRecording(ReaProject *project) {
   if (g_activeTransportRecording) {
     return;
@@ -2608,8 +2600,7 @@ void startTransportRecording(ReaProject *project) {
   g_activeTransportRecording = true;
   [recorder() setRecordingVisualState:YES];
   [recorder() setStatus:@"Starting recording through ReaShoot.app"];
-  [recorder() runReaShootCommandAsync:@"desktop-start-recording" extraArguments:@[] completion:^(NSString *output, NSError *error) {
-    (void)output;
+  runDesktopStartRecordingAsync(^(NSError *error) {
     if (error) {
       g_activeTransportRecording = false;
       g_transportStartInFlight = false;
@@ -2627,7 +2618,7 @@ void startTransportRecording(ReaProject *project) {
       g_transportStopRequested = false;
       stopTransportRecording();
     }
-  }];
+  });
 }
 
 void stopTransportRecording() {
@@ -2649,18 +2640,17 @@ void stopTransportRecording() {
   if (directory.empty()) {
     directory = NSHomeDirectory().UTF8String ?: "";
   }
-  NSArray<NSString *> *arguments = @[ @"--download-dir", stringFromStd(directory), @"--progress" ];
   [recorder() setStatus:@"Stopping recording through ReaShoot.app"];
-  [recorder() runReaShootCommandAsync:@"desktop-stop-recording-download" extraArguments:arguments outputHandler:^(NSString *line) {
-    [recorder() handleReaShootProgressLine:line];
-  } completion:^(NSString *output, NSError *error) {
+  runDesktopStopDownloadAsync(directory, ^(NSString *message) {
+    [recorder() setStatus:message.length ? message : @"Downloading recording through ReaShoot.app"];
+  }, ^(NSString *pathText, NSError *error) {
     [recorder() setRecordingVisualState:NO];
     if (error) {
       showError(std::string("ReaShoot.app recording stop/download failed:\n") + (error.localizedDescription.UTF8String ?: "Unknown desktop API error."));
       g_activeTransportRecording = false;
       return;
     }
-    std::string path = reashoot::core::parseDownloadedPath(output.UTF8String ?: "");
+    std::string path = stdStringFromNSString(pathText ?: @"");
     g_pendingInsertPath = path;
     g_pendingInsertPosition = insertPosition;
     g_pendingInsert = !g_pendingInsertPath.empty();
@@ -2668,7 +2658,7 @@ void stopTransportRecording() {
     if (!g_pendingInsert) {
       showError("ReaShoot.app downloaded the recording, but did not report a local file path.");
     }
-  }];
+  });
 }
 
 void processPendingInsert() {
