@@ -52,7 +52,8 @@ std::string redactedSettingsSummary(const RemoteCameraSettings &settings) {
          << " aspect=" << settings.aspect
          << " lens=" << settings.lens
          << " zoom=" << settings.zoom
-         << " look=" << settings.look;
+         << " look=" << settings.look
+         << " encodeLookAtRecordTime=" << (settings.encodeLookAtRecordTime ? "true" : "false");
   return stream.str();
 }
 

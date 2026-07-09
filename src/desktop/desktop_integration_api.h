@@ -23,6 +23,15 @@ struct IntegrationStatus {
   core::RemoteCameraSettings profile;
 };
 
+struct IntegrationOperation {
+  std::string id;
+  std::string type;
+  std::string state = "idle";
+  std::string message;
+  std::string downloadedPath;
+  core::RemoteRecordingDescriptor recording;
+};
+
 struct IntegrationHttpRequest {
   std::string method;
   std::string path;
@@ -45,6 +54,7 @@ core::JsonValue recordingToJson(const core::RemoteCameraSettings &settings,
 core::JsonValue recordingsToJson(const core::RemoteCameraSettings &settings,
                                  const std::vector<core::RemoteRecordingDescriptor> &recordings);
 core::JsonValue statusToJson(const IntegrationStatus &status);
+core::JsonValue operationToJson(const IntegrationOperation &operation);
 
 IntegrationHttpResponse jsonResponse(int status, core::JsonValue::Object object);
 IntegrationHttpResponse okResponse(core::JsonValue::Object object = {});

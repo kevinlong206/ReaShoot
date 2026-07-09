@@ -15,6 +15,7 @@ CaptureProfile captureProfileFromSettings(const RemoteCameraSettings &settings) 
       settings.lens,
       settings.zoom,
       settings.look,
+      settings.encodeLookAtRecordTime,
   };
 }
 

@@ -3,7 +3,7 @@
 namespace reashoot::core {
 
 std::vector<std::string> captureProfileArguments(const CaptureProfile &profile) {
-  return {
+  std::vector<std::string> arguments = {
       "--token", profile.token,
       "--resolution", profile.resolution,
       "--fps", profile.fps,
@@ -13,6 +13,10 @@ std::vector<std::string> captureProfileArguments(const CaptureProfile &profile) 
       "--zoom", profile.zoom,
       "--look", profile.look,
   };
+  if (profile.encodeLookAtRecordTime) {
+    arguments.push_back("--encode-look-at-record-time");
+  }
+  return arguments;
 }
 
 } // namespace reashoot::core

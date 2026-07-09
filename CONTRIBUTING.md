@@ -8,18 +8,18 @@ This branch pivots ReaShoot toward a standalone desktop app for controlling the 
 
 The existing REAPER extension remains in the repository as a legacy/secondary target. Keep it buildable where practical, but do not let new desktop-app workflow code depend on REAPER APIs, SWELL UI, REAPER transport, track insertion, or audio-alignment behavior.
 
-The legacy REAPER extension includes an early opt-in action, `ReaShoot: Enable/Disable Desktop App Integration`, for exercising the desktop API from REAPER. It currently uses the desktop app for status/profile calls and retains direct iPhone control as the recording/media-insertion fallback until that migration is complete.
+The REAPER extension is now a thin integration client of the desktop app. It should not host iPhone preview, setup, pairing, stored-phone-video management, or direct iPhone recording/download/delete flows; when enabled, REAPER transport record start/stop calls the desktop local API and then inserts/synchronizes the downloaded movie.
 
 ## Project layout
 
 - `src/app/mac/` - Native macOS desktop app entry point and UI. Keep these files focused on native controls, layout, windows, menus, alerts, and rendering.
 - `src/desktop/` - Desktop workflow, state, view-model, and UI-facing constants shared by the standalone app and future platform frontends.
 - `src/core/` - Shared protocol, parsing, capture profile, H.264 Annex B, status, and controller code.
-- `src/helper/` - C++ helper executable used by the desktop app bundle and legacy REAPER extension for discovery, iPhone control, transfer, and download.
+- `src/helper/` - C++ helper executable used by the desktop apps for discovery, iPhone control, transfer, and download, and by the REAPER extensions as a desktop-API client.
 - `src/platform/mac/` - macOS adapters for helper execution, preview WebSocket transport, H.264 preview decode, prompts, media reading, and legacy extension support.
 - `src/platform/win32/` - Windows adapters. Keep future desktop logic reusable here.
 - `src/platform/ffmpeg/` - Shared FFmpeg recorded-file playback preview used by legacy preview/playback surfaces.
-- `src/reashoot.mm`, `src/reaper/`, `src/platform/swell/` - Legacy REAPER extension and shared SWELL panel.
+- `src/reashoot.mm`, `src/platform/win32/reaper_reashoot_win32.cpp`, `src/reaper/`, `src/platform/swell/` - REAPER extension integration surfaces. Keep the extension thin over the desktop local API; do not add new REAPER-hosted camera setup/preview UI.
 - `iphone/` - Companion iPhone app and Swift package. This remains the source of truth for the iPhone app.
 
 Keep protocol definitions aligned between `src/core/control_protocol.*` and `iphone/Sources/ReaShootCore/ControlProtocol.swift`.
@@ -28,12 +28,13 @@ Keep protocol definitions aligned between `src/core/control_protocol.*` and `iph
 
 - Keep the implementation native. Do not move iPhone control, preview, download, or media workflows into JSFX, VST3, Lua, or web wrappers.
 - Keep standalone app workflow state in `src/desktop/` or `src/core/`; keep Cocoa/Objective-C++ UI thin.
-- Treat `ReaShoot.app` as the integration hub for other apps. Integrations should use the desktop local API instead of reimplementing iPhone discovery, pairing, recording, download, delete, or transfer acknowledgement.
+- Treat `ReaShoot.app` / `ReaShoot.exe` as the integration hub for other apps. Integrations should use the desktop local API instead of reimplementing iPhone discovery, pairing, recording, download, delete, or transfer acknowledgement.
 - Prefer shared C++ for behavior that should be consistent between macOS and future Windows desktop support.
 - Add platform-specific code only for OS APIs, host integration, UI toolkits, decode backends, or build constraints.
 - Do not put desktop orchestration back into AppKit/SwiftUI/WinUI code. Pairing, discovery retry policy, configure-on-profile-change, preview start/stop state, stale-frame empty states, recording start/stop, and iPhone video list/download/delete workflows should be shared C++.
 - Native UI/platform adapters may own layout, colors, menus, alerts, file dialogs, settings storage adapters, main-thread dispatch/timers, thumbnail/image display, and preview renderer/client factories.
 - Preserve the iPhone single-file recording model: one downloaded `.mov` with embedded camera audio.
+- Keep `encodeLookAtRecordTime` default-off. When enabled with a non-natural look, the iPhone uses the AVAssetWriter record-time look path; otherwise it preserves the AVCaptureMovieFileOutput path and prepares looks only after Download is chosen.
 - Keep routine status in the desktop app UI. Use modal alerts for user decisions and real errors.
 - Do not commit pairing tokens, downloaded `.mov` files, `test-downloads`, DerivedData, `.DS_Store`, Xcode `xcuserdata`, or generated local SwiftPM build output.
 - Keep the iPhone app and desktop/helper protocol definitions compatible.
@@ -85,10 +86,12 @@ The build stages `reashoot-win.exe` and the FFmpeg runtime DLLs next to `ReaShoo
 
 ## Desktop integration API
 
-When `ReaShoot.app` is running, it starts a loopback-only HTTP JSON API and writes its endpoint registration to:
+When the desktop app is running, it starts a loopback-only HTTP JSON API and writes its endpoint registration to:
 
 ```sh
 ~/Library/Application Support/ReaShoot/desktop-api.json
+# Windows:
+%LOCALAPPDATA%\ReaShoot\desktop-api.json
 ```
 
 The registration contains `apiVersion`, `host`, `port`, `baseUrl`, and a bearer `token`. The file is owner-readable/writable only. Do not commit or log the token.
@@ -103,6 +106,7 @@ build-desktop/reashoot-mac desktop-preview-start
 build-desktop/reashoot-mac desktop-preview-stop
 build-desktop/reashoot-mac desktop-start-recording
 build-desktop/reashoot-mac desktop-stop-recording
+build-desktop/reashoot-mac desktop-stop-recording-download --download-dir ~/Movies/ReaShoot --progress
 build-desktop/reashoot-mac desktop-refresh-recordings
 build-desktop/reashoot-mac desktop-list-recordings
 build-desktop/reashoot-mac desktop-download-recording --recording-id RECORDING_ID --download-dir ~/Movies/ReaShoot

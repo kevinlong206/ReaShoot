@@ -75,6 +75,7 @@ public struct CaptureProfile: Codable, Equatable, Sendable {
     public var lens: String
     public var zoomFactor: Double
     public var look: String
+    public var encodeLookAtRecordTime: Bool
 
     private enum CodingKeys: String, CodingKey {
         case resolution
@@ -84,6 +85,7 @@ public struct CaptureProfile: Codable, Equatable, Sendable {
         case lens
         case zoomFactor
         case look
+        case encodeLookAtRecordTime
     }
 
     public init(
@@ -93,7 +95,8 @@ public struct CaptureProfile: Codable, Equatable, Sendable {
         aspectRatio: String = "9:16",
         lens: String = "wide",
         zoomFactor: Double = 1.0,
-        look: String = "natural"
+        look: String = "natural",
+        encodeLookAtRecordTime: Bool = false
     ) {
         self.resolution = resolution
         self.fps = fps
@@ -102,6 +105,7 @@ public struct CaptureProfile: Codable, Equatable, Sendable {
         self.lens = lens
         self.zoomFactor = zoomFactor
         self.look = look
+        self.encodeLookAtRecordTime = encodeLookAtRecordTime
     }
 
     public init(from decoder: Decoder) throws {
@@ -113,11 +117,13 @@ public struct CaptureProfile: Codable, Equatable, Sendable {
         lens = try container.decodeIfPresent(String.self, forKey: .lens) ?? "wide"
         zoomFactor = try container.decodeIfPresent(Double.self, forKey: .zoomFactor) ?? 1.0
         look = try container.decodeIfPresent(String.self, forKey: .look) ?? "natural"
+        encodeLookAtRecordTime = try container.decodeIfPresent(Bool.self, forKey: .encodeLookAtRecordTime) ?? false
     }
 
     public var displayName: String {
         let zoom = String(format: "%.1fx", zoomFactor)
-        return "\(resolution) \(fps) fps, \(orientation), \(aspectRatio), \(lens), \(zoom), \(lookDisplayName)"
+        let timing = encodeLookAtRecordTime ? ", record-time look" : ""
+        return "\(resolution) \(fps) fps, \(orientation), \(aspectRatio), \(lens), \(zoom), \(lookDisplayName)\(timing)"
     }
 
     private var lookDisplayName: String {

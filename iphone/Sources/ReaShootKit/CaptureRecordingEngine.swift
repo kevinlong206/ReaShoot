@@ -350,6 +350,7 @@ public enum CaptureError: Error, LocalizedError {
     case cannotChangeProfileWhileRecording
     case lensUnavailable(String)
     case recordingNotFound(String)
+    case recordTimeLookWriterFailed(String)
 
     public var errorDescription: String? {
         switch self {
@@ -371,6 +372,8 @@ public enum CaptureError: Error, LocalizedError {
             return "The requested iPhone lens is not available: \(lens)."
         case .recordingNotFound(let id):
             return "Recording not found: \(id)."
+        case .recordTimeLookWriterFailed(let message):
+            return message
         }
     }
 }
@@ -402,6 +405,7 @@ private final class PreviewFrameStore: NSObject, AVCaptureVideoDataOutputSampleB
     private let context = CIContext()
     private let lock = NSLock()
     private var sampleBufferConsumer: ((CVPixelBuffer, CMTime, UInt64, PreviewFrameMetadata) -> Void)?
+    private var recordingSampleBufferConsumer: ((CMSampleBuffer, String, String, String) -> Void)?
     private var lastFrameTime = Date.distantPast
     private var minimumFrameInterval: TimeInterval = 1.0 / 12.0
     private var look = "natural"
@@ -453,16 +457,24 @@ private final class PreviewFrameStore: NSObject, AVCaptureVideoDataOutputSampleB
         lock.unlock()
     }
 
+    func setRecordingSampleBufferConsumer(_ consumer: ((CMSampleBuffer, String, String, String) -> Void)?) {
+        lock.lock()
+        recordingSampleBufferConsumer = consumer
+        lock.unlock()
+    }
+
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         let now = Date()
         lock.lock()
         let interval = minimumFrameInterval
         let consumer = sampleBufferConsumer
+        let recordingConsumer = recordingSampleBufferConsumer
         let look = look
         let configuredOrientation = orientation
         let orientation = resolvedOrientation(configuredOrientation, now: now)
         let aspectRatio = aspectRatio
         lock.unlock()
+        recordingConsumer?(sampleBuffer, look, orientation, aspectRatio)
         guard now.timeIntervalSince(lastFrameTime) >= interval else {
             return
         }
@@ -637,6 +649,285 @@ private final class PreviewFrameStore: NSObject, AVCaptureVideoDataOutputSampleB
     }
 }
 
+private final class RecordingAudioSampleStore: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
+    let queue = DispatchQueue(label: "com.kevinlong.reashoot.recording-audio")
+    private let lock = NSLock()
+    private var sampleBufferConsumer: ((CMSampleBuffer) -> Void)?
+
+    func setSampleBufferConsumer(_ consumer: ((CMSampleBuffer) -> Void)?) {
+        lock.lock()
+        sampleBufferConsumer = consumer
+        lock.unlock()
+    }
+
+    func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+        lock.lock()
+        let consumer = sampleBufferConsumer
+        lock.unlock()
+        consumer?(sampleBuffer)
+    }
+}
+
+private final class RecordTimeLookWriter {
+    private let url: URL
+    private let look: String
+    private let orientation: String
+    private let aspectRatio: String
+    private let context = CIContext()
+    private let lock = NSLock()
+    private var writer: AVAssetWriter?
+    private var videoInput: AVAssetWriterInput?
+    private var audioInput: AVAssetWriterInput?
+    private var pixelBufferAdaptor: AVAssetWriterInputPixelBufferAdaptor?
+    private var firstVideoTime: CMTime?
+    private var finished = false
+    private var failure: Error?
+
+    init(url: URL, look: String, orientation: String, aspectRatio: String) {
+        self.url = url
+        self.look = VideoLook.normalized(look)
+        self.orientation = orientation
+        self.aspectRatio = aspectRatio
+    }
+
+    var isRecording: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return !finished
+    }
+
+    func appendVideoSampleBuffer(_ sampleBuffer: CMSampleBuffer) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !finished, failure == nil, let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+            return
+        }
+        let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        guard presentationTime.isValid else {
+            return
+        }
+        let image = renderedImage(for: pixelBuffer)
+        let width = max(1, Int(image.extent.width.rounded(.up)))
+        let height = max(1, Int(image.extent.height.rounded(.up)))
+        do {
+            try ensureWriter(width: width, height: height, startTime: presentationTime)
+            guard let videoInput, videoInput.isReadyForMoreMediaData,
+                  let pixelBufferPool = pixelBufferAdaptor?.pixelBufferPool else {
+                return
+            }
+            var outputPixelBuffer: CVPixelBuffer?
+            let status = CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pixelBufferPool, &outputPixelBuffer)
+            guard status == kCVReturnSuccess, let outputPixelBuffer else {
+                throw CaptureError.recordTimeLookWriterFailed("Could not allocate a record-time look video frame.")
+            }
+            context.render(
+                image,
+                to: outputPixelBuffer,
+                bounds: CGRect(origin: .zero, size: CGSize(width: width, height: height)),
+                colorSpace: CGColorSpaceCreateDeviceRGB()
+            )
+            if pixelBufferAdaptor?.append(outputPixelBuffer, withPresentationTime: presentationTime) != true {
+                throw writer?.error ?? CaptureError.recordTimeLookWriterFailed("Could not append a record-time look video frame.")
+            }
+        } catch {
+            failure = error
+            writer?.cancelWriting()
+        }
+    }
+
+    func appendAudioSampleBuffer(_ sampleBuffer: CMSampleBuffer) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !finished, failure == nil, let firstVideoTime, let audioInput, audioInput.isReadyForMoreMediaData else {
+            return
+        }
+        let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+        guard presentationTime.isValid, presentationTime >= firstVideoTime else {
+            return
+        }
+        if !audioInput.append(sampleBuffer) {
+            failure = writer?.error ?? CaptureError.recordTimeLookWriterFailed("Could not append record-time look audio.")
+            writer?.cancelWriting()
+        }
+    }
+
+    func finish() async throws {
+        let (writerToFinish, failureToThrow) = prepareFinish()
+        if let failureToThrow {
+            throw failureToThrow
+        }
+        guard let writerToFinish else {
+            throw CaptureError.recordTimeLookWriterFailed("No video frames were recorded.")
+        }
+        nonisolated(unsafe) let writer = writerToFinish
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            writer.finishWriting {
+                switch writer.status {
+                case .completed:
+                    continuation.resume()
+                case .failed, .cancelled:
+                    continuation.resume(throwing: writer.error ?? CaptureError.recordTimeLookWriterFailed("Record-time look encoding failed."))
+                default:
+                    continuation.resume(throwing: CaptureError.recordTimeLookWriterFailed("Record-time look encoding ended unexpectedly."))
+                }
+            }
+        }
+    }
+
+    private func prepareFinish() -> (writer: AVAssetWriter?, failure: Error?) {
+        lock.lock()
+        defer { lock.unlock() }
+        finished = true
+        let failureToThrow = failure
+        if failure == nil {
+            videoInput?.markAsFinished()
+            audioInput?.markAsFinished()
+        }
+        return (writer, failureToThrow)
+    }
+
+    private func ensureWriter(width: Int, height: Int, startTime: CMTime) throws {
+        if writer != nil {
+            return
+        }
+        if FileManager.default.fileExists(atPath: url.path) {
+            try FileManager.default.removeItem(at: url)
+        }
+        let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
+        let videoSettings: [String: Any] = [
+            AVVideoCodecKey: AVVideoCodecType.h264,
+            AVVideoWidthKey: width,
+            AVVideoHeightKey: height,
+            AVVideoCompressionPropertiesKey: [
+                AVVideoAverageBitRateKey: videoBitRate(width: width, height: height),
+                AVVideoExpectedSourceFrameRateKey: 30,
+                AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel
+            ]
+        ]
+        let videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
+        videoInput.expectsMediaDataInRealTime = true
+        guard writer.canAdd(videoInput) else {
+            throw CaptureError.recordTimeLookWriterFailed("Could not add record-time look video writer input.")
+        }
+        writer.add(videoInput)
+
+        let audioSettings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatMPEG4AAC,
+            AVNumberOfChannelsKey: 2,
+            AVSampleRateKey: 44_100,
+            AVEncoderBitRateKey: 128_000
+        ]
+        let audioInput = AVAssetWriterInput(mediaType: .audio, outputSettings: audioSettings)
+        audioInput.expectsMediaDataInRealTime = true
+        if writer.canAdd(audioInput) {
+            writer.add(audioInput)
+            self.audioInput = audioInput
+        }
+
+        let attributes: [String: Any] = [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferWidthKey as String: width,
+            kCVPixelBufferHeightKey as String: height,
+            kCVPixelBufferCGImageCompatibilityKey as String: true,
+            kCVPixelBufferCGBitmapContextCompatibilityKey as String: true,
+            kCVPixelBufferMetalCompatibilityKey as String: true
+        ]
+        pixelBufferAdaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: videoInput, sourcePixelBufferAttributes: attributes)
+        guard writer.startWriting() else {
+            throw writer.error ?? CaptureError.recordTimeLookWriterFailed("Could not start record-time look writer.")
+        }
+        writer.startSession(atSourceTime: startTime)
+        self.writer = writer
+        self.videoInput = videoInput
+        firstVideoTime = startTime
+    }
+
+    private func videoBitRate(width: Int, height: Int) -> Int {
+        let pixels = width * height
+        if pixels >= 3840 * 2160 {
+            return 40_000_000
+        }
+        if pixels >= 1920 * 1080 {
+            return 16_000_000
+        }
+        return 8_000_000
+    }
+
+    private func renderedImage(for pixelBuffer: CVPixelBuffer) -> CIImage {
+        let source = CIImage(cvPixelBuffer: pixelBuffer)
+        let styled = VideoLook.apply(look, to: source)
+        let oriented = normalizedRecordedImage(styled, orientation: orientation)
+        return aspectCroppedImage(oriented, aspectRatio: aspectRatio, orientation: orientation)
+    }
+
+    private func normalizedRecordedImage(_ image: CIImage, orientation: String) -> CIImage {
+        let propertyOrientation: CGImagePropertyOrientation
+        switch orientation.lowercased() {
+        case "landscapeleft":
+            propertyOrientation = .up
+        case "landscaperight", "landscape":
+            propertyOrientation = .down
+        case "portraitupsidedown":
+            propertyOrientation = .left
+        default:
+            propertyOrientation = .right
+        }
+        let oriented = image.oriented(propertyOrientation)
+        let extent = oriented.extent
+        return oriented.transformed(by: CGAffineTransform(translationX: -extent.origin.x, y: -extent.origin.y))
+    }
+
+    private func aspectCroppedImage(_ image: CIImage, aspectRatio: String, orientation: String) -> CIImage {
+        guard let targetAspect = orientedAspectRatio(aspectRatio, orientation: orientation), targetAspect > 0 else {
+            return image
+        }
+        let extent = image.extent
+        guard extent.width > 0, extent.height > 0 else {
+            return image
+        }
+        let currentAspect = extent.width / extent.height
+        guard abs(currentAspect - targetAspect) > 0.001 else {
+            return image
+        }
+        var crop = extent
+        if currentAspect > targetAspect {
+            crop.size.width = extent.height * targetAspect
+            crop.origin.x += (extent.width - crop.width) * 0.5
+        } else {
+            crop.size.height = extent.width / targetAspect
+            crop.origin.y += (extent.height - crop.height) * 0.5
+        }
+        let cropped = image.cropped(to: crop)
+        let croppedExtent = cropped.extent
+        return cropped.transformed(by: CGAffineTransform(translationX: -croppedExtent.origin.x, y: -croppedExtent.origin.y))
+    }
+
+    private func parsedAspectRatio(_ aspectRatio: String) -> CGFloat? {
+        let parts = aspectRatio.split(separator: ":", maxSplits: 1).compactMap { Double($0) }
+        guard parts.count == 2, parts[0] > 0, parts[1] > 0 else {
+            return nil
+        }
+        return CGFloat(parts[0] / parts[1])
+    }
+
+    private func orientedAspectRatio(_ aspectRatio: String, orientation: String) -> CGFloat? {
+        guard var targetAspect = parsedAspectRatio(aspectRatio), targetAspect > 0 else {
+            return nil
+        }
+        if isLandscape(orientation), targetAspect < 1.0 {
+            targetAspect = 1.0 / targetAspect
+        } else if !isLandscape(orientation), targetAspect > 1.0 {
+            targetAspect = 1.0 / targetAspect
+        }
+        return targetAspect
+    }
+
+    private func isLandscape(_ orientation: String) -> Bool {
+        let normalized = orientation.lowercased()
+        return normalized == "landscapeleft" || normalized == "landscaperight" || normalized == "landscape"
+    }
+}
+
 private final class PhysicalOrientation {
     static let shared = PhysicalOrientation()
 
@@ -732,12 +1023,17 @@ public final class CaptureRecordingEngine: NSObject, ObservableObject {
     private let session = AVCaptureSession()
     private let movieOutput = AVCaptureMovieFileOutput()
     private let previewOutput = AVCaptureVideoDataOutput()
+    private let audioOutput = AVCaptureAudioDataOutput()
     private nonisolated let previewFrameStore = PreviewFrameStore()
+    private nonisolated let recordingAudioStore = RecordingAudioSampleStore()
     private let store: RecordingStore
     private var videoDevice: AVCaptureDevice?
     private var videoInput: AVCaptureDeviceInput?
     private var activeRecordingID: String?
+    private var activeRecordingURL: URL?
     private var activeRecordingLook = "natural"
+    private var activeRecordingRenderedLook = "natural"
+    private var activeRecordTimeLookWriter: RecordTimeLookWriter?
     private var stopContinuation: CheckedContinuation<RecordingFile, Error>?
 
     public init(store: RecordingStore) {
@@ -770,6 +1066,10 @@ public final class CaptureRecordingEngine: NSObject, ObservableObject {
            session.canAddInput(audioInput) {
             session.addInput(audioInput)
         }
+        audioOutput.setSampleBufferDelegate(recordingAudioStore, queue: recordingAudioStore.queue)
+        if session.canAddOutput(audioOutput) {
+            session.addOutput(audioOutput)
+        }
 
         guard session.canAddOutput(movieOutput) else {
             throw CaptureError.cannotAddOutput
@@ -800,7 +1100,7 @@ public final class CaptureRecordingEngine: NSObject, ObservableObject {
     }
 
     public func apply(profile: CaptureProfile) throws {
-        guard !movieOutput.isRecording else {
+        guard !isRecording else {
             throw CaptureError.cannotChangeProfileWhileRecording
         }
         var normalizedProfile = profile
@@ -830,17 +1130,38 @@ public final class CaptureRecordingEngine: NSObject, ObservableObject {
         guard isConfigured else {
             throw CaptureError.notConfigured
         }
-        guard !movieOutput.isRecording else {
+        guard !isRecording else {
             throw CaptureError.alreadyRecording
         }
 
         let recording = store.newRecordingURL(sessionID: sessionID)
         let recordingOrientation = resolvedProfileOrientation()
+        let look = normalizedLook(currentProfile.look)
+        let encodeLookAtRecordTime = currentProfile.encodeLookAtRecordTime && look != "natural"
         activeRecordingID = recording.id
-        activeRecordingLook = normalizedLook(currentProfile.look)
+        activeRecordingURL = recording.url
+        activeRecordingLook = look
+        activeRecordingRenderedLook = encodeLookAtRecordTime ? look : "natural"
         previewFrameStore.setTargetFPS(6.0)
-        applyOrientation(recordingOrientation)
-        movieOutput.startRecording(to: recording.url, recordingDelegate: self)
+        if encodeLookAtRecordTime {
+            let writer = RecordTimeLookWriter(
+                url: recording.url,
+                look: look,
+                orientation: recordingOrientation,
+                aspectRatio: currentProfile.aspectRatio
+            )
+            activeRecordTimeLookWriter = writer
+            previewFrameStore.setRecordingSampleBufferConsumer { [weak writer] sampleBuffer, _, _, _ in
+                writer?.appendVideoSampleBuffer(sampleBuffer)
+            }
+            recordingAudioStore.setSampleBufferConsumer { [weak writer] sampleBuffer in
+                writer?.appendAudioSampleBuffer(sampleBuffer)
+            }
+            DebugLog.write("recording started record-time look id=\(recording.id) look=\(look) orientation=\(recordingOrientation)")
+        } else {
+            applyOrientation(recordingOrientation)
+            movieOutput.startRecording(to: recording.url, recordingDelegate: self)
+        }
         isRecording = true
         return recording.id
     }
@@ -1143,6 +1464,40 @@ public final class CaptureRecordingEngine: NSObject, ObservableObject {
     }
 
     public func stopRecording() async throws -> RecordingFile {
+        if let writer = activeRecordTimeLookWriter {
+            previewFrameStore.setRecordingSampleBufferConsumer(nil)
+            recordingAudioStore.setSampleBufferConsumer(nil)
+            let recordingID = activeRecordingID ?? UUID().uuidString
+            let recordingURL = activeRecordingURL
+            let look = activeRecordingLook
+            let renderedLook = activeRecordingRenderedLook
+            defer {
+                isRecording = false
+                previewFrameStore.setTargetFPS(12.0)
+                activeRecordTimeLookWriter = nil
+                activeRecordingID = nil
+                activeRecordingURL = nil
+                activeRecordingLook = "natural"
+                activeRecordingRenderedLook = "natural"
+            }
+            guard let recordingURL else {
+                throw CaptureError.recordTimeLookWriterFailed("Record-time look output path was lost.")
+            }
+            try await writer.finish()
+            DebugLog.write("recording finished record-time look url=\(recordingURL.lastPathComponent) look=\(look)")
+            let fileInfo = await RecordingFileInspector.fileInfo(for: recordingURL)
+            let recording = RecordingFile(
+                id: recordingID,
+                url: recordingURL,
+                state: .pending,
+                byteCount: fileInfo.byteCount,
+                checksumSHA256: fileInfo.checksum,
+                desiredLook: look,
+                renderedLook: renderedLook
+            )
+            store.upsert(recording)
+            return recording
+        }
         guard movieOutput.isRecording else {
             throw CaptureError.notRecording
         }
@@ -1180,7 +1535,9 @@ extension CaptureRecordingEngine: AVCaptureFileOutputRecordingDelegate {
             )
             store.upsert(recording)
             activeRecordingID = nil
+            activeRecordingURL = nil
             activeRecordingLook = "natural"
+            activeRecordingRenderedLook = "natural"
             stopContinuation?.resume(returning: recording)
             stopContinuation = nil
         }

@@ -30,6 +30,7 @@ JsonValue captureProfileToJson(const ProtocolCaptureProfile &profile) {
   object.emplace("orientation", JsonValue(profile.orientation));
   object.emplace("resolution", JsonValue(profile.resolution));
   object.emplace("zoomFactor", JsonValue(profile.zoomFactor));
+  object.emplace("encodeLookAtRecordTime", JsonValue(profile.encodeLookAtRecordTime));
   return JsonValue(std::move(object));
 }
 
@@ -42,6 +43,7 @@ ProtocolCaptureProfile captureProfileFromJson(const JsonValue &json) {
   profile.lens = json.stringValue("lens", profile.lens);
   profile.zoomFactor = json.numberValue("zoomFactor", profile.zoomFactor);
   profile.look = json.stringValue("look", profile.look);
+  profile.encodeLookAtRecordTime = json.boolValue("encodeLookAtRecordTime", profile.encodeLookAtRecordTime);
   return profile;
 }
 

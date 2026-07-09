@@ -26,13 +26,16 @@
 #include <windowsx.h>
 
 #include "ReaShootWin32Support.h"
+#include "ReaShootWin32IntegrationServer.h"
 
 #include "../../core/control_protocol.h"
 #include "../../core/helper_output_parser.h"
+#include "../../core/json_value.h"
 #include "../../core/log_sanitization.h"
 #include "../../core/remote_camera.h"
 #include "../../desktop/desktop_app_controller.h"
 #include "../../desktop/desktop_app_model.h"
+#include "../../desktop/desktop_integration_api.h"
 #include "../../desktop/desktop_workflow.h"
 #include "../../platform/win32/win32_h264_preview_renderer.h"
 #include "../../platform/win32/win32_helper_process.h"
@@ -44,6 +47,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <functional>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <queue>
@@ -117,6 +121,9 @@ enum ControlId : int {
   IDC_CMB_LENS,
   IDC_EDIT_ZOOM,
   IDC_CMB_LOOK,
+  IDC_CHK_ENCODE_LOOK,
+  IDC_CHK_ALWAYS_TOP,
+  IDC_CHK_MIRROR_PREVIEW,
   IDC_BTN_SETUP_CLOSE,
 
   IDC_LBL_IPHONE = 1150,
@@ -218,6 +225,14 @@ public:
     requestRepaint();
   }
 
+  void setMirrorPreview(bool mirrorPreview) {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      mirrorPreview_ = mirrorPreview;
+    }
+    requestRepaint();
+  }
+
   void setEmptyMessage(const std::wstring &message) {
     bool empty = false;
     {
@@ -280,7 +295,9 @@ public:
       info.bmiHeader.biCompression = BI_RGB;
       const int previousMode = SetStretchBltMode(hdc, HALFTONE);
       SetBrushOrgEx(hdc, 0, 0, nullptr);
-      StretchDIBits(hdc, drawX, drawY, drawWidth, drawHeight, 0, 0, width_, height_, pixels_.data(), &info,
+      const int destX = mirrorPreview_ ? drawX : drawX + drawWidth;
+      const int destWidth = mirrorPreview_ ? drawWidth : -drawWidth;
+      StretchDIBits(hdc, destX, drawY, destWidth, drawHeight, 0, 0, width_, height_, pixels_.data(), &info,
                     DIB_RGB_COLORS, SRCCOPY);
       SetStretchBltMode(hdc, previousMode);
     }
@@ -306,6 +323,7 @@ private:
   int stride_ = 0;
   int displayWidth_ = 0;
   int displayHeight_ = 0;
+  bool mirrorPreview_ = false;
   std::wstring emptyMessage_ = L"No paired iPhone.";
   std::atomic<bool> repaintPending_{false};
 };
@@ -351,6 +369,20 @@ private:
   void loadDefaults();
   void saveDefaults();
   reashoot::core::RemoteCameraSettings settings();
+  bool alwaysOnTopEnabled() const;
+  void applyAlwaysOnTop();
+  bool mirrorPreviewEnabled() const;
+  void applyMirrorPreview();
+  reashoot::desktop::IntegrationStatus integrationStatus();
+  std::string integrationStatusJson();
+  void applyIntegrationProfile(const reashoot::core::RemoteCameraSettings &settings);
+  reashoot::desktop::IntegrationOperation beginIntegrationOperation(const std::string &type, const std::string &message);
+  void finishIntegrationOperation(const reashoot::core::RemoteRecordingDescriptor &recording,
+                                  const std::string &downloadedPath,
+                                  const std::string &message);
+  void failIntegrationOperation(const std::string &message);
+  void startIntegrationServer();
+  reashoot::desktop::IntegrationHttpResponse handleIntegrationRequest(const reashoot::desktop::IntegrationHttpRequest &request);
 
   // Status / buttons --------------------------------------------------------
   void setStatus(const std::wstring &status);
@@ -384,6 +416,7 @@ private:
   void autoStartPreviewIfPossible();
   void startRecording();
   void stopRecording();
+  reashoot::desktop::IntegrationOperation stopRecordingAndDownloadForIntegration(const std::string &downloadDirectory);
   void promptForRecording(const reashoot::core::RemoteRecordingDescriptor &recording);
   void downloadRecording(const reashoot::core::RemoteRecordingDescriptor &recording);
   void deleteRecording(const std::string &recordingID);
@@ -426,6 +459,9 @@ private:
   HWND aspectCombo_ = nullptr;
   HWND lensCombo_ = nullptr;
   HWND lookCombo_ = nullptr;
+  HWND encodeLookCheckbox_ = nullptr;
+  HWND alwaysOnTopCheckbox_ = nullptr;
+  HWND mirrorPreviewCheckbox_ = nullptr;
 
   // Main controls.
   HWND previewButton_ = nullptr;
@@ -448,11 +484,14 @@ private:
   std::unique_ptr<reashoot::core::RemoteCameraController> camera_;
   std::unique_ptr<reashoot::core::PreviewStreamClient> previewClient_;
   std::unique_ptr<reashoot::core::PreviewRenderer> previewRenderer_;
+  std::unique_ptr<reashoot::app::win32::ReaShootWin32IntegrationServer> integrationServer_;
   reashoot::core::PreviewStreamDescriptor previewDescriptor_;
   std::shared_ptr<reashoot::core::AsyncCommandHandle> activeCommand_;
   reashoot::desktop::DesktopAppController controller_;
 
   std::string pairingToken_;
+  std::string integrationApiToken_;
+  reashoot::desktop::IntegrationOperation integrationOperation_;
   std::vector<reashoot::core::RemoteRecordingDescriptor> phoneVideos_;
   bool recording_ = false;
   bool recordBlinkOn_ = true;
@@ -507,6 +546,13 @@ HWND makeCombo(HWND parent, int id, const std::vector<reashoot::desktop::Desktop
     SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(widen(choice.title).c_str()));
   }
   return combo;
+}
+
+HWND makeCheckbox(HWND parent, int id, const wchar_t *text) {
+  HWND checkbox = CreateWindowExW(0, L"BUTTON", text, WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, 0, 0, 0, 0,
+                                  parent, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), nullptr, nullptr);
+  themeControl(checkbox, L"DarkMode_Explorer");
+  return checkbox;
 }
 
 void selectComboValue(HWND combo,
@@ -606,8 +652,11 @@ int ReaShootApp::run(HINSTANCE instance, bool debug) {
       });
 
   loadDefaults();
+  applyAlwaysOnTop();
+  applyMirrorPreview();
   updateButtons();
   updatePreviewEmptyState();
+  startIntegrationServer();
   setStatus(L"Ready. Open ReaShoot on your iPhone, then discover or enter its host.");
 
   ShowWindow(main_, SW_SHOW);
@@ -700,7 +749,7 @@ void ReaShootApp::createMainWindow(HINSTANCE instance) {
 
 void ReaShootApp::createSetupWindow(HINSTANCE instance) {
   setup_ = CreateWindowExW(0, kSetupClass, L"ReaShoot Setup", WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME,
-                           CW_USEDEFAULT, CW_USEDEFAULT, 780, 360, main_, nullptr, instance, nullptr);
+                           CW_USEDEFAULT, CW_USEDEFAULT, 780, 420, main_, nullptr, instance, nullptr);
   applyDarkTitleBar(setup_);
 
   makeLabel(setup_, IDC_LBL_IPHONE, L"iPhone");
@@ -730,6 +779,9 @@ void ReaShootApp::createSetupWindow(HINSTANCE instance) {
 
   makeLabel(setup_, IDC_LBL_LOOK, L"Look");
   lookCombo_ = makeCombo(setup_, IDC_CMB_LOOK, reashoot::desktop::lookChoices());
+  encodeLookCheckbox_ = makeCheckbox(setup_, IDC_CHK_ENCODE_LOOK, L"Encode selected look while recording");
+  alwaysOnTopCheckbox_ = makeCheckbox(setup_, IDC_CHK_ALWAYS_TOP, L"Keep desktop windows always on top");
+  mirrorPreviewCheckbox_ = makeCheckbox(setup_, IDC_CHK_MIRROR_PREVIEW, L"Mirror live preview");
   makeButton(setup_, IDC_BTN_SETUP_CLOSE, L"Close");
 
   EnumChildWindows(
@@ -749,6 +801,7 @@ void ReaShootApp::createVideosWindowIfNeeded() {
   videos_ = CreateWindowExW(0, kVideosClass, L"Videos on iPhone", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
                             760, 520, main_, nullptr, instance_, nullptr);
   applyDarkTitleBar(videos_);
+  applyAlwaysOnTop();
 
   makeLabel(videos_, 0, L"Videos stored on the iPhone");
   makeButton(videos_, IDC_BTN_REFRESH, L"Refresh");
@@ -878,6 +931,12 @@ void ReaShootApp::layoutSetup() {
   placeTriple(IDC_LBL_RES, resCombo_, IDC_LBL_FPS, fpsCombo_, IDC_LBL_ORIENT, orientCombo_);
   placeTriple(IDC_LBL_ASPECT, aspectCombo_, IDC_LBL_LENS, lensCombo_, IDC_LBL_ZOOM, zoomEdit_);
   placeTriple(IDC_LBL_LOOK, lookCombo_, 0, nullptr, 0, nullptr);
+  MoveWindow(encodeLookCheckbox_, x + labelWidth, y, contentWidth - labelWidth, rowHeight, TRUE);
+  y += rowHeight + gap;
+  MoveWindow(alwaysOnTopCheckbox_, x + labelWidth, y, contentWidth - labelWidth, rowHeight, TRUE);
+  y += rowHeight + gap;
+  MoveWindow(mirrorPreviewCheckbox_, x + labelWidth, y, contentWidth - labelWidth, rowHeight, TRUE);
+  y += rowHeight + gap;
 
   MoveWindow(GetDlgItem(setup_, IDC_BTN_SETUP_CLOSE), width - margin - buttonWidth, y, buttonWidth, rowHeight, TRUE);
   InvalidateRect(setup_, nullptr, TRUE);
@@ -984,6 +1043,19 @@ void ReaShootApp::loadDefaults() {
                    reashoot::desktop::defaultLens());
   selectComboValue(lookCombo_, reashoot::desktop::lookChoices(), settingsGet("look"),
                    reashoot::desktop::defaultLook());
+  SendMessageW(encodeLookCheckbox_,
+               BM_SETCHECK,
+               settingsGet("encodeLookAtRecordTime") == "true" ? BST_CHECKED : BST_UNCHECKED,
+               0);
+  const std::string alwaysOnTop = settingsGet("alwaysOnTop");
+  SendMessageW(alwaysOnTopCheckbox_,
+               BM_SETCHECK,
+               alwaysOnTop.empty() || alwaysOnTop == "true" ? BST_CHECKED : BST_UNCHECKED,
+               0);
+  SendMessageW(mirrorPreviewCheckbox_,
+               BM_SETCHECK,
+               settingsGet("mirrorPreview") == "true" ? BST_CHECKED : BST_UNCHECKED,
+               0);
   pairingToken_ = settingsGet("pairingToken");
   updateConnectionStatusLabels();
   debugLog(std::string("Loaded defaults host=") + host + " token=" + (pairingToken_.empty() ? "empty" : "present"));
@@ -1005,6 +1077,9 @@ void ReaShootApp::saveDefaults() {
               selectedComboValue(lensCombo_, reashoot::desktop::lensChoices(), reashoot::desktop::defaultLens()));
   settingsSet("look",
               selectedComboValue(lookCombo_, reashoot::desktop::lookChoices(), reashoot::desktop::defaultLook()));
+  settingsSet("encodeLookAtRecordTime", SendMessageW(encodeLookCheckbox_, BM_GETCHECK, 0, 0) == BST_CHECKED ? "true" : "false");
+  settingsSet("alwaysOnTop", alwaysOnTopEnabled() ? "true" : "false");
+  settingsSet("mirrorPreview", mirrorPreviewEnabled() ? "true" : "false");
   if (pairingToken_.empty()) {
     settingsRemove("pairingToken");
   } else {
@@ -1026,7 +1101,303 @@ reashoot::core::RemoteCameraSettings ReaShootApp::settings() {
   s.lens = selectedComboValue(lensCombo_, reashoot::desktop::lensChoices(), reashoot::desktop::defaultLens());
   s.zoom = editText(zoomEdit_);
   s.look = selectedComboValue(lookCombo_, reashoot::desktop::lookChoices(), reashoot::desktop::defaultLook());
+  s.encodeLookAtRecordTime = SendMessageW(encodeLookCheckbox_, BM_GETCHECK, 0, 0) == BST_CHECKED;
   return s;
+}
+
+reashoot::desktop::IntegrationStatus ReaShootApp::integrationStatus() {
+  reashoot::desktop::IntegrationStatus status;
+  status.paired = !pairingToken_.empty();
+  status.previewRunning = previewRunning_;
+  status.previewDesired = previewDesired_;
+  status.recording = recording_;
+  status.host = editText(hostEdit_);
+  wchar_t text[512] = {};
+  GetWindowTextW(statusLabel_, text, static_cast<int>(std::size(text)));
+  status.message = narrow(text);
+  status.profile = settings();
+  return status;
+}
+
+std::string ReaShootApp::integrationStatusJson() {
+  return reashoot::desktop::statusToJson(integrationStatus()).serialize();
+}
+
+void ReaShootApp::applyIntegrationProfile(const reashoot::core::RemoteCameraSettings &s) {
+  selectComboValue(resCombo_, reashoot::desktop::resolutionChoices(), s.resolution, reashoot::desktop::defaultResolution());
+  selectComboValue(fpsCombo_, reashoot::desktop::fpsChoices(), s.fps, reashoot::desktop::defaultFps());
+  selectComboValue(orientCombo_, reashoot::desktop::orientationChoices(), s.orientation,
+                   reashoot::desktop::defaultOrientation());
+  selectComboValue(aspectCombo_, reashoot::desktop::aspectChoices(), s.aspect, reashoot::desktop::defaultAspect());
+  selectComboValue(lensCombo_, reashoot::desktop::lensChoices(), s.lens, reashoot::desktop::defaultLens());
+  selectComboValue(lookCombo_, reashoot::desktop::lookChoices(), s.look, reashoot::desktop::defaultLook());
+  setEditText(zoomEdit_, s.zoom.empty() ? reashoot::desktop::defaultZoom() : s.zoom);
+  SendMessageW(encodeLookCheckbox_, BM_SETCHECK, s.encodeLookAtRecordTime ? BST_CHECKED : BST_UNCHECKED, 0);
+  saveDefaults();
+}
+
+reashoot::desktop::IntegrationOperation ReaShootApp::beginIntegrationOperation(const std::string &type,
+                                                                               const std::string &message) {
+  integrationOperation_ = {};
+  integrationOperation_.id = "op-" + reashoot::desktop::makeSessionID();
+  integrationOperation_.type = type;
+  integrationOperation_.state = "running";
+  integrationOperation_.message = message;
+  return integrationOperation_;
+}
+
+void ReaShootApp::finishIntegrationOperation(const reashoot::core::RemoteRecordingDescriptor &recording,
+                                             const std::string &downloadedPath,
+                                             const std::string &message) {
+  integrationOperation_.state = "succeeded";
+  integrationOperation_.message = message;
+  integrationOperation_.recording = recording;
+  integrationOperation_.downloadedPath = downloadedPath;
+}
+
+void ReaShootApp::failIntegrationOperation(const std::string &message) {
+  integrationOperation_.state = "failed";
+  integrationOperation_.message = message;
+}
+
+void ReaShootApp::startIntegrationServer() {
+  integrationApiToken_ = reashoot::app::win32::loadOrCreateIntegrationToken();
+  integrationServer_ = std::make_unique<reashoot::app::win32::ReaShootWin32IntegrationServer>();
+  std::string error;
+  if (!integrationServer_->start(integrationApiToken_,
+                                 [this](const reashoot::desktop::IntegrationHttpRequest &request) {
+                                   std::shared_ptr<std::promise<reashoot::desktop::IntegrationHttpResponse>> promise =
+                                       std::make_shared<std::promise<reashoot::desktop::IntegrationHttpResponse>>();
+                                   auto future = promise->get_future();
+                                   postToMain([this, request, promise]() {
+                                     promise->set_value(handleIntegrationRequest(request));
+                                   });
+                                   return future.get();
+                                 },
+                                 [this]() {
+                                   std::shared_ptr<std::promise<std::string>> promise = std::make_shared<std::promise<std::string>>();
+                                   auto future = promise->get_future();
+                                   postToMain([this, promise]() { promise->set_value(integrationStatusJson()); });
+                                   return future.get();
+                                 },
+                                 &error)) {
+    debugLog("Desktop API server failed: " + error);
+    return;
+  }
+  reashoot::app::win32::writeIntegrationRegistration(integrationServer_->port(), integrationApiToken_);
+  debugLog("Desktop API server listening on 127.0.0.1:" + std::to_string(integrationServer_->port()));
+}
+
+reashoot::desktop::IntegrationHttpResponse ReaShootApp::handleIntegrationRequest(
+    const reashoot::desktop::IntegrationHttpRequest &request) {
+  namespace desktop = reashoot::desktop;
+  namespace core = reashoot::core;
+  if (!desktop::requestHasValidToken(request, integrationApiToken_)) {
+    return desktop::errorResponse(401, "unauthorized", "Invalid ReaShoot desktop API token.");
+  }
+  const auto busy = [this]() -> bool {
+    return activeCommand_ && activeCommand_->isRunning();
+  };
+  const auto accepted = [](const std::string &message) {
+    return desktop::acceptedResponse(message);
+  };
+
+  if (request.method == "GET" && request.path == "/v1/status") {
+    core::JsonValue::Object object;
+    object.emplace("status", desktop::statusToJson(integrationStatus()));
+    return desktop::okResponse(std::move(object));
+  }
+  if (request.method == "GET" && request.path == "/v1/profile") {
+    core::JsonValue::Object object;
+    object.emplace("profile", desktop::profileToJson(settings()));
+    return desktop::okResponse(std::move(object));
+  }
+  if (request.method == "PUT" && request.path == "/v1/profile") {
+    if (busy()) {
+      return desktop::errorResponse(409, "busy", "ReaShoot is busy with another operation.");
+    }
+    try {
+      core::RemoteCameraSettings next = settings();
+      desktop::applyProfileJson(next, core::parseJson(request.body));
+      applyIntegrationProfile(next);
+      if (previewRunning_) {
+        profileSelectionChanged();
+      }
+      core::JsonValue::Object object;
+      object.emplace("profile", desktop::profileToJson(settings()));
+      return desktop::okResponse(std::move(object));
+    } catch (const std::exception &error) {
+      return desktop::errorResponse(400, "invalid_json", error.what());
+    }
+  }
+
+  bool ReaShootApp::alwaysOnTopEnabled() const {
+    return SendMessageW(alwaysOnTopCheckbox_, BM_GETCHECK, 0, 0) == BST_CHECKED;
+  }
+
+  void ReaShootApp::applyAlwaysOnTop() {
+    const HWND insertAfter = alwaysOnTopEnabled() ? HWND_TOPMOST : HWND_NOTOPMOST;
+    const UINT flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
+    if (main_) {
+      SetWindowPos(main_, insertAfter, 0, 0, 0, 0, flags);
+    }
+    if (setup_) {
+      SetWindowPos(setup_, insertAfter, 0, 0, 0, 0, flags);
+    }
+    if (videos_) {
+      SetWindowPos(videos_, insertAfter, 0, 0, 0, 0, flags);
+    }
+    debugLog(std::string("Always on top ") + (alwaysOnTopEnabled() ? "enabled" : "disabled"));
+  }
+
+  bool ReaShootApp::mirrorPreviewEnabled() const {
+    return SendMessageW(mirrorPreviewCheckbox_, BM_GETCHECK, 0, 0) == BST_CHECKED;
+  }
+
+  void ReaShootApp::applyMirrorPreview() {
+    preview_.setMirrorPreview(mirrorPreviewEnabled());
+    debugLog(std::string("Mirror live preview ") + (mirrorPreviewEnabled() ? "enabled" : "disabled"));
+  }
+  if (request.method == "POST" && request.path == "/v1/phone/discover") {
+    if (busy()) {
+      return desktop::errorResponse(409, "busy", "ReaShoot is busy with another operation.");
+    }
+    discoverPhone();
+    return accepted("Discovery started.");
+  }
+  if (request.method == "POST" && request.path == "/v1/phone/pair") {
+    if (busy()) {
+      return desktop::errorResponse(409, "busy", "ReaShoot is busy with another operation.");
+    }
+    pairPhone();
+    return accepted("Pairing request started.");
+  }
+  if (request.method == "POST" && request.path == "/v1/preview/start") {
+    if (busy()) {
+      return desktop::errorResponse(409, "busy", "ReaShoot is busy with another operation.");
+    }
+    previewDesired_ = true;
+    startPreview();
+    return accepted("Preview start requested.");
+  }
+  if (request.method == "POST" && request.path == "/v1/preview/stop") {
+    stopPreview();
+    return accepted("Preview stop requested.");
+  }
+  if (request.method == "POST" && request.path == "/v1/recording/start") {
+    if (busy() || recording_) {
+      return desktop::errorResponse(409, "busy", "Recording is already active or ReaShoot is busy.");
+    }
+    startRecording();
+    return accepted("Recording start requested.");
+  }
+  if (request.method == "POST" && request.path == "/v1/recording/stop") {
+    if (!recording_) {
+      return desktop::errorResponse(409, "not_recording", "No recording is active.");
+    }
+    if (busy()) {
+      return desktop::errorResponse(409, "busy", "ReaShoot is busy with another operation.");
+    }
+    reashoot::core::RemoteCameraSettings s = settings();
+    setStatus(L"Stopping iPhone recording...");
+    activeCommand_ = camera_->stop(s, onMain([this](reashoot::core::CommandResult result) {
+      recording_ = false;
+      updateButtons();
+      if (result.exitCode != 0) {
+        setStatusFromResult(result, L"Stop failed.");
+        return;
+      }
+      auto recordings = reashoot::desktop::parseRecordingDescriptors(result.output);
+      if (!recordings.empty()) {
+        phoneVideos_.insert(phoneVideos_.begin(), recordings.front());
+        renderPhoneVideos();
+        setStatus(L"Recording stopped. Use Videos on iPhone or the API to download or delete it.");
+      } else {
+        setStatus(L"Recording stopped, but no recording descriptor was returned.");
+      }
+    }));
+    return accepted("Recording stop requested.");
+  }
+  if (request.method == "POST" && request.path == "/v1/recording/stop-download") {
+    if (!recording_) {
+      return desktop::errorResponse(409, "not_recording", "No recording is active.");
+    }
+    if (busy()) {
+      return desktop::errorResponse(409, "busy", "ReaShoot is busy with another operation.");
+    }
+    std::string downloadDirectory;
+    if (!request.body.empty()) {
+      try {
+        downloadDirectory = core::parseJson(request.body).stringValue("downloadDirectory");
+      } catch (const std::exception &error) {
+        return desktop::errorResponse(400, "invalid_json", error.what());
+      }
+    }
+    reashoot::desktop::IntegrationOperation operation = stopRecordingAndDownloadForIntegration(downloadDirectory);
+    core::JsonValue::Object object;
+    object.emplace("ok", core::JsonValue(true));
+    object.emplace("accepted", core::JsonValue(true));
+    object.emplace("operation", desktop::operationToJson(operation));
+    return desktop::jsonResponse(202, std::move(object));
+  }
+  if (request.method == "GET" && request.path == "/v1/recordings") {
+    core::JsonValue::Object object;
+    object.emplace("recordings", desktop::recordingsToJson(settings(), phoneVideos_));
+    return desktop::okResponse(std::move(object));
+  }
+  if (request.method == "POST" && request.path == "/v1/recordings/refresh") {
+    if (busy()) {
+      return desktop::errorResponse(409, "busy", "ReaShoot is busy with another operation.");
+    }
+    refreshPhoneVideos();
+    return accepted("Recording refresh requested.");
+  }
+
+  const std::string operationsPrefix = "/v1/operations/";
+  if (request.method == "GET" && request.path.rfind(operationsPrefix, 0) == 0) {
+    const std::string operationID = request.path.substr(operationsPrefix.size());
+    if (operationID.empty() || operationID != integrationOperation_.id) {
+      return desktop::errorResponse(404, "not_found", "Operation not found.");
+    }
+    core::JsonValue::Object object;
+    object.emplace("operation", desktop::operationToJson(integrationOperation_));
+    return desktop::okResponse(std::move(object));
+  }
+
+  const std::string recordingsPrefix = "/v1/recordings/";
+  if (request.path.rfind(recordingsPrefix, 0) == 0) {
+    std::string remainder = request.path.substr(recordingsPrefix.size());
+    std::string action;
+    const size_t slash = remainder.find('/');
+    if (slash != std::string::npos) {
+      action = remainder.substr(slash + 1);
+      remainder = remainder.substr(0, slash);
+    }
+    if (remainder.empty()) {
+      return desktop::errorResponse(404, "not_found", "Recording ID is missing.");
+    }
+    if (request.method == "DELETE" || (request.method == "POST" && action == "download")) {
+      if (busy()) {
+        return desktop::errorResponse(409, "busy", "ReaShoot is busy with another operation.");
+      }
+    }
+    auto found = std::find_if(phoneVideos_.begin(), phoneVideos_.end(), [&](const auto &recording) {
+      return recording.id == remainder;
+    });
+    if (request.method == "DELETE" && action.empty()) {
+      deleteRecording(remainder);
+      return accepted("Recording delete requested.");
+    }
+    if (request.method == "POST" && action == "download") {
+      if (found == phoneVideos_.end()) {
+        return desktop::errorResponse(404, "not_found", "Recording is not in the current phone video list. Refresh recordings first.");
+      }
+      downloadRecording(*found);
+      return accepted("Recording download requested.");
+    }
+  }
+
+  return desktop::errorResponse(404, "not_found", "Unknown ReaShoot desktop API endpoint.");
 }
 
 // ---------------------------------------------------------------------------
@@ -1524,6 +1895,65 @@ void ReaShootApp::stopRecording() {
   }));
 }
 
+reashoot::desktop::IntegrationOperation ReaShootApp::stopRecordingAndDownloadForIntegration(const std::string &downloadDirectory) {
+  reashoot::desktop::IntegrationOperation operation = beginIntegrationOperation("stop-download", "Stopping recording.");
+  if (!requireHostAndToken()) {
+    failIntegrationOperation("No paired iPhone is configured.");
+    return integrationOperation_;
+  }
+  reashoot::core::RemoteCameraSettings s = settings();
+  std::string resolvedDirectory = downloadDirectory.empty() ? reashoot::desktop::defaultDownloadDirectory() : downloadDirectory;
+  setStatus(L"Stopping iPhone recording...");
+  activeCommand_ = camera_->stop(s, onMain([this, s, resolvedDirectory](reashoot::core::CommandResult stopResult) {
+    recording_ = false;
+    updateButtons();
+    if (stopResult.exitCode != 0) {
+      const std::string message = stopResult.errorMessage.empty() ? stopResult.output : stopResult.errorMessage;
+      failIntegrationOperation(message.empty() ? "Stop failed." : message);
+      setStatusFromResult(stopResult, L"Stop failed.");
+      return;
+    }
+    auto recordings = reashoot::desktop::parseRecordingDescriptors(stopResult.output);
+    if (recordings.empty()) {
+      failIntegrationOperation("Recording stopped, but no recording descriptor was returned.");
+      setStatus(L"Recording stopped, but no recording descriptor was returned.");
+      return;
+    }
+    const reashoot::core::RemoteRecordingDescriptor recording = recordings.front();
+    integrationOperation_.recording = recording;
+    integrationOperation_.message = "Downloading recording.";
+    setStatus(L"Downloading iPhone video...");
+    activeCommand_ = camera_->downloadRecording(
+        s,
+        recording,
+        resolvedDirectory,
+        onMainProgress([this](std::string line) {
+          const std::string status = reashoot::core::progressStatusText(line);
+          if (!status.empty()) {
+            integrationOperation_.message = status;
+            setStatus(widen(status));
+          }
+        }),
+        onMain([this, recording](reashoot::core::CommandResult downloadResult) {
+          if (downloadResult.exitCode != 0) {
+            const std::string message = downloadResult.errorMessage.empty() ? downloadResult.output : downloadResult.errorMessage;
+            failIntegrationOperation(message.empty() ? "Download failed." : message);
+            setStatusFromResult(downloadResult, L"Download failed.");
+            return;
+          }
+          const std::string path = reashoot::core::parseDownloadedPath(downloadResult.output);
+          if (path.empty()) {
+            failIntegrationOperation("Download completed, but no local path was reported.");
+            setStatus(L"Download completed, but no local path was reported.");
+            return;
+          }
+          finishIntegrationOperation(recording, path, "Downloaded recording.");
+          setStatus(widen("Downloaded " + path));
+        }));
+  }));
+  return operation;
+}
+
 void ReaShootApp::promptForRecording(const reashoot::core::RemoteRecordingDescriptor &recording) {
   const std::wstring text = L"Download or delete " + widen(recording.filename) + L"?\n\nYes = Download, No = Delete.";
   const int response = MessageBoxW(main_, text.c_str(), L"Recording stopped", MB_YESNOCANCEL | MB_ICONQUESTION);
@@ -1788,7 +2218,7 @@ LRESULT ReaShootApp::handleMain(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
           saveDefaults();
           ShowWindow(setup_, SW_SHOW);
           if (!setupSized_) {
-            sizeClientScaled(setup_, 780, 340);
+            sizeClientScaled(setup_, 780, 400);
             setupSized_ = true;
           }
           SetForegroundWindow(setup_);
@@ -1802,6 +2232,10 @@ LRESULT ReaShootApp::handleMain(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
       if (previewClient_) {
         previewClient_->stop();
       }
+      if (integrationServer_) {
+        integrationServer_->stop();
+      }
+      reashoot::app::win32::removeIntegrationRegistration();
       PostQuitMessage(0);
       return 0;
   }
@@ -1849,7 +2283,7 @@ LRESULT ReaShootApp::handleSetup(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
     case WM_GETMINMAXINFO: {
       auto *info = reinterpret_cast<MINMAXINFO *>(lParam);
       info->ptMinTrackSize.x = scaled(hwnd, 620);
-      info->ptMinTrackSize.y = scaled(hwnd, 320);
+      info->ptMinTrackSize.y = scaled(hwnd, 380);
       return 0;
     }
     case WM_DPICHANGED: {
@@ -1902,6 +2336,23 @@ LRESULT ReaShootApp::handleSetup(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         case IDC_CMB_LOOK:
           if (HIWORD(wParam) == CBN_SELCHANGE) {
             profileSelectionChanged();
+          }
+          return 0;
+        case IDC_CHK_ENCODE_LOOK:
+          if (HIWORD(wParam) == BN_CLICKED) {
+            profileSelectionChanged();
+          }
+          return 0;
+        case IDC_CHK_ALWAYS_TOP:
+          if (HIWORD(wParam) == BN_CLICKED) {
+            applyAlwaysOnTop();
+            saveDefaults();
+          }
+          return 0;
+        case IDC_CHK_MIRROR_PREVIEW:
+          if (HIWORD(wParam) == BN_CLICKED) {
+            applyMirrorPreview();
+            saveDefaults();
           }
           return 0;
       }

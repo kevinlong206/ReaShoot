@@ -4,7 +4,7 @@ Guidance for future agents working in this project.
 
 ## Project status
 
-This is the consolidated companion iPhone app for ReaShoot. It records iPhone video controlled by the standalone ReaShoot desktop app over the local Wi-Fi/Bonjour network. The legacy REAPER extension uses the same iPhone app and protocol, but the desktop app is the primary product direction on this branch.
+This is the consolidated companion iPhone app for ReaShoot. It records iPhone video controlled by the standalone ReaShoot desktop app over the local Wi-Fi/Bonjour network. REAPER extensions should control recording through the desktop app's local API, not by adding new direct iPhone-control paths.
 
 This directory is the source of truth for the iPhone app. Do not use or recreate old external development copies.
 
@@ -153,7 +153,9 @@ Expected result: a `.mov` appears in `test-downloads`, and the CLI prints `downl
 
 Add `--progress` to `swift run reashoot-mac stop ...` when testing progress. It emits `encode percent=...` during on-phone look preparation and `progress bytes=... total=... percent=...` lines during the HTTP download.
 
-For the standalone desktop app and legacy REAPER prompted stop flow, use `stop-only` to get raw pending recording metadata immediately, then either `download-recording --progress` or `delete-recording`. `download-recording` prepares/encodes non-natural looks only after Download is chosen. If a download fails before acknowledgement, the recording remains pending on the phone; use `list-recordings` plus `download-recording --progress` to restore it, `delete-recording` to remove it, or delete it from the iPhone app's Recordings section.
+For prompted desktop stop flows, use `stop-only` to get raw pending recording metadata immediately, then either `download-recording --progress` or `delete-recording`. REAPER integrations should instead call the desktop API stop/download handoff so transfer acknowledgement remains desktop-app-owned. `download-recording` prepares/encodes non-natural looks only after Download is chosen unless `encodeLookAtRecordTime` was enabled for the capture profile. If a download fails before acknowledgement, the recording remains pending on the phone; use `list-recordings` plus `download-recording --progress` to restore it, `delete-recording` to remove it, or delete it from the iPhone app's Recordings section.
+
+`encodeLookAtRecordTime` is opt-in/default-off. When enabled with a non-natural look, the iPhone records through the AVAssetWriter record-time look path with embedded camera audio and marks the recording's `renderedLook` as the selected look, so download preparation must not export the look a second time. Keep this path using recorded-file orientation mapping; do not reuse the live-preview-only landscape mapping from `PreviewFrameStore.normalizedImage`.
 
 ## H.264 preview notes
 

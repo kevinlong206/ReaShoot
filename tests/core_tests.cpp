@@ -106,6 +106,12 @@ void testCaptureProfileArguments() {
   assert(args[15] == "natural");
 }
 
+void testCaptureProfileEncodeLookAtRecordTimeArgument() {
+  CaptureProfile profile{"tok", "4K", "30", "portrait", "9:16", "wide", "1.0", "warmVintage", true};
+  std::vector<std::string> args = captureProfileArguments(profile);
+  assert(std::find(args.begin(), args.end(), "--encode-look-at-record-time") != args.end());
+}
+
 void testRemoteCameraArguments() {
   RemoteCameraSettings settings;
   settings.host = "iphone.local";
@@ -309,18 +315,21 @@ void testDesktopIntegrationApiModels() {
   settings.resolution = "1080p";
   settings.fps = "60";
   settings.look = "warmVintage";
+  settings.encodeLookAtRecordTime = true;
 
   JsonValue profile = profileToJson(settings);
   assert(profile.stringValue("resolution") == "1080p");
   assert(profile.stringValue("fps") == "60");
   assert(profile.stringValue("look") == "warmVintage");
+  assert(profile.boolValue("encodeLookAtRecordTime", false));
 
   RemoteCameraSettings updated = settings;
-  applyProfileJson(updated, parseJson(R"({"resolution":"4K","fps":"30","zoom":"2.0"})"));
+  applyProfileJson(updated, parseJson(R"({"resolution":"4K","fps":"30","zoom":"2.0","encodeLookAtRecordTime":false})"));
   assert(updated.resolution == "4K");
   assert(updated.fps == "30");
   assert(updated.zoom == "2.0");
   assert(updated.look == "warmVintage");
+  assert(!updated.encodeLookAtRecordTime);
 
   RemoteRecordingDescriptor recording;
   recording.id = "clip-2026-07-05T12-34-56Z";
@@ -331,6 +340,19 @@ void testDesktopIntegrationApiModels() {
   assert(recordingJson.stringValue("filename") == "take.mov");
   assert(recordingJson.stringValue("timestamp") == "2026-07-05T12:34:56Z");
   assert(recordingJson.stringValue("thumbnailUrl") == "http://iphone.local:8798/recordings/clip/thumbnail?token=phone-token");
+
+  IntegrationOperation operation;
+  operation.id = "op-1";
+  operation.type = "stop-download";
+  operation.state = "succeeded";
+  operation.message = "Downloaded.";
+  operation.downloadedPath = "/tmp/take.mov";
+  operation.recording = recording;
+  JsonValue operationJson = operationToJson(operation);
+  assert(operationJson.stringValue("id") == "op-1");
+  assert(operationJson.stringValue("state") == "succeeded");
+  assert(operationJson.stringValue("downloadedPath") == "/tmp/take.mov");
+  assert(operationJson.find("recording") != nullptr);
 
   IntegrationStatus status;
   status.paired = true;
@@ -373,12 +395,15 @@ void testControlProtocol() {
   command.captureProfile.resolution = "1080p";
   command.captureProfile.fps = 30;
   command.captureProfile.look = "warmVintage";
+  command.captureProfile.encodeLookAtRecordTime = true;
   const std::string commandJson = encodeCommandJson(command);
   JsonValue encoded = parseJson(commandJson);
   assert(encoded.stringValue("type") == "configureCapture");
   assert(encoded.stringValue("token") == "secret");
   assert(encoded.find("metadata")->stringValue("clientName") == "Test Mac");
   assert(encoded.find("captureProfile")->stringValue("look") == "warmVintage");
+  assert(encoded.find("captureProfile")->boolValue("encodeLookAtRecordTime"));
+  assert(captureProfileFromJson(*encoded.find("captureProfile")).encodeLookAtRecordTime);
 
   const std::string eventJson = R"({
     "type":"recordingsListed",
@@ -470,6 +495,7 @@ int main() {
   testFriendlyStatusText();
   testReaShootControllerState();
   testCaptureProfileArguments();
+  testCaptureProfileEncodeLookAtRecordTimeArgument();
   testRemoteCameraArguments();
   testLogSanitization();
   testDesktopWorkflowParsing();

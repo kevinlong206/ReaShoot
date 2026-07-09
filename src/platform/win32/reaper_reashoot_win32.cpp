@@ -100,15 +100,11 @@ constexpr const char *kIPhoneLookKey = "iphone_look";
 constexpr const char *kVideoTrackName = "ReaShoot";
 constexpr int kRecordBit = 4;
 constexpr const char *kDockIdent = "reashoot_preview";
-constexpr auto kPlaybackMissGrace = std::chrono::milliseconds(500);
 
 HINSTANCE g_instance = nullptr;
 reaper_plugin_info_t *g_reaper = nullptr;
 int g_videoEnabledCommand = 0;
-int g_floatPreviewCommand = 0;
 int g_alignSelectedCommand = 0;
-int g_restoreIPhoneCommand = 0;
-int g_deleteAllIPhoneCommand = 0;
 int g_toggleFollowCommand = 0;
 int g_previousPlayState = 0;
 HWND g_panel = nullptr;
@@ -116,6 +112,8 @@ bool g_panelVisible = false;
 bool g_previewFloating = true;
 bool g_panelDocked = false;
 bool g_activeTransportRecording = false;
+bool g_transportStartInFlight = false;
+bool g_transportStopRequested = false;
 bool g_pendingInsert = false;
 std::string g_pendingInsertPath;
 double g_pendingInsertPosition = 0.0;
@@ -396,6 +394,7 @@ void startRemotePreview();
 void stopPlaybackAndShowLive();
 void togglePreviewDockMode();
 bool isVolatilePreviewStatus(const std::string &status);
+void finishRecording();
 
 void persistSettings() {
   if (g_panel) {
@@ -1433,54 +1432,80 @@ void stopPlaybackAndShowLive() {
 }
 
 void beginRecording() {
-  if (g_activeTransportRecording || g_iPhoneToken.empty() || g_iPhoneHost.empty()) {
+  if (g_activeTransportRecording) {
     return;
   }
   g_activeTransportRecording = true;
+  g_transportStartInFlight = true;
+  g_transportStopRequested = false;
   g_recordProject = reashoot::reaper::currentProject();
   g_recordStartPosition = GetCursorPositionEx ? GetCursorPositionEx(g_recordProject) : 0.0;
   ensureVideoTrackReady(g_recordProject);
+  setPanelStatus("Starting recording through ReaShoot.exe");
   updatePanel();
-  reashoot::core::RemoteCameraSettings settings = cameraSettings();
-  const std::string sessionID = "reaper-" + reashoot::core::timestampString();
-  runHelperOnWorker("start",
-                    reashoot::core::commandArguments(settings, "start", reashoot::core::startArguments(settings, sessionID)),
-                    [](reashoot::core::CommandResult result) {
-                      if (result.exitCode != 0) {
-                        showError(resultError(result, "iPhone start failed."));
-                      }
-                    });
+  runHelperOnWorker("desktop-start-recording", {}, [](reashoot::core::CommandResult result) {
+    if (result.exitCode != 0) {
+      g_activeTransportRecording = false;
+      g_transportStartInFlight = false;
+      g_transportStopRequested = false;
+      updatePanel();
+      showError(resultError(result, "ReaShoot.exe recording start failed."));
+      return;
+    }
+    g_transportStartInFlight = false;
+    if (g_recordProject && GetPlayPositionEx) {
+      g_recordStartPosition = GetPlayPositionEx(g_recordProject);
+    }
+    setPanelStatus("Recording through ReaShoot.exe");
+    updatePanel();
+    if (g_transportStopRequested) {
+      g_transportStopRequested = false;
+      finishRecording();
+    }
+  });
 }
 
 void finishRecording() {
   if (!g_activeTransportRecording) {
     return;
   }
-  g_activeTransportRecording = false;
+  if (g_transportStartInFlight) {
+    g_transportStopRequested = true;
+    setPanelStatus("Waiting for ReaShoot.exe recording to start");
+    return;
+  }
+  const double insertPosition = g_recordStartPosition < 0.0 ? 0.0 : g_recordStartPosition;
+  ReaProject *project = g_recordProject ? g_recordProject : reashoot::reaper::currentProject();
+  const std::string downloadDirectory = captureOutputDirectory(project);
+  setPanelStatus("Stopping recording through ReaShoot.exe");
   updatePanel();
-  reashoot::core::RemoteCameraSettings settings = cameraSettings();
-  g_stopHandle = remoteCameraController().stop(settings, [](reashoot::core::CommandResult result) {
-    postToMain([result = std::move(result)]() mutable {
-      if (result.exitCode != 0) {
-        showError(result.errorMessage.empty() ? result.output : result.errorMessage);
-        return;
-      }
-      std::vector<reashoot::core::FieldMap> recordings = reashoot::core::parseRecordings(result.output);
-      if (recordings.empty()) {
-        showError("The iPhone stopped recording, but no recording metadata was returned.");
-        return;
-      }
-      reashoot::core::RemoteRecordingDescriptor recording =
-          reashoot::core::recordingDescriptorFromFields(recordings.front());
-      const int choice = MessageBoxA(g_panel,
-                                     ("Download " + recording.filename + " into the REAPER project?").c_str(),
-                                     "ReaShoot",
-                                     MB_YESNO | MB_ICONQUESTION);
-      if (choice == IDYES) {
-        downloadRecordingAt(recording, g_recordProject, g_recordStartPosition);
-      }
-    });
-  });
+  g_stopHandle = helperProcess().runAsync("desktop-stop-recording-download",
+                                          {"--download-dir", downloadDirectory, "--progress"},
+                                          [](const std::string &line) {
+                                            const std::string status = reashoot::core::progressStatusText(line);
+                                            if (!status.empty()) {
+                                              postToMain([status]() { setPanelStatus(status); });
+                                            }
+                                          },
+                                          [project, insertPosition](reashoot::core::CommandResult result) {
+                                            postToMain([project, insertPosition, result = std::move(result)]() mutable {
+                                              g_activeTransportRecording = false;
+                                              updatePanel();
+                                              if (result.exitCode != 0) {
+                                                showError(resultError(result, "ReaShoot.exe recording stop/download failed."));
+                                                return;
+                                              }
+                                              const std::string path = reashoot::core::parseDownloadedPath(result.output);
+                                              if (path.empty()) {
+                                                showError("ReaShoot.exe downloaded the recording, but did not report a local file path.");
+                                                return;
+                                              }
+                                              g_pendingInsertPath = path;
+                                              g_pendingInsertPosition = insertPosition;
+                                              g_pendingInsertProject = project;
+                                              g_pendingInsert = true;
+                                            });
+                                          });
 }
 
 void pollTransport() {
@@ -1491,29 +1516,10 @@ void pollTransport() {
   const int playState = GetPlayStateEx(project);
   const bool wasRecording = (g_previousPlayState & kRecordBit) != 0;
   const bool isRecording = (playState & kRecordBit) != 0;
-  const bool isPlaying = (playState & 1) != 0;
   if (!wasRecording && isRecording) {
     beginRecording();
   } else if (wasRecording && !isRecording) {
     finishRecording();
-  }
-  if (!isRecording && isPlaying && GetPlayPositionEx) {
-    const double position = GetPlayPositionEx(project);
-    PlaybackVideo video = findPlaybackVideoAtPosition(project, position);
-    if (video.found) {
-      const auto now = std::chrono::steady_clock::now();
-      g_transportPlaybackActive = true;
-      g_lastPlaybackVideoHit = now;
-      updatePlaybackWithVideo(video, position);
-    } else if (!showingPlayback()) {
-      return;
-    }
-  } else if (!isRecording &&
-             (!showingPlayback() ||
-              g_lastPlaybackVideoHit.time_since_epoch().count() == 0 ||
-              std::chrono::steady_clock::now() - g_lastPlaybackVideoHit > kPlaybackMissGrace)) {
-    g_transportPlaybackActive = false;
-    stopPlaybackAndShowLive();
   }
   g_previousPlayState = playState;
 }
@@ -1522,12 +1528,10 @@ void setVideoEnabled(bool enabled) {
   g_extensionController.setVideoEnabled(enabled);
   if (enabled) {
     ensureVideoTrackReady(reashoot::reaper::currentProject());
-    showPanel(true);
-    startRemotePreview();
+    setPanelStatus("ReaShoot enabled. Use ReaShoot.exe for setup and preview.");
   } else {
     finishRecording();
-    stopPlaybackAndShowLive();
-    stopRemotePreview();
+    setPanelStatus("ReaShoot disabled.");
   }
   updatePanel();
   persistSettings();
@@ -1539,20 +1543,8 @@ bool hookCommand2(KbdSectionInfo *, int command, int, int, int, HWND) {
     setVideoEnabled(!g_extensionController.videoEnabled());
     return true;
   }
-  if (command == g_floatPreviewCommand) {
-    togglePreviewDockMode();
-    return true;
-  }
   if (command == g_alignSelectedCommand) {
     showError("Manual video alignment is not implemented in the Windows preview build yet.");
-    return true;
-  }
-  if (command == g_restoreIPhoneCommand) {
-    restorePendingRecording();
-    return true;
-  }
-  if (command == g_deleteAllIPhoneCommand) {
-    deleteAllPendingRecordings();
     return true;
   }
   if (command == g_toggleFollowCommand) {
@@ -1613,20 +1605,12 @@ custom_action_register_t action(const char *id, const char *name) {
 
 bool registerActions(reaper_plugin_info_t *rec) {
   custom_action_register_t videoEnabledAction = action("KLONG_REASHOOT_ENABLE", "ReaShoot: Enable ReaShoot");
-  custom_action_register_t floatPreviewAction = action("KLONG_REASHOOT_FLOAT_PREVIEW", "ReaShoot: Float/Dock Preview");
   custom_action_register_t alignSelectedAction = action("KLONG_REASHOOT_ALIGN_SELECTED", "ReaShoot: Align Selected Video Item");
-  custom_action_register_t restoreIPhoneAction = action("KLONG_REASHOOT_RESTORE_IPHONE", "ReaShoot: Restore Pending iPhone Recording");
-  custom_action_register_t deleteAllIPhoneAction = action("KLONG_REASHOOT_DELETE_ALL_IPHONE", "ReaShoot: Delete All Pending iPhone Recordings");
   custom_action_register_t toggleFollowAction = action("KLONG_REASHOOT_TOGGLE_FOLLOW", "ReaShoot: Enable/Disable Transport Follow");
   g_videoEnabledCommand = rec->Register("custom_action", &videoEnabledAction);
-  g_floatPreviewCommand = rec->Register("custom_action", &floatPreviewAction);
   g_alignSelectedCommand = rec->Register("custom_action", &alignSelectedAction);
-  g_restoreIPhoneCommand = rec->Register("custom_action", &restoreIPhoneAction);
-  g_deleteAllIPhoneCommand = rec->Register("custom_action", &deleteAllIPhoneAction);
   g_toggleFollowCommand = rec->Register("custom_action", &toggleFollowAction);
-  return g_videoEnabledCommand != 0 && g_floatPreviewCommand != 0 &&
-         g_alignSelectedCommand != 0 && g_restoreIPhoneCommand != 0 && g_deleteAllIPhoneCommand != 0 &&
-         g_toggleFollowCommand != 0 &&
+  return g_videoEnabledCommand != 0 && g_alignSelectedCommand != 0 && g_toggleFollowCommand != 0 &&
          rec->Register("hookcommand2", reinterpret_cast<void *>(hookCommand2)) &&
          rec->Register("toggleaction", reinterpret_cast<void *>(toggleActionHook)) &&
          rec->Register("timer", reinterpret_cast<void *>(timerPoll)) &&

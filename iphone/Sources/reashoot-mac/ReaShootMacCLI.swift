@@ -41,7 +41,8 @@ struct ReaShootMacCLI {
                 aspectRatio: args.value(after: "--aspect") ?? "9:16",
                 lens: args.value(after: "--lens") ?? "wide",
                 zoomFactor: args.double(after: "--zoom", default: 1.0),
-                look: args.value(after: "--look") ?? "natural"
+                look: args.value(after: "--look") ?? "natural",
+                encodeLookAtRecordTime: args.hasFlag("--encode-look-at-record-time")
             )
             let event = try await send(args, type: .configureCapture) {
                 ControlCommand(type: .configureCapture, token: required(args.value(after: "--token"), "--token"), captureProfile: profile)
@@ -206,7 +207,7 @@ struct ReaShootMacCLI {
         reashoot-mac commands:
           discover [--timeout 3]
           pair --host HOST [--port 8787] [--client-name NAME]
-          configure --host HOST [--port 8787] --token TOKEN [--resolution 4K] [--fps 30] [--orientation auto] [--aspect 9:16] [--lens wide] [--zoom 1.0] [--look natural]
+          configure --host HOST [--port 8787] --token TOKEN [--resolution 4K] [--fps 30] [--orientation auto] [--aspect 9:16] [--lens wide] [--zoom 1.0] [--look natural] [--encode-look-at-record-time]
           start --host HOST [--port 8787] --token TOKEN [--session SESSION]
           stop --host HOST [--port 8787] [--http-port 8788] --token TOKEN [--download-dir DIR] [--progress]
           stop-only --host HOST [--port 8787] --token TOKEN

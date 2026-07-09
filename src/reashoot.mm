@@ -146,12 +146,7 @@ struct ActionRename {
 
 constexpr ActionRename kActionRenames[] = {
     {"KLONG_VIDEO_RECORDER_ENABLE", "KLONG_REASHOOT_ENABLE"},
-    {"KLONG_VIDEO_RECORDER_SHOW_PREVIEW", "KLONG_REASHOOT_ENABLE"},
-    {"KLONG_REASHOOT_SHOW_PREVIEW", "KLONG_REASHOOT_ENABLE"},
-    {"KLONG_VIDEO_RECORDER_FLOAT_PREVIEW", "KLONG_REASHOOT_FLOAT_PREVIEW"},
     {"KLONG_VIDEO_RECORDER_ALIGN_SELECTED", "KLONG_REASHOOT_ALIGN_SELECTED"},
-    {"KLONG_VIDEO_RECORDER_RESTORE_IPHONE", "KLONG_REASHOOT_RESTORE_IPHONE"},
-    {"KLONG_VIDEO_RECORDER_DELETE_ALL_IPHONE", "KLONG_REASHOOT_DELETE_ALL_IPHONE"},
     {"KLONG_VIDEO_RECORDER_TOGGLE_FOLLOW", "KLONG_REASHOOT_TOGGLE_FOLLOW"},
 };
 
@@ -265,13 +260,8 @@ reashoot::core::ModalPrompts &modalPrompts() {
 
 reaper_plugin_info_t *g_reaper = nullptr;
 int g_videoEnabledCommand = 0;
-int g_floatPreviewCommand = 0;
 int g_alignSelectedCommand = 0;
-int g_restoreIPhoneCommand = 0;
-int g_deleteAllIPhoneCommand = 0;
 int g_toggleFollowCommand = 0;
-int g_toggleDesktopApiCommand = 0;
-int g_swellPanelPrototypeCommand = 0;
 int g_previousPlayState = 0;
 HWND g_swellPanelPrototype = nullptr;
 bool g_swellPanelPrototypeDocked = false;
@@ -281,6 +271,8 @@ bool g_desktopApiEnabled = false;
 reashoot::core::ReaShootController g_extensionController;
 bool g_previewFloating = true;
 bool g_activeTransportRecording = false;
+bool g_transportStartInFlight = false;
+bool g_transportStopRequested = false;
 bool g_pendingInsert = false;
 bool g_pendingAlignment = false;
 std::string g_iPhoneHost;
@@ -304,14 +296,6 @@ MediaItem *g_pendingAlignmentItem = nullptr;
 double g_recordStartPosition = 0.0;
 int g_pendingAlignmentAttempts = 0;
 std::time_t g_nextAlignmentAttemptTime = 0;
-
-struct PlaybackVideo {
-  bool found = false;
-  std::string path;
-  double itemStart = 0.0;
-  double itemEnd = 0.0;
-  double sourceOffset = 0.0;
-};
 
 struct AlignmentResult {
   bool aligned = false;
@@ -434,58 +418,6 @@ MediaTrack *ensureVideoTrackReady(ReaProject *project, bool useFreeItemPositioni
   }
   reashoot::reaper::refreshArrangeTimeline();
   return track;
-}
-
-PlaybackVideo findPlaybackVideoAtPosition(ReaProject *project, double position) {
-  PlaybackVideo result;
-  if (!project || !CountTrackMediaItems || !GetTrackMediaItem || !GetMediaItemInfo_Value ||
-      !GetActiveTake || !GetMediaItemTake_Source || !GetMediaSourceFileName) {
-    return result;
-  }
-
-  MediaTrack *track = findVideoTrack(project);
-  if (!track) {
-    return result;
-  }
-
-  const int itemCount = CountTrackMediaItems(track);
-  for (int i = 0; i < itemCount; ++i) {
-    MediaItem *item = GetTrackMediaItem(track, i);
-    if (!item) {
-      continue;
-    }
-
-    const double itemStart = GetMediaItemInfo_Value(item, "D_POSITION");
-    const double itemLength = GetMediaItemInfo_Value(item, "D_LENGTH");
-    const double itemEnd = itemStart + itemLength;
-    if (position < itemStart || position >= itemEnd) {
-      continue;
-    }
-
-    MediaItem_Take *take = GetActiveTake(item);
-    PCM_source *source = take ? GetMediaItemTake_Source(take) : nullptr;
-    if (!source) {
-      continue;
-    }
-
-    char filePath[4096] = {};
-    GetMediaSourceFileName(source, filePath, sizeof(filePath));
-    if (filePath[0] == '\0') {
-      continue;
-    }
-    if (!reashoot::core::isVideoPath(filePath)) {
-      continue;
-    }
-
-    result.found = true;
-    result.path = filePath;
-    result.itemStart = itemStart;
-    result.itemEnd = itemEnd;
-    result.sourceOffset = GetMediaItemTakeInfo_Value ? GetMediaItemTakeInfo_Value(take, "D_STARTOFFS") : 0.0;
-    return result;
-  }
-
-  return result;
 }
 
 MediaItem *insertMediaItem(MediaTrack *track,
@@ -1189,7 +1121,6 @@ bool insertRecordedMedia(const std::string &path, double position, std::string &
 void updateFollowStatusText();
 void refreshToolbarState();
 void stopTransportRecording();
-bool toggleSwellPanelPrototype();
 
 std::string followStatusText() {
   return g_extensionController.followStatusText();
@@ -1205,12 +1136,6 @@ void setFollowEnabled(bool enabled) {
   syncExtensionStateGlobals();
   reashoot::reaper::setExtState(kExtStateSection, kFollowEnabledKey, enabled ? "1" : "0", true);
   updateFollowStatusText();
-  refreshToolbarState();
-}
-
-void setDesktopApiEnabled(bool enabled) {
-  g_desktopApiEnabled = enabled;
-  reashoot::reaper::setExtState(kExtStateSection, kDesktopApiEnabledKey, enabled ? "1" : "0", true);
   refreshToolbarState();
 }
 
@@ -2639,7 +2564,6 @@ void updateFollowStatusText() {
 void refreshToolbarState() {
   reashoot::reaper::refreshToolbar(g_videoEnabledCommand);
   reashoot::reaper::refreshToolbar(g_toggleFollowCommand);
-  reashoot::reaper::refreshToolbar(g_toggleDesktopApiCommand);
 }
 
 void setVideoEnabled(bool enabled) {
@@ -2651,14 +2575,12 @@ void setVideoEnabled(bool enabled) {
   syncExtensionStateGlobals();
   if (enabled) {
     ensureVideoTrackReady(currentProject(), false);
-    [recorder() showPreview];
+    [recorder() setStatus:@"ReaShoot enabled. Use ReaShoot.app for setup and preview."];
   } else {
-    if (recorder().isRecording) {
+    if (g_activeTransportRecording) {
       stopTransportRecording();
     }
-    [recorder() stopAllPreviewActivity];
-    [recorder() hideDockedPreview];
-    [recorder() hideFloatingPreview];
+    [recorder() setStatus:@"ReaShoot disabled."];
   }
 
   updateFollowStatusText();
@@ -2670,34 +2592,51 @@ bool isRecordingState(int playState) {
 }
 
 void startTransportRecording(ReaProject *project) {
-  if (g_activeTransportRecording || recorder().isRecording) {
+  if (g_activeTransportRecording) {
     return;
   }
 
   g_recordProject = project;
+  g_transportStartInFlight = true;
+  g_transportStopRequested = false;
   ensureVideoTrackReady(project, false);
   g_recordStartPosition = reashoot::reaper::cursorPosition(project);
   if (g_recordStartPosition < 0.0 && GetPlayPositionEx) {
     g_recordStartPosition = GetPlayPositionEx(project);
   }
 
-  const std::string outputPath = captureOutputPath(project);
-  NSError *error = nil;
-  if (![recorder() startRecordingToPath:outputPath
-                        startCompletion:^{
-                          if (g_recordProject && GetPlayPositionEx) {
-                            g_recordStartPosition = GetPlayPositionEx(g_recordProject);
-                          }
-                        }
-                                   error:&error]) {
-    showError(error.localizedDescription.UTF8String ?: "Unable to start video recording.");
-    return;
-  }
   g_activeTransportRecording = true;
+  [recorder() setRecordingVisualState:YES];
+  [recorder() setStatus:@"Starting recording through ReaShoot.app"];
+  [recorder() runReaShootCommandAsync:@"desktop-start-recording" extraArguments:@[] completion:^(NSString *output, NSError *error) {
+    (void)output;
+    if (error) {
+      g_activeTransportRecording = false;
+      g_transportStartInFlight = false;
+      g_transportStopRequested = false;
+      [recorder() setRecordingVisualState:NO];
+      showError(std::string("ReaShoot.app recording start failed:\n") + (error.localizedDescription.UTF8String ?: "Unknown desktop API error."));
+      return;
+    }
+    g_transportStartInFlight = false;
+    if (g_recordProject && GetPlayPositionEx) {
+      g_recordStartPosition = GetPlayPositionEx(g_recordProject);
+    }
+    [recorder() setStatus:@"Recording through ReaShoot.app"];
+    if (g_transportStopRequested) {
+      g_transportStopRequested = false;
+      stopTransportRecording();
+    }
+  }];
 }
 
 void stopTransportRecording() {
-  if (!g_activeTransportRecording && !recorder().isRecording) {
+  if (!g_activeTransportRecording) {
+    return;
+  }
+  if (g_transportStartInFlight) {
+    g_transportStopRequested = true;
+    [recorder() setStatus:@"Waiting for ReaShoot.app recording to start"];
     return;
   }
 
@@ -2705,16 +2644,30 @@ void stopTransportRecording() {
   if (insertPosition < 0.0) {
     insertPosition = 0.0;
   }
-  [recorder() stopRecordingWithCompletion:^(NSString *path, NSError *error) {
+  std::string outputPath = captureOutputPath(g_recordProject ? g_recordProject : currentProject());
+  std::string directory = reashoot::core::directoryName(outputPath);
+  if (directory.empty()) {
+    directory = NSHomeDirectory().UTF8String ?: "";
+  }
+  NSArray<NSString *> *arguments = @[ @"--download-dir", stringFromStd(directory), @"--progress" ];
+  [recorder() setStatus:@"Stopping recording through ReaShoot.app"];
+  [recorder() runReaShootCommandAsync:@"desktop-stop-recording-download" extraArguments:arguments outputHandler:^(NSString *line) {
+    [recorder() handleReaShootProgressLine:line];
+  } completion:^(NSString *output, NSError *error) {
+    [recorder() setRecordingVisualState:NO];
     if (error) {
-      showError(std::string("Video recording failed:\n") + (error.localizedDescription.UTF8String ?: "Unknown AVFoundation error."));
+      showError(std::string("ReaShoot.app recording stop/download failed:\n") + (error.localizedDescription.UTF8String ?: "Unknown desktop API error."));
       g_activeTransportRecording = false;
       return;
     }
-    g_pendingInsertPath = path.UTF8String ?: "";
+    std::string path = reashoot::core::parseDownloadedPath(output.UTF8String ?: "");
+    g_pendingInsertPath = path;
     g_pendingInsertPosition = insertPosition;
     g_pendingInsert = !g_pendingInsertPath.empty();
     g_activeTransportRecording = false;
+    if (!g_pendingInsert) {
+      showError("ReaShoot.app downloaded the recording, but did not report a local file path.");
+    }
   }];
 }
 
@@ -2892,8 +2845,6 @@ void timerPoll() {
   @autoreleasepool {
     processPendingInsert();
     processPendingAlignment();
-    [recorder() checkPreviewFrameTimeout];
-
     if (!g_videoEnabled) {
       g_previousPlayState = 0;
       return;
@@ -2917,28 +2868,10 @@ void timerPoll() {
       }
     }
 
-    if (!recording && playing && GetPlayPositionEx) {
-      const double position = GetPlayPositionEx(project);
-      PlaybackVideo video = findPlaybackVideoAtPosition(project, position);
-      if (video.found) {
-        [recorder() updatePlaybackWithPath:video.path
-                                 itemStart:video.itemStart
-                              sourceOffset:video.sourceOffset
-                           projectPosition:position];
-      } else {
-        [recorder() stopPlaybackAndShowLive];
-      }
-    } else if (!recording) {
-      [recorder() stopPlaybackAndShowLive];
-    }
+    (void)playing;
 
     g_previousPlayState = playState;
   }
-}
-
-bool toggleSwellPanelPrototype() {
-  [recorder() togglePreview];
-  return true;
 }
 
 bool hookCommand2(KbdSectionInfo *section, int command, int val, int val2, int relmode, HWND hwnd) {
@@ -2953,42 +2886,17 @@ bool hookCommand2(KbdSectionInfo *section, int command, int val, int val2, int r
     return true;
   }
 
-  if (command == g_floatPreviewCommand) {
-    [recorder() togglePreviewDockMode];
-    return true;
-  }
-
   if (command == g_alignSelectedCommand) {
     alignSelectedVideoItem();
     return true;
   }
 
-  if (command == g_restoreIPhoneCommand) {
-    [recorder() restoreIPhoneRecording];
-    return true;
-  }
-
-  if (command == g_deleteAllIPhoneCommand) {
-    [recorder() deleteAllPendingIPhoneRecordings];
-    return true;
-  }
-
   if (command == g_toggleFollowCommand) {
     setFollowEnabled(!g_followEnabled);
-    if (!g_followEnabled && recorder().isRecording) {
+    if (!g_followEnabled && g_activeTransportRecording) {
       stopTransportRecording();
     }
     return true;
-  }
-
-  if (command == g_toggleDesktopApiCommand) {
-    setDesktopApiEnabled(!g_desktopApiEnabled);
-    [recorder() setStatus:g_desktopApiEnabled ? @"ReaShoot Desktop integration enabled" : @"ReaShoot Desktop integration disabled"];
-    return true;
-  }
-
-  if (command == g_swellPanelPrototypeCommand) {
-    return toggleSwellPanelPrototype();
   }
 
   return false;
@@ -3001,20 +2909,11 @@ int toggleActionHook(int command) {
   if (command == g_toggleFollowCommand) {
     return g_followEnabled ? 1 : 0;
   }
-  if (command == g_toggleDesktopApiCommand) {
-    return g_desktopApiEnabled ? 1 : 0;
-  }
-  if (command == g_floatPreviewCommand) {
-    return recorder().floatingPreview ? 1 : 0;
-  }
-  if (command == g_swellPanelPrototypeCommand) {
-    return g_swellPanelPrototypeDocked ? 1 : 0;
-  }
   return -1;
 }
 
 void cleanup() {
-  if (recorder().isRecording) {
+  if (g_activeTransportRecording) {
     stopTransportRecording();
   }
   if (DockWindowRemove && g_swellPanelPrototypeDocked && g_swellPanelPrototype) {
@@ -3030,28 +2929,10 @@ bool registerActions(reaper_plugin_info_t *rec) {
       "ReaShoot: Enable ReaShoot",
       nullptr,
   };
-  custom_action_register_t floatPreviewAction = {
-      0,
-      "KLONG_REASHOOT_FLOAT_PREVIEW",
-      "ReaShoot: Float/Dock Preview",
-      nullptr,
-  };
   custom_action_register_t alignSelectedAction = {
       0,
       "KLONG_REASHOOT_ALIGN_SELECTED",
       "ReaShoot: Align Selected Video Item",
-      nullptr,
-  };
-  custom_action_register_t restoreIPhoneAction = {
-      0,
-      "KLONG_REASHOOT_RESTORE_IPHONE",
-      "ReaShoot: Restore Pending iPhone Recording",
-      nullptr,
-  };
-  custom_action_register_t deleteAllIPhoneAction = {
-      0,
-      "KLONG_REASHOOT_DELETE_ALL_IPHONE",
-      "ReaShoot: Delete All Pending iPhone Recordings",
       nullptr,
   };
   custom_action_register_t toggleFollowAction = {
@@ -3060,34 +2941,12 @@ bool registerActions(reaper_plugin_info_t *rec) {
       "ReaShoot: Enable/Disable Transport Follow",
       nullptr,
   };
-  custom_action_register_t toggleDesktopApiAction = {
-      0,
-      "KLONG_REASHOOT_TOGGLE_DESKTOP_API",
-      "ReaShoot: Enable/Disable Desktop App Integration",
-      nullptr,
-  };
-  custom_action_register_t swellPanelPrototypeAction = {
-      0,
-      "KLONG_REASHOOT_SWELL",
-        "ReaShoot: Show/Hide SWELL Panel",
-      nullptr,
-  };
 
   g_videoEnabledCommand = rec->Register("custom_action", &videoEnabledAction);
-  g_floatPreviewCommand = rec->Register("custom_action", &floatPreviewAction);
   g_alignSelectedCommand = rec->Register("custom_action", &alignSelectedAction);
-  g_restoreIPhoneCommand = rec->Register("custom_action", &restoreIPhoneAction);
-  g_deleteAllIPhoneCommand = rec->Register("custom_action", &deleteAllIPhoneAction);
   g_toggleFollowCommand = rec->Register("custom_action", &toggleFollowAction);
-  g_toggleDesktopApiCommand = rec->Register("custom_action", &toggleDesktopApiAction);
-  g_swellPanelPrototypeCommand = rec->Register("custom_action", &swellPanelPrototypeAction);
-  if (g_swellPanelPrototypeCommand == 0) {
-    debugLog(@"Failed to register SWELL panel prototype action");
-  }
 
-  return g_videoEnabledCommand != 0 && g_floatPreviewCommand != 0 &&
-         g_alignSelectedCommand != 0 && g_restoreIPhoneCommand != 0 && g_deleteAllIPhoneCommand != 0 &&
-         g_toggleFollowCommand != 0 && g_toggleDesktopApiCommand != 0 &&
+  return g_videoEnabledCommand != 0 && g_alignSelectedCommand != 0 && g_toggleFollowCommand != 0 &&
          rec->Register("hookcommand2", reinterpret_cast<void *>(hookCommand2)) &&
          rec->Register("toggleaction", reinterpret_cast<void *>(toggleActionHook)) &&
          rec->Register("timer", reinterpret_cast<void *>(timerPoll)) &&

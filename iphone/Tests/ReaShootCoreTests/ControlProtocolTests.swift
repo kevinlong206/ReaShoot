@@ -5,9 +5,9 @@ final class ControlProtocolTests: XCTestCase {
     func testCommandRoundTrip() throws {
         let command = ControlCommand(
             requestID: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
-            type: .startRecording,
+            type: .configureCapture,
             token: "token",
-            sessionID: "take-1",
+            captureProfile: CaptureProfile(look: "warmVintage", encodeLookAtRecordTime: true),
             metadata: ["scene": "intro"]
         )
 
@@ -15,6 +15,26 @@ final class ControlProtocolTests: XCTestCase {
         let decoded = try ProtocolCodec.decodeCommand(data)
 
         XCTAssertEqual(decoded, command)
+        XCTAssertEqual(decoded.captureProfile?.look, "warmVintage")
+        XCTAssertEqual(decoded.captureProfile?.encodeLookAtRecordTime, true)
+    }
+
+    func testCaptureProfileDecodesOlderPayloadWithoutRecordTimeLookFlag() throws {
+        let json = """
+        {
+          "resolution": "4K",
+          "fps": 30,
+          "orientation": "auto",
+          "aspectRatio": "9:16",
+          "lens": "wide",
+          "zoomFactor": 1.0,
+          "look": "warmVintage"
+        }
+        """
+
+        let profile = try JSONDecoder().decode(CaptureProfile.self, from: Data(json.utf8))
+
+        XCTAssertFalse(profile.encodeLookAtRecordTime)
     }
 
     func testEventRoundTrip() throws {

@@ -22,6 +22,7 @@ struct RemoteCameraSettings {
   std::string lens = "wide";
   std::string zoom = "1.0";
   std::string look = "natural";
+  bool encodeLookAtRecordTime = false;
 };
 
 struct RemoteRecordingDescriptor {

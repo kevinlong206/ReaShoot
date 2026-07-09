@@ -54,6 +54,9 @@ double previewNowSeconds() {
   NSPopUpButton *_lensPopup;
   NSTextField *_zoomField;
   NSPopUpButton *_lookPopup;
+  NSButton *_encodeLookCheckbox;
+  NSButton *_alwaysOnTopCheckbox;
+  NSButton *_mirrorPreviewCheckbox;
   NSTextField *_statusLabel;
   ReaShootPreviewView *_previewView;
   NSButton *_recordButton;
@@ -71,6 +74,7 @@ double previewNowSeconds() {
   reashoot::desktop::DesktopAppController _desktopController;
   std::string _pairingToken;
   std::string _integrationApiToken;
+  reashoot::desktop::IntegrationOperation _integrationOperation;
   std::vector<reashoot::core::RemoteRecordingDescriptor> _phoneVideos;
   bool _recording;
   bool _recordBlinkOn;
@@ -128,6 +132,7 @@ double previewNowSeconds() {
   [self buildMenu];
   [self buildWindow];
   [self loadDefaults];
+  [self applyWindowLevel];
   [self updateButtons];
   [self updatePreviewEmptyState];
   [self startIntegrationServer];
@@ -243,13 +248,13 @@ double previewNowSeconds() {
 }
 
 - (void)buildSetupWindow {
-  _setupWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 760, 300)
+  _setupWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 760, 360)
                                             styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
                                               backing:NSBackingStoreBuffered
                                                 defer:NO];
   _setupWindow.title = @"ReaShoot Setup";
   _setupWindow.releasedWhenClosed = NO;
-  _setupWindow.minSize = NSMakeSize(680, 260);
+  _setupWindow.minSize = NSMakeSize(680, 320);
   [_setupWindow center];
 
   NSView *content = _setupWindow.contentView;
@@ -283,7 +288,20 @@ double previewNowSeconds() {
   _aspectPopup = makePopupFromChoices(reashoot::desktop::aspectChoices());
   _lensPopup = makePopupFromChoices(reashoot::desktop::lensChoices());
   _lookPopup = makePopupFromChoices(reashoot::desktop::lookChoices());
-  for (NSControl *control in @[_resolutionPopup, _fpsPopup, _orientationPopup, _aspectPopup, _lensPopup, _zoomField, _lookPopup]) {
+  _encodeLookCheckbox = [[NSButton alloc] init];
+  _encodeLookCheckbox.buttonType = NSButtonTypeSwitch;
+  _encodeLookCheckbox.title = @"Encode selected look while recording";
+  _alwaysOnTopCheckbox = [[NSButton alloc] init];
+  _alwaysOnTopCheckbox.buttonType = NSButtonTypeSwitch;
+  _alwaysOnTopCheckbox.title = @"Keep desktop windows always on top";
+  _alwaysOnTopCheckbox.target = self;
+  _alwaysOnTopCheckbox.action = @selector(windowBehaviorChanged:);
+  _mirrorPreviewCheckbox = [[NSButton alloc] init];
+  _mirrorPreviewCheckbox.buttonType = NSButtonTypeSwitch;
+  _mirrorPreviewCheckbox.title = @"Mirror live preview";
+  _mirrorPreviewCheckbox.target = self;
+  _mirrorPreviewCheckbox.action = @selector(previewDisplayChanged:);
+  for (NSControl *control in @[_resolutionPopup, _fpsPopup, _orientationPopup, _aspectPopup, _lensPopup, _zoomField, _lookPopup, _encodeLookCheckbox]) {
     control.target = self;
     control.action = @selector(profileSelectionChanged:);
   }
@@ -299,6 +317,9 @@ double previewNowSeconds() {
   [grid addRowWithViews:@[makeLabel(@"Resolution"), _resolutionPopup, makeLabel(@"FPS"), _fpsPopup, makeLabel(@"Orientation"), _orientationPopup]];
   [grid addRowWithViews:@[makeLabel(@"Aspect"), _aspectPopup, makeLabel(@"Lens"), _lensPopup, makeLabel(@"Zoom"), _zoomField]];
   [grid addRowWithViews:@[makeLabel(@"Look"), _lookPopup, makeLabel(@""), makeLabel(@""), makeLabel(@""), makeLabel(@"")]];
+  [grid addRowWithViews:@[makeLabel(@""), _encodeLookCheckbox, makeLabel(@""), makeLabel(@""), makeLabel(@""), makeLabel(@"")]];
+  [grid addRowWithViews:@[makeLabel(@""), _alwaysOnTopCheckbox, makeLabel(@""), makeLabel(@""), makeLabel(@""), makeLabel(@"")]];
+  [grid addRowWithViews:@[makeLabel(@""), _mirrorPreviewCheckbox, makeLabel(@""), makeLabel(@""), makeLabel(@""), makeLabel(@"")]];
 
   for (NSInteger index = 0; index < grid.numberOfColumns; ++index) {
     [grid columnAtIndex:index].xPlacement = NSGridCellPlacementFill;
@@ -320,6 +341,12 @@ double previewNowSeconds() {
   selectPopupRepresentedValue(_aspectPopup, [defaults stringForKey:@"aspect"], nsString(reashoot::desktop::defaultAspect()));
   selectPopupRepresentedValue(_lensPopup, [defaults stringForKey:@"lens"], nsString(reashoot::desktop::defaultLens()));
   selectPopupRepresentedValue(_lookPopup, [defaults stringForKey:@"look"], nsString(reashoot::desktop::defaultLook()));
+  _encodeLookCheckbox.state = [defaults boolForKey:@"encodeLookAtRecordTime"] ? NSControlStateValueOn : NSControlStateValueOff;
+  id alwaysOnTopValue = [defaults objectForKey:@"alwaysOnTop"];
+  const BOOL alwaysOnTop = alwaysOnTopValue ? [defaults boolForKey:@"alwaysOnTop"] : YES;
+  _alwaysOnTopCheckbox.state = alwaysOnTop ? NSControlStateValueOn : NSControlStateValueOff;
+  _mirrorPreviewCheckbox.state = [defaults boolForKey:@"mirrorPreview"] ? NSControlStateValueOn : NSControlStateValueOff;
+  [_previewView setMirrorPreview:(_mirrorPreviewCheckbox.state == NSControlStateValueOn)];
   _pairingToken = stdString([defaults stringForKey:@"pairingToken"] ?: @"");
   [self updateConnectionStatusLabels];
   debugLog(@"Loaded defaults host=%@ downloadDir=%@ zoom=%@ orientation=%@ token=%@",
@@ -341,6 +368,9 @@ double previewNowSeconds() {
   [defaults setObject:selectedPopupValue(_aspectPopup, nsString(reashoot::desktop::defaultAspect())) forKey:@"aspect"];
   [defaults setObject:selectedPopupValue(_lensPopup, nsString(reashoot::desktop::defaultLens())) forKey:@"lens"];
   [defaults setObject:selectedPopupValue(_lookPopup, nsString(reashoot::desktop::defaultLook())) forKey:@"look"];
+  [defaults setBool:(_encodeLookCheckbox.state == NSControlStateValueOn) forKey:@"encodeLookAtRecordTime"];
+  [defaults setBool:(_alwaysOnTopCheckbox.state == NSControlStateValueOn) forKey:@"alwaysOnTop"];
+  [defaults setBool:(_mirrorPreviewCheckbox.state == NSControlStateValueOn) forKey:@"mirrorPreview"];
   if (_pairingToken.empty()) {
     [defaults removeObjectForKey:@"pairingToken"];
   } else {
@@ -355,6 +385,26 @@ double previewNowSeconds() {
   [self updateConnectionStatusLabels];
 }
 
+- (void)applyWindowLevel {
+  const NSWindowLevel level = _alwaysOnTopCheckbox.state == NSControlStateValueOn ? NSFloatingWindowLevel : NSNormalWindowLevel;
+  _window.level = level;
+  _setupWindow.level = level;
+  _videosWindow.level = level;
+  debugLog(@"Always on top %@", level == NSFloatingWindowLevel ? @"enabled" : @"disabled");
+}
+
+- (void)windowBehaviorChanged:(id)sender {
+  (void)sender;
+  [self applyWindowLevel];
+  [self saveDefaults];
+}
+
+- (void)previewDisplayChanged:(id)sender {
+  (void)sender;
+  [_previewView setMirrorPreview:(_mirrorPreviewCheckbox.state == NSControlStateValueOn)];
+  [self saveDefaults];
+}
+
 - (reashoot::core::RemoteCameraSettings)settings {
   reashoot::core::RemoteCameraSettings settings;
   settings.host = stdString(_hostField.stringValue);
@@ -366,6 +416,7 @@ double previewNowSeconds() {
   settings.lens = stdString(selectedPopupValue(_lensPopup, nsString(reashoot::desktop::defaultLens())));
   settings.zoom = stdString(_zoomField.stringValue);
   settings.look = stdString(selectedPopupValue(_lookPopup, nsString(reashoot::desktop::defaultLook())));
+  settings.encodeLookAtRecordTime = _encodeLookCheckbox.state == NSControlStateValueOn;
   return settings;
 }
 
@@ -561,6 +612,29 @@ double previewNowSeconds() {
   return reashoot::desktop::statusToJson([self integrationStatus]).serialize();
 }
 
+- (reashoot::desktop::IntegrationOperation)beginIntegrationOperation:(const std::string &)type message:(const std::string &)message {
+  _integrationOperation = {};
+  _integrationOperation.id = "op-" + reashoot::desktop::makeSessionID();
+  _integrationOperation.type = type;
+  _integrationOperation.state = "running";
+  _integrationOperation.message = message;
+  return _integrationOperation;
+}
+
+- (void)finishIntegrationOperationWithRecording:(const reashoot::core::RemoteRecordingDescriptor &)recording
+                                 downloadedPath:(const std::string &)downloadedPath
+                                        message:(const std::string &)message {
+  _integrationOperation.state = "succeeded";
+  _integrationOperation.message = message;
+  _integrationOperation.recording = recording;
+  _integrationOperation.downloadedPath = downloadedPath;
+}
+
+- (void)failIntegrationOperation:(const std::string &)message {
+  _integrationOperation.state = "failed";
+  _integrationOperation.message = message;
+}
+
 - (void)applyIntegrationProfile:(const reashoot::core::RemoteCameraSettings &)settings {
   selectPopupRepresentedValue(_resolutionPopup, nsString(settings.resolution), nsString(reashoot::desktop::defaultResolution()));
   selectPopupRepresentedValue(_fpsPopup, nsString(settings.fps), nsString(reashoot::desktop::defaultFps()));
@@ -569,6 +643,7 @@ double previewNowSeconds() {
   selectPopupRepresentedValue(_lensPopup, nsString(settings.lens), nsString(reashoot::desktop::defaultLens()));
   selectPopupRepresentedValue(_lookPopup, nsString(settings.look), nsString(reashoot::desktop::defaultLook()));
   _zoomField.stringValue = nsString(settings.zoom.empty() ? reashoot::desktop::defaultZoom() : settings.zoom);
+  _encodeLookCheckbox.state = settings.encodeLookAtRecordTime ? NSControlStateValueOn : NSControlStateValueOff;
   [self saveDefaults];
 }
 
@@ -657,6 +732,28 @@ double previewNowSeconds() {
     [self stopRecordingForIntegration];
     return accepted("Recording stop requested.");
   }
+  if (request.method == "POST" && request.path == "/v1/recording/stop-download") {
+    if (!_recording) {
+      return desktop::errorResponse(409, "not_recording", "No recording is active.");
+    }
+    if (busy()) {
+      return desktop::errorResponse(409, "busy", "ReaShoot is busy with another operation.");
+    }
+    std::string downloadDirectory;
+    if (!request.body.empty()) {
+      try {
+        downloadDirectory = core::parseJson(request.body).stringValue("downloadDirectory");
+      } catch (const std::exception &error) {
+        return desktop::errorResponse(400, "invalid_json", error.what());
+      }
+    }
+    reashoot::desktop::IntegrationOperation operation = [self stopRecordingAndDownloadForIntegration:downloadDirectory];
+    core::JsonValue::Object object;
+    object.emplace("ok", core::JsonValue(true));
+    object.emplace("accepted", core::JsonValue(true));
+    object.emplace("operation", desktop::operationToJson(operation));
+    return desktop::jsonResponse(202, std::move(object));
+  }
   if (request.method == "GET" && request.path == "/v1/recordings") {
     core::JsonValue::Object object;
     object.emplace("recordings", desktop::recordingsToJson([self settings], _phoneVideos));
@@ -668,6 +765,17 @@ double previewNowSeconds() {
     }
     [self refreshPhoneVideos:nil];
     return accepted("Recording refresh requested.");
+  }
+
+  const std::string operationsPrefix = "/v1/operations/";
+  if (request.method == "GET" && request.path.rfind(operationsPrefix, 0) == 0) {
+    std::string operationID = request.path.substr(operationsPrefix.size());
+    if (operationID.empty() || operationID != _integrationOperation.id) {
+      return desktop::errorResponse(404, "not_found", "Operation not found.");
+    }
+    core::JsonValue::Object object;
+    object.emplace("operation", desktop::operationToJson(_integrationOperation));
+    return desktop::okResponse(std::move(object));
   }
 
   const std::string recordingsPrefix = "/v1/recordings/";
@@ -1139,6 +1247,78 @@ double previewNowSeconds() {
   });
 }
 
+- (reashoot::desktop::IntegrationOperation)stopRecordingAndDownloadForIntegration:(const std::string &)downloadDirectory {
+  reashoot::desktop::IntegrationOperation operation =
+      [self beginIntegrationOperation:"stop-download" message:"Stopping recording."];
+  debugLog(@"Integration stop/download requested op=%s directory=%s", operation.id.c_str(), downloadDirectory.c_str());
+  if (![self requireHostAndToken]) {
+    [self failIntegrationOperation:"No paired iPhone is configured."];
+    return _integrationOperation;
+  }
+  reashoot::core::RemoteCameraSettings settings = [self settings];
+  std::string resolvedDirectory = downloadDirectory.empty() ? reashoot::desktop::defaultDownloadDirectory() : downloadDirectory;
+  [self setStatus:@"Stopping iPhone recording..."];
+  _activeCommand = _camera->stop(settings, [self, settings, resolvedDirectory](reashoot::core::CommandResult stopResult) {
+    debugLog(@"Integration stop/download stop completed exit=%d output=%@ error=%@",
+             stopResult.exitCode,
+             nsString(redactedText(stopResult.output)),
+             nsString(redactedText(stopResult.errorMessage)));
+    _recording = false;
+    [self updateButtons];
+    if (stopResult.exitCode != 0) {
+      const std::string message = stopResult.errorMessage.empty() ? stopResult.output : stopResult.errorMessage;
+      [self failIntegrationOperation:message.empty() ? "Stop failed." : message];
+      [self setStatusFromResult:stopResult fallback:@"Stop failed."];
+      return;
+    }
+    auto recordings = reashoot::desktop::parseRecordingDescriptors(stopResult.output);
+    if (recordings.empty()) {
+      [self failIntegrationOperation:"Recording stopped, but no recording descriptor was returned."];
+      [self setStatus:@"Recording stopped, but no recording descriptor was returned."];
+      return;
+    }
+    const reashoot::core::RemoteRecordingDescriptor recording = recordings.front();
+    _integrationOperation.recording = recording;
+    _integrationOperation.message = "Downloading recording.";
+    [self setStatus:@"Downloading iPhone video..."];
+    _activeCommand = _camera->downloadRecording(settings,
+                                                recording,
+                                                resolvedDirectory,
+                                                [self](const std::string &line) {
+                                                  debugLog(@"Integration download progress line=%@", nsString(redactedText(line)));
+                                                  std::string status = reashoot::core::progressStatusText(line);
+                                                  if (!status.empty()) {
+                                                    _integrationOperation.message = status;
+                                                    [self setStatus:nsString(status)];
+                                                  }
+                                                },
+                                                [self, recording](reashoot::core::CommandResult downloadResult) {
+                                                  debugLog(@"Integration stop/download download completed exit=%d output=%@ error=%@",
+                                                           downloadResult.exitCode,
+                                                           nsString(redactedText(downloadResult.output)),
+                                                           nsString(redactedText(downloadResult.errorMessage)));
+                                                  if (downloadResult.exitCode != 0) {
+                                                    const std::string message =
+                                                        downloadResult.errorMessage.empty() ? downloadResult.output : downloadResult.errorMessage;
+                                                    [self failIntegrationOperation:message.empty() ? "Download failed." : message];
+                                                    [self setStatusFromResult:downloadResult fallback:@"Download failed."];
+                                                    return;
+                                                  }
+                                                  std::string path = reashoot::core::parseDownloadedPath(downloadResult.output);
+                                                  if (path.empty()) {
+                                                    [self failIntegrationOperation:"Download completed, but no local path was reported."];
+                                                    [self setStatus:@"Download completed, but no local path was reported."];
+                                                    return;
+                                                  }
+                                                  [self finishIntegrationOperationWithRecording:recording
+                                                                                 downloadedPath:path
+                                                                                        message:"Downloaded recording."];
+                                                  [self setStatus:[NSString stringWithFormat:@"Downloaded %@", nsString(path)]];
+                                                });
+  });
+  return operation;
+}
+
 - (void)promptForRecording:(const reashoot::core::RemoteRecordingDescriptor &)recording {
   debugLog(@"Prompting for recording id=%s filename=%s bytes=%s path=%s checksumPresent=%d",
            recording.id.c_str(),
@@ -1286,6 +1466,7 @@ double previewNowSeconds() {
                                                  defer:NO];
   _videosWindow.title = @"Videos on iPhone";
   _videosWindow.releasedWhenClosed = NO;
+  [self applyWindowLevel];
 
   NSView *content = _videosWindow.contentView;
   NSStackView *root = [NSStackView stackViewWithViews:@[]];

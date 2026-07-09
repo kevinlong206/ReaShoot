@@ -19,6 +19,7 @@ struct ProtocolCaptureProfile {
   std::string lens = "wide";
   double zoomFactor = 1.0;
   std::string look = "natural";
+  bool encodeLookAtRecordTime = false;
 };
 
 struct ProtocolRecording {

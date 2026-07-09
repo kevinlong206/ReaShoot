@@ -14,6 +14,7 @@ struct CaptureProfile {
   std::string lens;
   std::string zoom;
   std::string look;
+  bool encodeLookAtRecordTime = false;
 };
 
 std::vector<std::string> captureProfileArguments(const CaptureProfile &profile);

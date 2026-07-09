@@ -225,6 +225,7 @@ if(WIN32)
   if(REASHOOT_BUILD_DESKTOP_WIN32)
     add_executable(reashoot_desktop_win32 WIN32
       "${REASHOOT_ROOT}/src/app/win32/ReaShootDesktopWin32.cpp"
+      "${REASHOOT_ROOT}/src/app/win32/ReaShootWin32IntegrationServer.cpp"
       "${REASHOOT_ROOT}/src/app/win32/ReaShootWin32Support.cpp"
       "${REASHOOT_ROOT}/src/platform/win32/win32_helper_process.cpp"
       "${REASHOOT_ROOT}/src/platform/win32/win32_preview_stream_client.cpp"

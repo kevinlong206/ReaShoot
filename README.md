@@ -12,8 +12,9 @@ The older REAPER extension remains in this repository as a legacy/secondary targ
 
 - Controls the companion iPhone app over local Wi-Fi/Bonjour.
 - Shows a live iPhone preview in a desktop window (macOS and Windows).
+- Keeps the desktop windows always on top by default, with a setup option to turn that off.
 - Starts and stops iPhone video capture from the desktop.
-- Lets you choose resolution, FPS, orientation, aspect ratio, lens, zoom, and look.
+- Lets you choose resolution, FPS, orientation, aspect ratio, lens, zoom, look, and whether non-natural looks are encoded while recording.
 - Prompts to download or delete each stopped take.
 - Shows videos still stored on the iPhone in a `Videos on iPhone` window.
 - Exposes a local desktop API so other apps can ask ReaShoot to control the phone.
@@ -53,7 +54,9 @@ The preview uses an authenticated H.264 WebSocket stream from the iPhone. The de
 
 Use `Orientation: auto` if you want the live preview to follow phone rotation. The live preview has its own orientation path separate from the recorded `.mov`, so preview rotation fixes should be validated independently from recorded-file playback.
 
-When recording stops, the desktop app first receives recording metadata from the phone, then prompts before doing any download/delete action. Non-natural looks are prepared on the iPhone only after you choose to download.
+By default, the live preview is not mirrored so it matches the final recorded video. If you want a selfie-style monitor image, enable `Mirror live preview` in Setup; this only changes monitoring, not the recorded `.mov`.
+
+When recording stops, the desktop app first receives recording metadata from the phone, then prompts before doing any download/delete action. By default, non-natural looks are prepared on the iPhone only after you choose to download. The setup window also has an opt-in `Encode selected look while recording` checkbox; when enabled with a non-natural look, the iPhone burns the selected look into the recorded `.mov` during capture and skips the post-recording look export.
 
 ## Recovering recordings
 
@@ -63,27 +66,28 @@ After the desktop app verifies a downloaded movie and acknowledges the transfer,
 
 ## Local integration API
 
-While `ReaShoot.app` is running, it hosts a local-only HTTP JSON API on `127.0.0.1` for scripts and future integrations. The app writes the current endpoint and bearer token to `~/Library/Application Support/ReaShoot/desktop-api.json` with owner-only permissions.
+While the desktop app is running, it hosts a local-only HTTP JSON API on `127.0.0.1` for scripts and integrations. The app writes the current endpoint and bearer token to `~/Library/Application Support/ReaShoot/desktop-api.json` on macOS or `%LOCALAPPDATA%\ReaShoot\desktop-api.json` on Windows with owner-only permissions where available.
 
 The bundled helper can call the API:
 
 ```sh
 build-desktop/reashoot-mac desktop-status
 build-desktop/reashoot-mac desktop-profile
-build-desktop/reashoot-mac desktop-set-profile --resolution 4K --fps 30 --aspect 9:16
+build-desktop/reashoot-mac desktop-set-profile --resolution 4K --fps 30 --aspect 9:16 --look warmVintage --encode-look-at-record-time
 build-desktop/reashoot-mac desktop-preview-start
 build-desktop/reashoot-mac desktop-start-recording
 build-desktop/reashoot-mac desktop-stop-recording
+build-desktop/reashoot-mac desktop-stop-recording-download --download-dir ~/Movies/ReaShoot --progress
 build-desktop/reashoot-mac desktop-refresh-recordings
 build-desktop/reashoot-mac desktop-list-recordings
 build-desktop/reashoot-mac desktop-download-recording --recording-id RECORDING_ID --download-dir ~/Movies/ReaShoot
 ```
 
-Current `/v1` endpoints include status, profile, discovery, pairing, preview start/stop, recording start/stop, recording list/refresh/download/delete, and `GET /v1/events` for Server-Sent Events. Keep the API local; do not share the registration token.
+Current `/v1` endpoints include status, profile, discovery, pairing, preview start/stop, recording start/stop, stop-and-download operation handoff, operation polling, recording list/refresh/download/delete, and `GET /v1/events` for Server-Sent Events. Keep the API local; do not share the registration token.
 
 ## Legacy REAPER extension
 
-The repository still contains the original native REAPER extension for macOS and Windows. It uses the same iPhone app, protocol, helper, and preview transport, but it is no longer the primary product direction on this branch. An early opt-in REAPER action can talk to the desktop app API for status/profile calls while direct iPhone control remains the recording fallback. See [CONTRIBUTING.md](CONTRIBUTING.md) for build details and legacy target notes.
+The repository still contains the native REAPER extension for macOS and Windows. It is now a thin integration client of the desktop app: pair, configure, preview, record ownership, download/delete, and transfer acknowledgement all stay in `ReaShoot.app` / `ReaShoot.exe`. When ReaShoot is enabled in REAPER, REAPER transport record start/stop calls the desktop local API, then inserts the verified downloaded `.mov` on the ReaShoot track and runs the existing sync/alignment path. See [CONTRIBUTING.md](CONTRIBUTING.md) for build details and legacy target notes.
 
 ## Troubleshooting
 

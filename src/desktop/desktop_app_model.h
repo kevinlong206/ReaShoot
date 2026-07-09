@@ -23,6 +23,7 @@ struct DesktopSettings {
   std::string lens;
   std::string zoom;
   std::string look;
+  bool encodeLookAtRecordTime = false;
 };
 
 const std::vector<DesktopChoice> &resolutionChoices();
@@ -39,6 +40,7 @@ std::string defaultAspect();
 std::string defaultLens();
 std::string defaultZoom();
 std::string defaultLook();
+bool defaultEncodeLookAtRecordTime();
 
 std::string recordButtonTitle(bool recording);
 std::string previewButtonTitle(bool previewRunning);

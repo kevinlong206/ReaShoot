@@ -85,6 +85,7 @@ std::string defaultAspect() { return "9:16"; }
 std::string defaultLens() { return "wide"; }
 std::string defaultZoom() { return "1.0"; }
 std::string defaultLook() { return "natural"; }
+bool defaultEncodeLookAtRecordTime() { return false; }
 
 std::string recordButtonTitle(bool recording) {
   return recording ? "Stop Recording" : "Start Recording";

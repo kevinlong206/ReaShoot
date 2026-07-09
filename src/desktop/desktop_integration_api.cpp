@@ -48,6 +48,7 @@ core::JsonValue profileToJson(const core::RemoteCameraSettings &settings) {
   addString(object, "lens", settings.lens);
   addString(object, "zoom", settings.zoom);
   addString(object, "look", settings.look);
+  addBool(object, "encodeLookAtRecordTime", settings.encodeLookAtRecordTime);
   return core::JsonValue(std::move(object));
 }
 
@@ -59,6 +60,7 @@ void applyProfileJson(core::RemoteCameraSettings &settings, const core::JsonValu
   settings.lens = json.stringValue("lens", settings.lens);
   settings.zoom = json.stringValue("zoom", settings.zoom);
   settings.look = json.stringValue("look", settings.look);
+  settings.encodeLookAtRecordTime = json.boolValue("encodeLookAtRecordTime", settings.encodeLookAtRecordTime);
 }
 
 core::JsonValue recordingToJson(const core::RemoteCameraSettings &settings,
@@ -73,6 +75,19 @@ core::JsonValue recordingToJson(const core::RemoteCameraSettings &settings,
   addString(object, "thumbnailPath", recording.thumbnailPath);
   addString(object, "thumbnailUrl", recordingThumbnailURL(settings, recording));
   addString(object, "timestamp", recordingTimestampFallback(recording));
+  return core::JsonValue(std::move(object));
+}
+
+core::JsonValue operationToJson(const IntegrationOperation &operation) {
+  core::JsonValue::Object object;
+  addString(object, "id", operation.id);
+  addString(object, "type", operation.type);
+  addString(object, "state", operation.state);
+  addString(object, "message", operation.message);
+  addString(object, "downloadedPath", operation.downloadedPath);
+  if (!operation.recording.id.empty()) {
+    object.emplace("recording", recordingToJson(core::RemoteCameraSettings{}, operation.recording));
+  }
   return core::JsonValue(std::move(object));
 }
 

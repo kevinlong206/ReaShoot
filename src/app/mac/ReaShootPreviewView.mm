@@ -9,6 +9,7 @@
   int _frameStride;
   int _displayWidth;
   int _displayHeight;
+  BOOL _mirrorPreview;
   NSString *_emptyMessage;
 }
 
@@ -29,6 +30,11 @@
   _frameStride = stride;
   _displayWidth = width;
   _displayHeight = height;
+  [self setNeedsDisplay:YES];
+}
+
+- (void)setMirrorPreview:(BOOL)mirrorPreview {
+  _mirrorPreview = mirrorPreview;
   [self setNeedsDisplay:YES];
 }
 
@@ -107,6 +113,10 @@
   CGContextTranslateCTM(context, 0, bounds.size.height);
   CGContextScaleCTM(context, 1, -1);
   CGRect flipped = CGRectMake(drawRect.origin.x, bounds.size.height - NSMaxY(drawRect), drawRect.size.width, drawRect.size.height);
+  if (!_mirrorPreview) {
+    CGContextTranslateCTM(context, CGRectGetMidX(flipped) * 2.0, 0);
+    CGContextScaleCTM(context, -1, 1);
+  }
   CGContextDrawImage(context, flipped, image);
   CGContextRestoreGState(context);
   CGImageRelease(image);
