@@ -17,8 +17,10 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <shellapi.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#pragma comment(lib, "shell32.lib")
 #else
 #include <cerrno>
 #include <cstring>
@@ -223,6 +225,31 @@ const core::JsonValue &requiredOperation(const std::string &body) {
   return *operation;
 }
 
+core::RemoteRecordingDescriptor recordingFromJson(const core::JsonValue &json) {
+  core::RemoteRecordingDescriptor recording;
+  recording.id = json.stringValue("id", recording.id);
+  recording.filename = json.stringValue("filename", recording.filename);
+  recording.byteCount = json.stringValue("byteCount", recording.byteCount);
+  recording.downloadPath = json.stringValue("downloadPath", recording.downloadPath);
+  recording.checksum = json.stringValue("checksum", recording.checksum);
+  recording.createdAt = json.stringValue("createdAt", recording.createdAt);
+  recording.thumbnailPath = json.stringValue("thumbnailPath", recording.thumbnailPath);
+  return recording;
+}
+
+std::vector<core::RemoteRecordingDescriptor> recordingsFromBody(const std::string &body) {
+  std::vector<core::RemoteRecordingDescriptor> recordings;
+  const core::JsonValue root = core::parseJson(body);
+  const core::JsonValue *array = root.find("recordings");
+  if (!array || array->type() != core::JsonValue::Type::Array) {
+    return recordings;
+  }
+  for (const core::JsonValue &entry : array->asArray()) {
+    recordings.push_back(recordingFromJson(entry));
+  }
+  return recordings;
+}
+
 } // namespace
 
 DesktopApiClient::DesktopApiClient(DesktopApiClientOptions options) : options_(options) {}
@@ -389,6 +416,57 @@ std::string DesktopApiClient::stopRecordingAndDownload(const std::string &downlo
                                                        DesktopApiProgressCallback progress) {
   const std::string output = request("POST", "/v1/recording/stop-download", desktopDownloadBody(downloadDirectory));
   return waitForDownloadedOperation(desktopOperationIDFromResponse(output), std::move(progress));
+}
+
+void DesktopApiClient::ensureDesktopAppRunning() {
+  // request() loads or launches the app and retries until the API answers, so a
+  // successful status call means the desktop app is running and reachable.
+  request("GET", "/v1/status");
+}
+
+std::vector<core::RemoteRecordingDescriptor> DesktopApiClient::listRecordings() {
+  return recordingsFromBody(request("GET", "/v1/recordings"));
+}
+
+core::RemoteRecordingDescriptor DesktopApiClient::waitForStoppedRecording(
+    const std::vector<std::string> &knownIDsBeforeStop) {
+  for (int attempt = 0; attempt < options_.recordingStartAttempts; ++attempt) {
+    const std::vector<core::RemoteRecordingDescriptor> recordings = listRecordings();
+    for (const core::RemoteRecordingDescriptor &recording : recordings) {
+      if (recording.id.empty()) {
+        continue;
+      }
+      if (std::find(knownIDsBeforeStop.begin(), knownIDsBeforeStop.end(), recording.id) ==
+          knownIDsBeforeStop.end()) {
+        return recording;
+      }
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(options_.recordingStartWaitMilliseconds));
+  }
+  throw DesktopApiError("Timed out waiting for ReaShoot to report the stopped recording.");
+}
+
+core::RemoteRecordingDescriptor DesktopApiClient::stopRecording() {
+  std::vector<std::string> knownIDs;
+  for (const core::RemoteRecordingDescriptor &recording : listRecordings()) {
+    if (!recording.id.empty()) {
+      knownIDs.push_back(recording.id);
+    }
+  }
+  request("POST", "/v1/recording/stop");
+  return waitForStoppedRecording(knownIDs);
+}
+
+std::string DesktopApiClient::downloadRecording(const std::string &recordingID,
+                                                const std::string &downloadDirectory,
+                                                DesktopApiProgressCallback progress) {
+  const std::string output =
+      request("POST", "/v1/recordings/" + recordingID + "/download", desktopDownloadBody(downloadDirectory));
+  return waitForDownloadedOperation(desktopOperationIDFromResponse(output), std::move(progress));
+}
+
+void DesktopApiClient::deleteRecording(const std::string &recordingID) {
+  request("DELETE", "/v1/recordings/" + recordingID);
 }
 
 std::string desktopDownloadBody(const std::string &downloadDirectory) {

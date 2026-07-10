@@ -1,10 +1,12 @@
 #pragma once
 
 #include "../core/json_value.h"
+#include "../core/remote_camera.h"
 
 #include <functional>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace reashoot::desktop {
 
@@ -45,13 +47,28 @@ public:
   void startRecording();
   std::string stopRecordingAndDownload(const std::string &downloadDirectory, DesktopApiProgressCallback progress = {});
 
-private:
+  // Ensures the ReaShoot desktop app is running and its API is reachable,
+  // launching it if necessary. Throws DesktopApiError if it cannot be reached.
+  void ensureDesktopAppRunning();
+  // Stops the active recording without downloading it, leaving it on the phone,
+  // and returns the resulting recording descriptor.
+  core::RemoteRecordingDescriptor stopRecording();
+  // Downloads a previously stopped recording by id and returns its local path.
+  std::string downloadRecording(const std::string &recordingID,
+                               const std::string &downloadDirectory,
+                               DesktopApiProgressCallback progress = {});
+  // Deletes a recording from the phone by id.
+  void deleteRecording(const std::string &recordingID);
+  std::vector<core::RemoteRecordingDescriptor> listRecordings();
+
+ private:
   DesktopApiRegistration loadOrStartRegistration() const;
   std::string performRequest(const DesktopApiRegistration &registration,
-                             const std::string &method,
-                             const std::string &path,
-                             const std::string &body) const;
+                            const std::string &method,
+                            const std::string &path,
+                            const std::string &body) const;
   void waitUntilRecordingStarted();
+  core::RemoteRecordingDescriptor waitForStoppedRecording(const std::vector<std::string> &knownIDsBeforeStop);
   std::string waitForDownloadedOperation(const std::string &operationID, DesktopApiProgressCallback progress);
 
   DesktopApiClientOptions options_;

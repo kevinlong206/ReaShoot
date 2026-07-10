@@ -808,8 +808,13 @@ double previewNowSeconds() {
           return desktop::errorResponse(400, "invalid_json", error.what());
         }
       }
-      [self downloadRecording:*found directory:downloadDirectory revealDownloadedFile:NO];
-      return accepted("Recording download requested.");
+      reashoot::desktop::IntegrationOperation operation =
+          [self downloadRecordingForIntegration:*found directory:downloadDirectory];
+      core::JsonValue::Object object;
+      object.emplace("ok", core::JsonValue(true));
+      object.emplace("accepted", core::JsonValue(true));
+      object.emplace("operation", desktop::operationToJson(operation));
+      return desktop::jsonResponse(202, std::move(object));
     }
   }
 
@@ -1310,6 +1315,51 @@ double previewNowSeconds() {
                                                   [self setStatus:[NSString stringWithFormat:@"Downloaded %@", nsString(path)]];
                                                 });
   });
+  return operation;
+}
+
+- (reashoot::desktop::IntegrationOperation)downloadRecordingForIntegration:(const reashoot::core::RemoteRecordingDescriptor &)recording
+                                                                 directory:(const std::string &)downloadDirectory {
+  reashoot::desktop::IntegrationOperation operation =
+      [self beginIntegrationOperation:"download" message:"Downloading recording."];
+  debugLog(@"Integration download requested op=%s directory=%s", operation.id.c_str(), downloadDirectory.c_str());
+  if (![self requireHostAndToken]) {
+    [self failIntegrationOperation:"No paired iPhone is configured."];
+    return _integrationOperation;
+  }
+  reashoot::core::RemoteCameraSettings settings = [self settings];
+  std::string resolvedDirectory = downloadDirectory.empty() ? reashoot::desktop::defaultDownloadDirectory() : downloadDirectory;
+  _integrationOperation.recording = recording;
+  [self setStatus:@"Downloading iPhone video..."];
+  _activeCommand = _camera->downloadRecording(settings,
+                                              recording,
+                                              resolvedDirectory,
+                                              [self](const std::string &line) {
+                                                std::string status = reashoot::core::progressStatusText(line);
+                                                if (!status.empty()) {
+                                                  _integrationOperation.message = status;
+                                                  [self setStatus:nsString(status)];
+                                                }
+                                              },
+                                              [self, recording](reashoot::core::CommandResult downloadResult) {
+                                                if (downloadResult.exitCode != 0) {
+                                                  const std::string message =
+                                                      downloadResult.errorMessage.empty() ? downloadResult.output : downloadResult.errorMessage;
+                                                  [self failIntegrationOperation:message.empty() ? "Download failed." : message];
+                                                  [self setStatusFromResult:downloadResult fallback:@"Download failed."];
+                                                  return;
+                                                }
+                                                std::string path = reashoot::core::parseDownloadedPath(downloadResult.output);
+                                                if (path.empty()) {
+                                                  [self failIntegrationOperation:"Download completed, but no local path was reported."];
+                                                  [self setStatus:@"Download completed, but no local path was reported."];
+                                                  return;
+                                                }
+                                                [self finishIntegrationOperationWithRecording:recording
+                                                                               downloadedPath:path
+                                                                                      message:"Downloaded recording."];
+                                                [self setStatus:[NSString stringWithFormat:@"Downloaded %@", nsString(path)]];
+                                              });
   return operation;
 }
 

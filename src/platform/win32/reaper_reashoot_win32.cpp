@@ -39,6 +39,7 @@
 #include "platform/win32/win32_playback_preview_renderer.h"
 #include "platform/win32/win32_preview_stream_client.h"
 #include "reaper/reaper_host.h"
+#include "reaper/reaper_recording_controller.h"
 
 #define REAPERAPI_IMPLEMENT
 #define REAPERAPI_MINIMAL
@@ -112,14 +113,9 @@ HWND g_panel = nullptr;
 bool g_panelVisible = false;
 bool g_previewFloating = true;
 bool g_panelDocked = false;
-bool g_activeTransportRecording = false;
-bool g_transportStartInFlight = false;
-bool g_transportStopRequested = false;
 bool g_pendingInsert = false;
 std::string g_pendingInsertPath;
 double g_pendingInsertPosition = 0.0;
-ReaProject *g_recordProject = nullptr;
-double g_recordStartPosition = 0.0;
 reashoot::core::ReaShootController g_extensionController;
 std::string g_iPhoneHost;
 std::string g_iPhoneControlPort = "8787";
@@ -323,6 +319,8 @@ void updatePanelFormat() {
   reashoot::platform::swell::updateSwellPanelProbe(g_panel, status.c_str(), format.c_str(), g_iPhoneHost.c_str(), g_iPhoneToken.c_str());
 }
 
+reashoot::reaper::RecordingController &recordingController();
+
 void updatePanel() {
   if (!g_panel) {
     return;
@@ -330,7 +328,7 @@ void updatePanel() {
   std::string status;
   if (!g_extensionController.videoEnabled()) {
     status = g_iPhoneToken.empty() ? "Video disabled" : "ReaShoot disabled; enable ReaShoot to start preview";
-  } else if (g_activeTransportRecording) {
+  } else if (recordingController().isActive()) {
     status = "Recording iPhone video";
   } else if (g_iPhoneToken.empty()) {
     status = "Discover the iPhone, then Pair and accept the request";
@@ -452,47 +450,6 @@ void runHelperOnWorker(std::string command,
     postToMain([result = std::move(result), completion = std::move(completion)]() mutable {
       if (completion) {
         completion(std::move(result));
-      }
-    });
-  }).detach();
-}
-
-void runDesktopStartRecordingOnWorker(std::function<void(std::string)> completion) {
-  std::thread([completion = std::move(completion)]() mutable {
-    std::string errorMessage;
-    try {
-      reashoot::desktop::DesktopApiClient().startRecording();
-    } catch (const std::exception &error) {
-      errorMessage = error.what();
-    }
-    postToMain([completion = std::move(completion), errorMessage = std::move(errorMessage)]() mutable {
-      if (completion) {
-        completion(std::move(errorMessage));
-      }
-    });
-  }).detach();
-}
-
-void runDesktopStopDownloadOnWorker(std::string downloadDirectory,
-                                    std::function<void(std::string)> progress,
-                                    std::function<void(std::string, std::string)> completion) {
-  std::thread([downloadDirectory = std::move(downloadDirectory),
-               progress = std::move(progress),
-               completion = std::move(completion)]() mutable {
-    std::string path;
-    std::string errorMessage;
-    try {
-      path = reashoot::desktop::DesktopApiClient().stopRecordingAndDownload(downloadDirectory, [progress](const std::string &message) {
-        if (progress && !message.empty()) {
-          postToMain([progress, message]() { progress(message); });
-        }
-      });
-    } catch (const std::exception &error) {
-      errorMessage = error.what();
-    }
-    postToMain([completion = std::move(completion), path = std::move(path), errorMessage = std::move(errorMessage)]() mutable {
-      if (completion) {
-        completion(std::move(path), std::move(errorMessage));
       }
     });
   }).detach();
@@ -1463,76 +1420,26 @@ void stopPlaybackAndShowLive() {
   }
 }
 
+reashoot::reaper::RecordingController &recordingController() {
+  static reashoot::reaper::RecordingController controller([]() {
+    reashoot::reaper::RecordingControllerHooks hooks;
+    hooks.postToMain = [](std::function<void()> work) { postToMain(std::move(work)); };
+    hooks.setStatus = [](const std::string &status) { setPanelStatus(status); };
+    hooks.showError = [](const std::string &message) { showError(message); };
+    hooks.setRecordingActive = [](bool) { updatePanel(); };
+    hooks.resolveDownloadDirectory = [](ReaProject *project) { return captureOutputDirectory(project); };
+    // Windows has no audio-waveform alignment, so no post-insert hook.
+    return hooks;
+  }());
+  return controller;
+}
+
 void beginRecording() {
-  if (g_activeTransportRecording) {
-    return;
-  }
-  g_activeTransportRecording = true;
-  g_transportStartInFlight = true;
-  g_transportStopRequested = false;
-  g_recordProject = reashoot::reaper::currentProject();
-  g_recordStartPosition = GetCursorPositionEx ? GetCursorPositionEx(g_recordProject) : 0.0;
-  ensureVideoTrackReady(g_recordProject);
-  setPanelStatus("Starting recording through ReaShoot.exe");
-  updatePanel();
-  runDesktopStartRecordingOnWorker([](std::string errorMessage) {
-    if (!errorMessage.empty()) {
-      g_activeTransportRecording = false;
-      g_transportStartInFlight = false;
-      g_transportStopRequested = false;
-      updatePanel();
-      showError(reashoot::core::friendlyStatusText(errorMessage));
-      return;
-    }
-    g_transportStartInFlight = false;
-    if (g_recordProject && GetPlayPositionEx) {
-      g_recordStartPosition = GetPlayPositionEx(g_recordProject);
-    }
-    setPanelStatus("Recording through ReaShoot.exe");
-    updatePanel();
-    if (g_transportStopRequested) {
-      g_transportStopRequested = false;
-      finishRecording();
-    }
-  });
+  recordingController().begin(reashoot::reaper::currentProject());
 }
 
 void finishRecording() {
-  if (!g_activeTransportRecording) {
-    return;
-  }
-  if (g_transportStartInFlight) {
-    g_transportStopRequested = true;
-    setPanelStatus("Waiting for ReaShoot.exe recording to start");
-    return;
-  }
-  const double insertPosition = g_recordStartPosition < 0.0 ? 0.0 : g_recordStartPosition;
-  ReaProject *project = g_recordProject ? g_recordProject : reashoot::reaper::currentProject();
-  const std::string downloadDirectory = captureOutputDirectory(project);
-  setPanelStatus("Stopping recording through ReaShoot.exe");
-  updatePanel();
-  runDesktopStopDownloadOnWorker(downloadDirectory,
-                                 [](std::string status) {
-                                   if (!status.empty()) {
-                                     setPanelStatus(status);
-                                   }
-                                 },
-                                 [project, insertPosition](std::string path, std::string errorMessage) {
-                                   g_activeTransportRecording = false;
-                                   updatePanel();
-                                   if (!errorMessage.empty()) {
-                                     showError(reashoot::core::friendlyStatusText(errorMessage));
-                                     return;
-                                   }
-                                   if (path.empty()) {
-                                     showError("ReaShoot.exe downloaded the recording, but did not report a local file path.");
-                                     return;
-                                   }
-                                   g_pendingInsertPath = std::move(path);
-                                   g_pendingInsertPosition = insertPosition;
-                                   g_pendingInsertProject = project;
-                                   g_pendingInsert = true;
-                                 });
+  recordingController().finish();
 }
 
 void pollTransport() {
@@ -1555,7 +1462,8 @@ void setVideoEnabled(bool enabled) {
   g_extensionController.setVideoEnabled(enabled);
   if (enabled) {
     ensureVideoTrackReady(reashoot::reaper::currentProject());
-    setPanelStatus("ReaShoot enabled. Use ReaShoot.exe for setup and preview.");
+    recordingController().ensureDesktopAppRunning();
+    setPanelStatus("ReaShoot enabled. Use the ReaShoot app for setup and preview.");
   } else {
     finishRecording();
     setPanelStatus("ReaShoot disabled.");
@@ -1597,6 +1505,7 @@ int toggleActionHook(int command) {
 void timerPoll() {
   drainMainQueue();
   processPendingInsert();
+  recordingController().processPendingInsert();
   pollTransport();
 }
 

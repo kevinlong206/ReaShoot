@@ -416,6 +416,8 @@ private:
   void startRecording();
   void stopRecording();
   reashoot::desktop::IntegrationOperation stopRecordingAndDownloadForIntegration(const std::string &downloadDirectory);
+  reashoot::desktop::IntegrationOperation downloadRecordingForIntegration(
+      const reashoot::core::RemoteRecordingDescriptor &recording, const std::string &downloadDirectory);
   void promptForRecording(const reashoot::core::RemoteRecordingDescriptor &recording);
   void downloadRecording(const reashoot::core::RemoteRecordingDescriptor &recording);
   void deleteRecording(const std::string &recordingID);
@@ -1225,34 +1227,6 @@ reashoot::desktop::IntegrationHttpResponse ReaShootApp::handleIntegrationRequest
       return desktop::errorResponse(400, "invalid_json", error.what());
     }
   }
-
-  bool ReaShootApp::alwaysOnTopEnabled() const {
-    return SendMessageW(alwaysOnTopCheckbox_, BM_GETCHECK, 0, 0) == BST_CHECKED;
-  }
-
-  void ReaShootApp::applyAlwaysOnTop() {
-    const HWND insertAfter = alwaysOnTopEnabled() ? HWND_TOPMOST : HWND_NOTOPMOST;
-    const UINT flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
-    if (main_) {
-      SetWindowPos(main_, insertAfter, 0, 0, 0, 0, flags);
-    }
-    if (setup_) {
-      SetWindowPos(setup_, insertAfter, 0, 0, 0, 0, flags);
-    }
-    if (videos_) {
-      SetWindowPos(videos_, insertAfter, 0, 0, 0, 0, flags);
-    }
-    debugLog(std::string("Always on top ") + (alwaysOnTopEnabled() ? "enabled" : "disabled"));
-  }
-
-  bool ReaShootApp::mirrorPreviewEnabled() const {
-    return SendMessageW(mirrorPreviewCheckbox_, BM_GETCHECK, 0, 0) == BST_CHECKED;
-  }
-
-  void ReaShootApp::applyMirrorPreview() {
-    preview_.setMirrorPreview(mirrorPreviewEnabled());
-    debugLog(std::string("Mirror live preview ") + (mirrorPreviewEnabled() ? "enabled" : "disabled"));
-  }
   if (request.method == "POST" && request.path == "/v1/phone/discover") {
     if (busy()) {
       return desktop::errorResponse(409, "busy", "ReaShoot is busy with another operation.");
@@ -1387,12 +1361,52 @@ reashoot::desktop::IntegrationHttpResponse ReaShootApp::handleIntegrationRequest
       if (found == phoneVideos_.end()) {
         return desktop::errorResponse(404, "not_found", "Recording is not in the current phone video list. Refresh recordings first.");
       }
-      downloadRecording(*found);
-      return accepted("Recording download requested.");
+      std::string downloadDirectory;
+      if (!request.body.empty()) {
+        try {
+          downloadDirectory = core::parseJson(request.body).stringValue("downloadDirectory");
+        } catch (const std::exception &error) {
+          return desktop::errorResponse(400, "invalid_json", error.what());
+        }
+      }
+      reashoot::desktop::IntegrationOperation operation = downloadRecordingForIntegration(*found, downloadDirectory);
+      core::JsonValue::Object object;
+      object.emplace("ok", core::JsonValue(true));
+      object.emplace("accepted", core::JsonValue(true));
+      object.emplace("operation", desktop::operationToJson(operation));
+      return desktop::jsonResponse(202, std::move(object));
     }
   }
 
   return desktop::errorResponse(404, "not_found", "Unknown ReaShoot desktop API endpoint.");
+}
+
+bool ReaShootApp::alwaysOnTopEnabled() const {
+  return SendMessageW(alwaysOnTopCheckbox_, BM_GETCHECK, 0, 0) == BST_CHECKED;
+}
+
+void ReaShootApp::applyAlwaysOnTop() {
+  const HWND insertAfter = alwaysOnTopEnabled() ? HWND_TOPMOST : HWND_NOTOPMOST;
+  const UINT flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
+  if (main_) {
+    SetWindowPos(main_, insertAfter, 0, 0, 0, 0, flags);
+  }
+  if (setup_) {
+    SetWindowPos(setup_, insertAfter, 0, 0, 0, 0, flags);
+  }
+  if (videos_) {
+    SetWindowPos(videos_, insertAfter, 0, 0, 0, 0, flags);
+  }
+  debugLog(std::string("Always on top ") + (alwaysOnTopEnabled() ? "enabled" : "disabled"));
+}
+
+bool ReaShootApp::mirrorPreviewEnabled() const {
+  return SendMessageW(mirrorPreviewCheckbox_, BM_GETCHECK, 0, 0) == BST_CHECKED;
+}
+
+void ReaShootApp::applyMirrorPreview() {
+  preview_.setMirrorPreview(mirrorPreviewEnabled());
+  debugLog(std::string("Mirror live preview ") + (mirrorPreviewEnabled() ? "enabled" : "disabled"));
 }
 
 // ---------------------------------------------------------------------------
@@ -1946,6 +1960,47 @@ reashoot::desktop::IntegrationOperation ReaShootApp::stopRecordingAndDownloadFor
           setStatus(widen("Downloaded " + path));
         }));
   }));
+  return operation;
+}
+
+reashoot::desktop::IntegrationOperation ReaShootApp::downloadRecordingForIntegration(
+    const reashoot::core::RemoteRecordingDescriptor &recording, const std::string &downloadDirectory) {
+  reashoot::desktop::IntegrationOperation operation = beginIntegrationOperation("download", "Downloading recording.");
+  if (!requireHostAndToken()) {
+    failIntegrationOperation("No paired iPhone is configured.");
+    return integrationOperation_;
+  }
+  reashoot::core::RemoteCameraSettings s = settings();
+  std::string resolvedDirectory = downloadDirectory.empty() ? reashoot::desktop::defaultDownloadDirectory() : downloadDirectory;
+  integrationOperation_.recording = recording;
+  setStatus(L"Downloading iPhone video...");
+  activeCommand_ = camera_->downloadRecording(
+      s,
+      recording,
+      resolvedDirectory,
+      onMainProgress([this](std::string line) {
+        const std::string status = reashoot::core::progressStatusText(line);
+        if (!status.empty()) {
+          integrationOperation_.message = status;
+          setStatus(widen(status));
+        }
+      }),
+      onMain([this, recording](reashoot::core::CommandResult downloadResult) {
+        if (downloadResult.exitCode != 0) {
+          const std::string message = downloadResult.errorMessage.empty() ? downloadResult.output : downloadResult.errorMessage;
+          failIntegrationOperation(message.empty() ? "Download failed." : message);
+          setStatusFromResult(downloadResult, L"Download failed.");
+          return;
+        }
+        const std::string path = reashoot::core::parseDownloadedPath(downloadResult.output);
+        if (path.empty()) {
+          failIntegrationOperation("Download completed, but no local path was reported.");
+          setStatus(L"Download completed, but no local path was reported.");
+          return;
+        }
+        finishIntegrationOperation(recording, path, "Downloaded recording.");
+        setStatus(widen("Downloaded " + path));
+      }));
   return operation;
 }
 

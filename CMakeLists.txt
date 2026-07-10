@@ -69,6 +69,7 @@ if(APPLE)
   add_library(reaper_reashoot SHARED
     "${REASHOOT_ROOT}/src/reashoot.mm"
     "${REASHOOT_ROOT}/src/reaper/reaper_host.cpp"
+    "${REASHOOT_ROOT}/src/reaper/reaper_recording_controller.cpp"
     "${REASHOOT_ROOT}/src/platform/mac/mac_media_audio_reader.mm"
   )
   target_link_libraries(reaper_reashoot
@@ -151,6 +152,7 @@ if(WIN32)
 
   add_library(reaper_reashoot SHARED
     "${REASHOOT_ROOT}/src/reaper/reaper_host.cpp"
+    "${REASHOOT_ROOT}/src/reaper/reaper_recording_controller.cpp"
     ${REASHOOT_WIN32_SOURCES}
     ${REASHOOT_FFMPEG_SOURCES}
     ${REASHOOT_FFMPEG_HEADERS}

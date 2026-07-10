@@ -22,6 +22,7 @@
 #include "core/reashoot_status.h"
 #include "platform/mac/mac_media_audio_reader.h"
 #include "reaper/reaper_host.h"
+#include "reaper/reaper_recording_controller.h"
 
 #define REAPERAPI_IMPLEMENT
 #define REAPERAPI_MINIMAL
@@ -1034,6 +1035,7 @@ bool insertRecordedMedia(const std::string &path, double position, std::string &
 void updateFollowStatusText();
 void refreshToolbarState();
 void stopTransportRecording();
+reashoot::reaper::RecordingController &recordingController();
 
 std::string followStatusText() {
   return g_extensionController.followStatusText();
@@ -1103,9 +1105,10 @@ void setVideoEnabled(bool enabled) {
   syncExtensionStateGlobals();
   if (enabled) {
     ensureVideoTrackReady(currentProject(), false);
+    recordingController().ensureDesktopAppRunning();
     [recorder() setStatus:@"ReaShoot enabled. Use ReaShoot.app for setup and preview."];
   } else {
-    if (g_activeTransportRecording) {
+    if (recordingController().isActive()) {
       stopTransportRecording();
     }
     [recorder() setStatus:@"ReaShoot disabled."];
@@ -1119,159 +1122,52 @@ bool isRecordingState(int playState) {
   return (playState & kRecordBit) != 0;
 }
 
-NSError *desktopApiNSError(const std::string &message, NSInteger code) {
-  NSString *text = stringFromStd(reashoot::core::friendlyStatusText(message));
-  if (text.length == 0) {
-    text = @"Unknown desktop API error.";
-  }
-  return [NSError errorWithDomain:@"com.klong.reashoot.desktop-api"
-                             code:code
-                         userInfo:@{NSLocalizedDescriptionKey: text}];
-}
-
-void runDesktopStartRecordingAsync(void (^completion)(NSError *error)) {
-  void (^completionCopy)(NSError *) = [completion copy];
-  std::thread([completionCopy] {
-    std::string errorMessage;
-    @autoreleasepool {
-      try {
-        reashoot::desktop::DesktopApiClient().startRecording();
-      } catch (const std::exception &error) {
-        errorMessage = error.what();
+reashoot::reaper::RecordingController &recordingController() {
+  static reashoot::reaper::RecordingController controller([]() {
+    reashoot::reaper::RecordingControllerHooks hooks;
+    hooks.postToMain = [](std::function<void()> work) {
+      dispatch_async(dispatch_get_main_queue(), ^{
+        work();
+      });
+    };
+    hooks.setStatus = [](const std::string &status) {
+      [recorder() setStatus:[NSString stringWithUTF8String:status.c_str()]];
+    };
+    hooks.showError = [](const std::string &message) { showError(message); };
+    hooks.setRecordingActive = [](bool active) {
+      [recorder() setRecordingVisualState:active ? YES : NO];
+    };
+    hooks.resolveDownloadDirectory = [](ReaProject *project) -> std::string {
+      std::string outputPath = captureOutputPath(project ? project : currentProject());
+      std::string directory = reashoot::core::directoryName(outputPath);
+      if (directory.empty()) {
+        directory = NSHomeDirectory().UTF8String ?: "";
       }
-    }
-    dispatch_async(dispatch_get_main_queue(), ^{
-      NSError *error = errorMessage.empty() ? nil : desktopApiNSError(errorMessage, 30);
-      completionCopy(error);
-    });
-  }).detach();
-}
-
-void runDesktopStopDownloadAsync(const std::string &downloadDirectory,
-                                 void (^progress)(NSString *message),
-                                 void (^completion)(NSString *path, NSError *error)) {
-  void (^progressCopy)(NSString *) = [progress copy];
-  void (^completionCopy)(NSString *, NSError *) = [completion copy];
-  std::thread([downloadDirectory, progressCopy, completionCopy] {
-    std::string downloadedPath;
-    std::string errorMessage;
-    @autoreleasepool {
-      try {
-        downloadedPath = reashoot::desktop::DesktopApiClient().stopRecordingAndDownload(downloadDirectory, [progressCopy](const std::string &message) {
-          if (!progressCopy) {
-            return;
-          }
-          NSString *status = stringFromStd(message);
-          dispatch_async(dispatch_get_main_queue(), ^{
-            progressCopy(status);
-          });
-        });
-      } catch (const std::exception &error) {
-        errorMessage = error.what();
-      }
-    }
-    dispatch_async(dispatch_get_main_queue(), ^{
-      NSError *error = errorMessage.empty() ? nil : desktopApiNSError(errorMessage, 31);
-      completionCopy(stringFromStd(downloadedPath), error);
-    });
-  }).detach();
+      return directory;
+    };
+    hooks.onInserted = [](ReaProject *project, MediaTrack *track, MediaItem *item) {
+      // Windows has no alignment; macOS queues audio cross-correlation alignment.
+      queuePendingAlignment(project, track, item);
+      g_lastAlignmentStatus = "Recorded to ReaShoot track; aligning audio";
+      [recorder() setStatus:@"Recorded to ReaShoot track; aligning audio"];
+    };
+    return hooks;
+  }());
+  return controller;
 }
 
 void startTransportRecording(ReaProject *project) {
-  if (g_activeTransportRecording) {
-    return;
-  }
-
-  g_recordProject = project;
-  g_transportStartInFlight = true;
-  g_transportStopRequested = false;
-  ensureVideoTrackReady(project, false);
-  g_recordStartPosition = reashoot::reaper::cursorPosition(project);
-  if (g_recordStartPosition < 0.0 && GetPlayPositionEx) {
-    g_recordStartPosition = GetPlayPositionEx(project);
-  }
-
-  g_activeTransportRecording = true;
-  [recorder() setRecordingVisualState:YES];
-  [recorder() setStatus:@"Starting recording through ReaShoot.app"];
-  runDesktopStartRecordingAsync(^(NSError *error) {
-    if (error) {
-      g_activeTransportRecording = false;
-      g_transportStartInFlight = false;
-      g_transportStopRequested = false;
-      [recorder() setRecordingVisualState:NO];
-      showError(std::string("ReaShoot.app recording start failed:\n") + (error.localizedDescription.UTF8String ?: "Unknown desktop API error."));
-      return;
-    }
-    g_transportStartInFlight = false;
-    if (g_recordProject && GetPlayPositionEx) {
-      g_recordStartPosition = GetPlayPositionEx(g_recordProject);
-    }
-    [recorder() setStatus:@"Recording through ReaShoot.app"];
-    if (g_transportStopRequested) {
-      g_transportStopRequested = false;
-      stopTransportRecording();
-    }
-  });
+  recordingController().begin(project);
 }
 
 void stopTransportRecording() {
-  if (!g_activeTransportRecording) {
-    return;
-  }
-  if (g_transportStartInFlight) {
-    g_transportStopRequested = true;
-    [recorder() setStatus:@"Waiting for ReaShoot.app recording to start"];
-    return;
-  }
-
-  double insertPosition = g_recordStartPosition;
-  if (insertPosition < 0.0) {
-    insertPosition = 0.0;
-  }
-  std::string outputPath = captureOutputPath(g_recordProject ? g_recordProject : currentProject());
-  std::string directory = reashoot::core::directoryName(outputPath);
-  if (directory.empty()) {
-    directory = NSHomeDirectory().UTF8String ?: "";
-  }
-  [recorder() setStatus:@"Stopping recording through ReaShoot.app"];
-  runDesktopStopDownloadAsync(directory, ^(NSString *message) {
-    [recorder() setStatus:message.length ? message : @"Downloading recording through ReaShoot.app"];
-  }, ^(NSString *pathText, NSError *error) {
-    [recorder() setRecordingVisualState:NO];
-    if (error) {
-      showError(std::string("ReaShoot.app recording stop/download failed:\n") + (error.localizedDescription.UTF8String ?: "Unknown desktop API error."));
-      g_activeTransportRecording = false;
-      return;
-    }
-    std::string path = stdStringFromNSString(pathText ?: @"");
-    g_pendingInsertPath = path;
-    g_pendingInsertPosition = insertPosition;
-    g_pendingInsert = !g_pendingInsertPath.empty();
-    g_activeTransportRecording = false;
-    if (!g_pendingInsert) {
-      showError("ReaShoot.app downloaded the recording, but did not report a local file path.");
-    }
-  });
+  recordingController().finish();
 }
 
 void processPendingInsert() {
-  if (!g_pendingInsert) {
-    return;
-  }
-  const std::string path = g_pendingInsertPath;
-  const double position = g_pendingInsertPosition;
-  g_pendingInsert = false;
-  g_pendingInsertPath.clear();
-
-  std::string error;
-  if (insertRecordedMedia(path, position, error)) {
-    const char *status = g_lastAlignmentStatus.empty() ? "Recorded to ReaShoot track" : g_lastAlignmentStatus.c_str();
-    [recorder() setStatus:[NSString stringWithUTF8String:status]];
-  } else {
-    [recorder() setStatus:@"Import error"];
-    showError(error);
-  }
+  // The shared controller inserts the downloaded take on the ReaShoot track and
+  // invokes the onInserted hook, which queues audio alignment on macOS.
+  recordingController().processPendingInsert();
 }
 
 void processPendingAlignment() {
@@ -1421,7 +1317,7 @@ void alignSelectedVideoItem() {
 }
 
 void timerPoll() {
-  if (!g_videoEnabled && !g_pendingInsert && !g_pendingAlignment) {
+  if (!g_videoEnabled && !recordingController().hasPendingInsert() && !g_pendingAlignment) {
     g_previousPlayState = 0;
     return;
   }
@@ -1477,7 +1373,7 @@ bool hookCommand2(KbdSectionInfo *section, int command, int val, int val2, int r
 
   if (command == g_toggleFollowCommand) {
     setFollowEnabled(!g_followEnabled);
-    if (!g_followEnabled && g_activeTransportRecording) {
+    if (!g_followEnabled && recordingController().isActive()) {
       stopTransportRecording();
     }
     return true;
@@ -1497,7 +1393,7 @@ int toggleActionHook(int command) {
 }
 
 void cleanup() {
-  if (g_activeTransportRecording) {
+  if (recordingController().isActive()) {
     stopTransportRecording();
   }
   if (DockWindowRemove && g_swellPanelPrototypeDocked && g_swellPanelPrototype) {

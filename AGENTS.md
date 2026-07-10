@@ -136,6 +136,9 @@ rm -rf iphone/Package.resolved iphone/.build
 ## Legacy REAPER extension notes
 
 - The macOS and Windows REAPER extensions are thin desktop API clients. When ReaShoot is enabled in REAPER, transport record start/stop should call `ReaShoot.app` / `ReaShoot.exe` over the loopback desktop API, then insert/synchronize the verified downloaded movie returned by the desktop app.
+- The recording workflow (ensure the desktop app is running, start/stop, the Download/Delete/Cancel prompt, download/delete, and media insertion) lives in the shared cross-platform `src/reaper/reaper_recording_controller.*` and shared `src/reaper/reaper_host.*` helpers. Both extensions inject only platform glue (main-thread dispatch, status/error display, download-directory resolution, and — macOS only — the post-insert audio-alignment hook). Do not re-duplicate this orchestration in the platform extension files.
+- When ReaShoot is enabled in REAPER the extension launches the desktop app if needed; if a record start cannot reach the desktop app it warns the user. On stop it prompts Download/Delete/Cancel before downloading or deleting the take.
+- macOS keeps its audio cross-correlation alignment (`alignVideoItemToReference`) as the controller's `onInserted` hook; Windows has no alignment and inserts at the record-start edit-cursor position.
 - The legacy Windows REAPER extension builds with CMake as `reaper_reashoot.dll`.
 - Keep legacy extension fixes cross-platform where behavior exists on both macOS and Windows, but do not apply Windows-specific playback workarounds to macOS without Mac-specific evidence.
 - Do not restore REAPER-hosted camera preview, setup, pairing, pending-recording restore/delete, or direct iPhone control flows. Users should use the standalone desktop app for those surfaces.
